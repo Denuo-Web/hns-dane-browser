@@ -31,16 +31,18 @@ where
     pub fn insert(&mut self, key: K, value: V, ttl: Duration) {
         self.prune_expired();
         let expires_at = Instant::now() + ttl;
-        if !self.entries.contains_key(&key) {
-            self.order.push_back(key.clone());
-        }
+        self.promote(&key);
+        self.order.push_back(key.clone());
         self.entries.insert(key, Entry { value, expires_at });
         self.evict_over_limit();
     }
 
     pub fn get(&mut self, key: &K) -> Option<V> {
         self.prune_expired();
-        self.entries.get(key).map(|entry| entry.value.clone())
+        let value = self.entries.get(key).map(|entry| entry.value.clone())?;
+        self.promote(key);
+        self.order.push_back(key.clone());
+        Some(value)
     }
 
     pub fn len(&mut self) -> usize {
@@ -72,6 +74,10 @@ where
             }
         }
     }
+
+    fn promote(&mut self, key: &K) {
+        self.order.retain(|candidate| candidate != key);
+    }
 }
 
 #[cfg(test)]
@@ -87,5 +93,33 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some(2));
+    }
+
+    #[test]
+    fn get_refreshes_lru_order() {
+        let mut cache = TtlCache::new(2);
+
+        cache.insert("a", 1, Duration::from_secs(60));
+        cache.insert("b", 2, Duration::from_secs(60));
+        assert_eq!(cache.get(&"a"), Some(1));
+        cache.insert("c", 3, Duration::from_secs(60));
+
+        assert_eq!(cache.get(&"a"), Some(1));
+        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[test]
+    fn insert_refreshes_existing_lru_order() {
+        let mut cache = TtlCache::new(2);
+
+        cache.insert("a", 1, Duration::from_secs(60));
+        cache.insert("b", 2, Duration::from_secs(60));
+        cache.insert("a", 10, Duration::from_secs(60));
+        cache.insert("c", 3, Duration::from_secs(60));
+
+        assert_eq!(cache.get(&"a"), Some(10));
+        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"c"), Some(3));
     }
 }

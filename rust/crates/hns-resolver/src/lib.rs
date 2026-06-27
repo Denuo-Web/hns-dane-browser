@@ -322,8 +322,14 @@ pub struct ResourceValueCacheStats {
 
 pub struct CachedResolver<R> {
     inner: R,
-    cache: Mutex<TtlCache<ResolutionRequest, ResolutionAnswer>>,
+    cache: Mutex<TtlCache<ResolutionRequest, CachedResolution>>,
     ttl: Duration,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CachedResolution {
+    Answer(ResolutionAnswer),
+    NameNotFound,
 }
 
 impl VerifiedResourceValue {
@@ -1454,21 +1460,45 @@ impl<R> CachedResolver<R> {
 
 impl<R: Resolver> Resolver for CachedResolver<R> {
     fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
-        if let Some(answer) = self
+        if let Some(cached) = self
             .cache
             .lock()
             .map_err(|_| ResolverError::CachePoisoned)?
             .get(request)
         {
-            return Ok(answer);
+            return cached.into_result();
         }
 
-        let answer = self.inner.resolve(request)?;
-        self.cache
-            .lock()
-            .map_err(|_| ResolverError::CachePoisoned)?
-            .insert(request.clone(), answer.clone(), self.ttl);
-        Ok(answer)
+        match self.inner.resolve(request) {
+            Ok(answer) => {
+                self.cache
+                    .lock()
+                    .map_err(|_| ResolverError::CachePoisoned)?
+                    .insert(
+                        request.clone(),
+                        CachedResolution::Answer(answer.clone()),
+                        self.ttl,
+                    );
+                Ok(answer)
+            }
+            Err(ResolverError::NameNotFound) => {
+                self.cache
+                    .lock()
+                    .map_err(|_| ResolverError::CachePoisoned)?
+                    .insert(request.clone(), CachedResolution::NameNotFound, self.ttl);
+                Err(ResolverError::NameNotFound)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl CachedResolution {
+    fn into_result(self) -> Result<ResolutionAnswer, ResolverError> {
+        match self {
+            Self::Answer(answer) => Ok(answer),
+            Self::NameNotFound => Err(ResolverError::NameNotFound),
+        }
     }
 }
 
@@ -2392,14 +2422,46 @@ fn dns_query<T: DnsTransport>(
 ) -> Result<DnsMessage, ResolverError> {
     let id = next_dns_query_id();
     let query = build_dns_query(id, qname, qtype)?;
-    let udp_response = transport.exchange_udp(server, &query)?;
-    let mut response = parse_dns_response(id, qname, qtype, &udp_response)?;
-    if response.header.flags.truncated() {
-        let tcp_response = transport.exchange_tcp(server, &query)?;
-        response = parse_dns_response(id, qname, qtype, &tcp_response)?;
-        if response.header.flags.truncated() {
-            return Err(ResolverError::InvalidDnsResponse);
+    let udp_response = match transport.exchange_udp(server, &query) {
+        Ok(response) => response,
+        Err(error) if dns_query_should_retry_tcp(&error) => {
+            return dns_query_tcp(transport, server, id, qname, qtype, &query);
         }
+        Err(error) => return Err(error),
+    };
+    let response = match parse_dns_response(id, qname, qtype, &udp_response) {
+        Ok(response) => response,
+        Err(error) if dns_query_should_retry_tcp(&error) => {
+            return dns_query_tcp(transport, server, id, qname, qtype, &query);
+        }
+        Err(error) => return Err(error),
+    };
+    if response.header.flags.truncated() {
+        return dns_query_tcp(transport, server, id, qname, qtype, &query);
+    }
+
+    Ok(response)
+}
+
+fn dns_query_should_retry_tcp(error: &ResolverError) -> bool {
+    matches!(
+        error,
+        ResolverError::DnsTransport(_) | ResolverError::InvalidDnsResponse
+    )
+}
+
+fn dns_query_tcp<T: DnsTransport>(
+    transport: &T,
+    server: SocketAddr,
+    id: u16,
+    qname: &DnsName,
+    qtype: RecordType,
+    query: &[u8],
+) -> Result<DnsMessage, ResolverError> {
+    let tcp_response = transport.exchange_tcp(server, query)?;
+    let response = parse_dns_response(id, qname, qtype, &tcp_response)?;
+    if response.header.flags.truncated() {
+        return Err(ResolverError::InvalidDnsResponse);
     }
 
     Ok(response)
@@ -2742,6 +2804,10 @@ mod tests {
         count: AtomicUsize,
     }
 
+    struct CountingNameNotFoundResolver {
+        count: AtomicUsize,
+    }
+
     struct StaticProofProvider {
         proven: ProvenNameRecords,
     }
@@ -2767,7 +2833,16 @@ mod tests {
         responses: DnsResponseMap,
         server_responses: ServerDnsResponseMap,
         requests: DnsRequestLog,
-        truncate_udp: bool,
+        udp_behavior: ScriptedUdpBehavior,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    enum ScriptedUdpBehavior {
+        #[default]
+        Normal,
+        Truncated,
+        TransportError,
+        InvalidResponse,
     }
 
     struct StaticDnssecVerifier {
@@ -2801,6 +2876,13 @@ mod tests {
                 records: Vec::new(),
                 secure: true,
             })
+        }
+    }
+
+    impl Resolver for CountingNameNotFoundResolver {
+        fn resolve(&self, _request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Err(ResolverError::NameNotFound)
         }
     }
 
@@ -2906,8 +2988,15 @@ mod tests {
                 question.record_type.code(),
                 false,
             ));
-            if self.truncate_udp {
-                return Ok(dns_response(&query, DnsResponseFixture::default(), true));
+            match self.udp_behavior {
+                ScriptedUdpBehavior::Normal => {}
+                ScriptedUdpBehavior::Truncated => {
+                    return Ok(dns_response(&query, DnsResponseFixture::default(), true));
+                }
+                ScriptedUdpBehavior::TransportError => {
+                    return Err(ResolverError::DnsTransport("udp failed".to_owned()));
+                }
+                ScriptedUdpBehavior::InvalidResponse => return Ok(vec![0, 1, 2, 3]),
             }
             let fixture = self
                 .server_responses
@@ -3085,6 +3174,32 @@ mod tests {
 
         resolver.resolve(&request).unwrap();
         resolver.resolve(&request).unwrap();
+
+        assert_eq!(resolver.inner.count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cached_resolver_reuses_name_not_found() {
+        let resolver = CachedResolver::new(
+            CountingNameNotFoundResolver {
+                count: AtomicUsize::new(0),
+            },
+            32,
+            Duration::from_secs(60),
+        );
+        let request = ResolutionRequest {
+            qname: "missing".to_owned(),
+            qtype: 1,
+        };
+
+        assert_eq!(
+            resolver.resolve(&request).unwrap_err(),
+            ResolverError::NameNotFound
+        );
+        assert_eq!(
+            resolver.resolve(&request).unwrap_err(),
+            ResolverError::NameNotFound
+        );
 
         assert_eq!(resolver.inner.count.load(Ordering::SeqCst), 1);
     }
@@ -3520,7 +3635,7 @@ mod tests {
                 ]),
                 server_responses: HashMap::new(),
                 requests: Arc::clone(&requests),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: true,
@@ -3601,7 +3716,7 @@ mod tests {
                 ]),
                 server_responses: HashMap::new(),
                 requests: Arc::new(Mutex::new(Vec::new())),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -3678,7 +3793,7 @@ mod tests {
                 responses,
                 server_responses: HashMap::new(),
                 requests: Arc::new(Mutex::new(Vec::new())),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -3759,7 +3874,7 @@ mod tests {
                 ]),
                 server_responses: HashMap::new(),
                 requests: Arc::new(Mutex::new(Vec::new())),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: true,
@@ -3891,7 +4006,7 @@ mod tests {
                 responses,
                 server_responses,
                 requests: Arc::clone(&requests),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -4045,7 +4160,7 @@ mod tests {
                 responses,
                 server_responses,
                 requests: Arc::clone(&requests),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -4197,7 +4312,7 @@ mod tests {
                 responses,
                 server_responses,
                 requests: Arc::clone(&requests),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -4302,7 +4417,7 @@ mod tests {
                 ]),
                 server_responses: HashMap::new(),
                 requests: Arc::new(Mutex::new(Vec::new())),
-                truncate_udp: false,
+                udp_behavior: ScriptedUdpBehavior::Normal,
             },
             StaticDnssecVerifier {
                 positive_valid: false,
@@ -4342,10 +4457,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn authoritative_dnssec_resolver_retries_truncated_udp_over_tcp() {
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let resolver = AuthoritativeDnssecResolver::new(
+    fn authoritative_dnssec_retry_resolver(
+        udp_behavior: ScriptedUdpBehavior,
+        requests: DnsRequestLog,
+    ) -> AuthoritativeDnssecResolver<ScriptedDnsTransport, StaticDnssecVerifier> {
+        AuthoritativeDnssecResolver::new(
             ScriptedDnsTransport {
                 responses: dns_responses(vec![
                     (
@@ -4374,8 +4490,8 @@ mod tests {
                     ),
                 ]),
                 server_responses: HashMap::new(),
-                requests: Arc::clone(&requests),
-                truncate_udp: true,
+                requests,
+                udp_behavior,
             },
             StaticDnssecVerifier {
                 positive_valid: true,
@@ -4391,34 +4507,76 @@ mod tests {
                 child_no_data_validations: Arc::new(Mutex::new(Vec::new())),
                 child_name_error_validations: Arc::new(Mutex::new(Vec::new())),
             },
-        );
+        )
+    }
 
-        let answer = resolver
-            .resolve_delegated(
-                &ResolutionRequest {
-                    qname: "welcome".to_owned(),
-                    qtype: RecordType::A.code(),
-                },
-                &delegation_with_records(vec![
-                    ns_record("welcome", "ns1.welcome"),
-                    record(
-                        DnsName::from_ascii("ns1.welcome").unwrap(),
-                        RecordType::A,
-                        vec![127, 0, 0, 1],
-                    ),
-                    ds_record("welcome"),
-                ]),
-            )
-            .unwrap();
+    fn resolve_welcome_a(
+        resolver: &AuthoritativeDnssecResolver<ScriptedDnsTransport, StaticDnssecVerifier>,
+    ) -> Result<ResolutionAnswer, ResolverError> {
+        resolver.resolve_delegated(
+            &ResolutionRequest {
+                qname: "welcome".to_owned(),
+                qtype: RecordType::A.code(),
+            },
+            &delegation_with_records(vec![
+                ns_record("welcome", "ns1.welcome"),
+                record(
+                    DnsName::from_ascii("ns1.welcome").unwrap(),
+                    RecordType::A,
+                    vec![127, 0, 0, 1],
+                ),
+                ds_record("welcome"),
+            ]),
+        )
+    }
+
+    fn assert_welcome_a_retried_over_tcp(requests: &DnsRequestLog) {
+        let requests = requests.lock().unwrap();
+        assert!(requests.iter().any(|(_, qname, qtype, tcp)| {
+            qname == "welcome" && *qtype == RecordType::A.code() && !*tcp
+        }));
+        assert!(requests.iter().any(|(_, qname, qtype, tcp)| {
+            qname == "welcome" && *qtype == RecordType::A.code() && *tcp
+        }));
+    }
+
+    #[test]
+    fn authoritative_dnssec_resolver_retries_truncated_udp_over_tcp() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let resolver = authoritative_dnssec_retry_resolver(
+            ScriptedUdpBehavior::Truncated,
+            Arc::clone(&requests),
+        );
+        let answer = resolve_welcome_a(&resolver).unwrap();
 
         assert!(answer.secure);
-        assert!(
-            requests
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(_, _, qtype, tcp)| *qtype == RecordType::A.code() && *tcp)
+        assert_welcome_a_retried_over_tcp(&requests);
+    }
+
+    #[test]
+    fn authoritative_dnssec_resolver_retries_udp_transport_error_over_tcp() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let resolver = authoritative_dnssec_retry_resolver(
+            ScriptedUdpBehavior::TransportError,
+            Arc::clone(&requests),
         );
+        let answer = resolve_welcome_a(&resolver).unwrap();
+
+        assert!(answer.secure);
+        assert_welcome_a_retried_over_tcp(&requests);
+    }
+
+    #[test]
+    fn authoritative_dnssec_resolver_retries_invalid_udp_response_over_tcp() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let resolver = authoritative_dnssec_retry_resolver(
+            ScriptedUdpBehavior::InvalidResponse,
+            Arc::clone(&requests),
+        );
+        let answer = resolve_welcome_a(&resolver).unwrap();
+
+        assert!(answer.secure);
+        assert_welcome_a_retried_over_tcp(&requests);
     }
 
     #[test]
