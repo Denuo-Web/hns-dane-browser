@@ -18,6 +18,9 @@
             android:name=".ui.DiagnosticsActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true">

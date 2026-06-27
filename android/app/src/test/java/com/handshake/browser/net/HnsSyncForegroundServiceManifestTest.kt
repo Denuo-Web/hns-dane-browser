@@ -27,6 +27,13 @@ class HnsSyncForegroundServiceManifestTest {
         assertNotNull(service)
         assertEquals("false", service?.getAttributeNS(ANDROID_NS, "exported"))
         assertEquals("dataSync", service?.getAttributeNS(ANDROID_NS, "foregroundServiceType"))
+
+        val settings = document.getElementsByTagName("activity")
+            .elements()
+            .firstOrNull { it.getAttributeNS(ANDROID_NS, "name") == SETTINGS_ACTIVITY }
+
+        assertNotNull(settings)
+        assertEquals("false", settings?.getAttributeNS(ANDROID_NS, "exported"))
     }
 
     private fun locateManifest(): File {
@@ -52,6 +59,7 @@ class HnsSyncForegroundServiceManifestTest {
     private companion object {
         const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
         const val HNS_SYNC_SERVICE = ".net.HnsSyncForegroundService"
+        const val SETTINGS_ACTIVITY = ".ui.SettingsActivity"
         const val FOREGROUND_SERVICE = "android.permission.FOREGROUND_SERVICE"
         const val FOREGROUND_SERVICE_DATA_SYNC = "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
     }

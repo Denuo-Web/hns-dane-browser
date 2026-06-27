@@ -69,12 +69,6 @@ class DiagnosticsActivity : ComponentActivity() {
                 }
             }
         })
-        root.addView(Button(this).apply {
-            text = "Clear resolver cache"
-            setOnClickListener {
-                syncStatus.text = "Sync status: ${NativeBridge.clearResolverCache(filesDir.absolutePath)}"
-            }
-        })
         root.addView(row("Proxy override", WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE).toString()))
         root.addView(row("Disclaimer", DIAGNOSTIC_DISCLAIMER))
         root.addView(

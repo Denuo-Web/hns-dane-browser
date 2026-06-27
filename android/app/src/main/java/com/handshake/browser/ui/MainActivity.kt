@@ -24,7 +24,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.http.SslError
 import android.widget.EditText
-import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.ProgressBar
@@ -173,13 +172,11 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(8, 0, 8, 0)
-            addView(navButton(android.R.drawable.ic_media_previous) { if (webView.canGoBack()) webView.goBack() })
-            addView(navButton(android.R.drawable.ic_media_next) { if (webView.canGoForward()) webView.goForward() })
-            addView(omnibox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(securityLabel, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ))
+            addView(omnibox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(menuButton())
         }
 
@@ -328,13 +325,6 @@ class MainActivity : ComponentActivity() {
         requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
-    private fun navButton(icon: Int, action: () -> Unit): ImageButton =
-        ImageButton(this).apply {
-            setImageResource(icon)
-            setBackgroundColor(Color.TRANSPARENT)
-            setOnClickListener { action() }
-        }
-
     private fun menuButton(): TextView =
         TextView(this).apply {
             text = "☰"
@@ -347,16 +337,38 @@ class MainActivity : ComponentActivity() {
 
     private fun showBrowserMenu(anchor: View) {
         PopupMenu(this, anchor).apply {
-            menu.add(0, MENU_REFRESH, 0, "Refresh")
-            menu.add(0, MENU_DIAGNOSTICS, 1, "Diagnostics")
+            menu.add(0, MENU_BACK, 0, "← Back").apply {
+                setIcon(android.R.drawable.ic_media_previous)
+                isEnabled = webView.canGoBack()
+            }
+            menu.add(0, MENU_FORWARD, 1, "→ Forward").apply {
+                setIcon(android.R.drawable.ic_media_next)
+                isEnabled = webView.canGoForward()
+            }
+            menu.add(0, MENU_REFRESH, 2, "↻ Refresh")
+                .setIcon(android.R.drawable.ic_popup_sync)
+            menu.add(0, MENU_SETTINGS, 3, "Settings")
+                .setIcon(android.R.drawable.ic_menu_manage)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
+                    MENU_BACK -> {
+                        if (webView.canGoBack()) {
+                            webView.goBack()
+                        }
+                        true
+                    }
+                    MENU_FORWARD -> {
+                        if (webView.canGoForward()) {
+                            webView.goForward()
+                        }
+                        true
+                    }
                     MENU_REFRESH -> {
                         webView.reload()
                         true
                     }
-                    MENU_DIAGNOSTICS -> {
-                        startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+                    MENU_SETTINGS -> {
+                        startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
                         true
                     }
                     else -> false
@@ -507,7 +519,9 @@ class MainActivity : ComponentActivity() {
         private const val PAGE_PROGRESS_MAX = 100
         private const val SYNC_STATUS_POLL_MS = 2_000L
         private const val REQUEST_NOTIFICATIONS = 1002
-        private const val MENU_REFRESH = 1
-        private const val MENU_DIAGNOSTICS = 2
+        private const val MENU_BACK = 1
+        private const val MENU_FORWARD = 2
+        private const val MENU_REFRESH = 3
+        private const val MENU_SETTINGS = 4
     }
 }
