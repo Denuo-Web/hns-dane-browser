@@ -314,6 +314,12 @@ impl PeerManager {
         peer.successes = peer.successes.saturating_add(1);
     }
 
+    pub fn record_observed_height(&mut self, address: SocketAddr, height: Height, now: u64) {
+        let peer = self.upsert(address);
+        peer.last_height = height;
+        peer.last_connected_at = Some(now);
+    }
+
     pub fn record_transient_failure(&mut self, address: SocketAddr) {
         let peer = self.upsert(address);
         peer.score = peer.score.saturating_add(TRANSIENT_FAILURE_SCORE);

@@ -13,6 +13,8 @@ use hns_urkel::{ParsedProof, ProofError, ProofKind, ProofVerifier};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use thiserror::Error;
 
@@ -20,9 +22,11 @@ pub const DEFAULT_LOCATOR_LIMIT: usize = 32;
 pub const DEFAULT_OUTBOUND_PEERS: usize = 8;
 pub const DEFAULT_MAX_HEADER_BATCHES_PER_PEER: usize = 16;
 pub const DEFAULT_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_PARALLEL_PEER_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 pub const DEFAULT_MALFORMED_BAN_SECONDS: u64 = 24 * 60 * 60;
 pub const DEFAULT_PEER_DISCOVERY_TARGET: usize = 64;
 pub const DEFAULT_PEER_DISCOVERY_QUERY_PEERS: usize = 8;
+pub const DEFAULT_PARALLEL_PEER_PROBES: usize = 0;
 const MAX_HSD_NAME_STATE_NAME_BYTES: usize = 63;
 const MAX_HSD_NAME_STATE_DATA_BYTES: usize = 512;
 const HSD_NAME_STATE_FIXED_TAIL_BYTES: usize = 10;
@@ -45,6 +49,8 @@ pub struct HeaderSyncRunnerConfig {
     pub discover_peers: bool,
     pub peer_discovery_target: usize,
     pub peer_discovery_query_peers: usize,
+    pub parallel_peer_probes: usize,
+    pub parallel_peer_probe_timeout: Duration,
     pub timeout: Duration,
     pub stop: Hash,
     pub malformed_ban_seconds: u64,
@@ -175,6 +181,8 @@ impl Default for HeaderSyncRunnerConfig {
             discover_peers: true,
             peer_discovery_target: DEFAULT_PEER_DISCOVERY_TARGET,
             peer_discovery_query_peers: DEFAULT_PEER_DISCOVERY_QUERY_PEERS,
+            parallel_peer_probes: DEFAULT_PARALLEL_PEER_PROBES,
+            parallel_peer_probe_timeout: DEFAULT_PARALLEL_PEER_PROBE_TIMEOUT,
             timeout: DEFAULT_SYNC_TIMEOUT,
             stop: Hash::ZERO,
             malformed_ban_seconds: DEFAULT_MALFORMED_BAN_SECONDS,
@@ -277,6 +285,16 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         peers: &mut PeerManager,
         now: u64,
     ) -> Result<HeaderSyncRunResult, SyncError> {
+        self.sync_once_inner(coordinator, peers, now, None)
+    }
+
+    fn sync_once_inner<S: HeaderStore>(
+        &self,
+        coordinator: &mut HeaderSyncCoordinator<S>,
+        peers: &mut PeerManager,
+        now: u64,
+        store: Option<&SqlitePeerStore>,
+    ) -> Result<HeaderSyncRunResult, SyncError> {
         let outbound = peers.select_outbound(self.config.preferred_peers, now);
         let mut attempted_addresses = HashSet::new();
         let mut result = HeaderSyncRunResult::empty();
@@ -284,7 +302,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         for address in outbound {
             attempted_addresses.insert(address);
             result.attempted = result.attempted.saturating_add(1);
-            match self.sync_peer(coordinator, peers, address, now)? {
+            match self.sync_peer(coordinator, peers, address, now, store)? {
                 HeaderPeerSyncOutcome::Success(peer_result) => {
                     result.successful = result.successful.saturating_add(1);
                     result.accepted = result.accepted.saturating_add(peer_result.accepted);
@@ -294,7 +312,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
             }
         }
 
-        self.discover_more_peers(peers, now, &attempted_addresses);
+        self.discover_more_peers(peers, now, &attempted_addresses, store)?;
 
         Ok(result)
     }
@@ -306,7 +324,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         store: &SqlitePeerStore,
         now: u64,
     ) -> Result<HeaderSyncRunResult, SyncError> {
-        let result = self.sync_once(coordinator, peers, now)?;
+        let result = self.sync_once_inner(coordinator, peers, now, Some(store))?;
         store.save_manager(peers)?;
         Ok(result)
     }
@@ -317,6 +335,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         peers: &mut PeerManager,
         address: SocketAddr,
         now: u64,
+        store: Option<&SqlitePeerStore>,
     ) -> Result<HeaderPeerSyncOutcome, SyncError> {
         let mut peer = match self
             .connector
@@ -344,10 +363,13 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                 }));
             }
         };
+        peers.record_observed_height(address, remote.height, now);
+        persist_peer_manager(store, peers)?;
         if self.config.discover_peers
             && let Ok(discovered) = peer.request_addresses()
         {
             peers.seed(discovered);
+            persist_peer_manager(store, peers)?;
         }
         let mut accepted = 0usize;
         let mut best = coordinator.chain().best_header()?;
@@ -356,6 +378,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
             .is_some_and(|best_header| remote.height <= best_header.height)
         {
             peers.record_success(address, remote.height, now);
+            persist_peer_manager(store, peers)?;
             return Ok(HeaderPeerSyncOutcome::Success(Box::new(
                 HeaderPeerSyncResult {
                     address,
@@ -425,6 +448,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         }
 
         peers.record_success(address, remote.height, now);
+        persist_peer_manager(store, peers)?;
         Ok(HeaderPeerSyncOutcome::Success(Box::new(
             HeaderPeerSyncResult {
                 address,
@@ -440,12 +464,13 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         peers: &mut PeerManager,
         now: u64,
         attempted_addresses: &HashSet<SocketAddr>,
-    ) {
+        store: Option<&SqlitePeerStore>,
+    ) -> Result<(), SyncError> {
         if !self.config.discover_peers
             || peers.len() >= self.config.peer_discovery_target
             || self.config.peer_discovery_query_peers == 0
         {
-            return;
+            return Ok(());
         }
 
         let candidates = peers.select_discovery_outbound(
@@ -466,10 +491,14 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                     let mut session = HeaderSyncSession::new(self.local_version.clone());
                     match peer.handshake(&mut session) {
                         Ok(remote) => {
+                            peers.record_observed_height(address, remote.height, now);
+                            persist_peer_manager(store, peers)?;
                             if let Ok(discovered) = peer.request_addresses() {
                                 peers.seed(discovered);
+                                persist_peer_manager(store, peers)?;
                             }
                             peers.record_success(address, remote.height, now);
+                            persist_peer_manager(store, peers)?;
                         }
                         Err(_) => peers.record_transient_failure(address),
                     }
@@ -477,6 +506,126 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                 Err(_) => peers.record_transient_failure(address),
             }
         }
+        Ok(())
+    }
+}
+
+impl HeaderSyncRunner<TcpHeaderPeerConnector> {
+    pub fn sync_once_parallel_and_persist<S: HeaderStore>(
+        &self,
+        coordinator: &mut HeaderSyncCoordinator<S>,
+        peers: &mut PeerManager,
+        store: &SqlitePeerStore,
+        now: u64,
+    ) -> Result<HeaderSyncRunResult, SyncError> {
+        self.probe_peers_parallel_and_persist(peers, store, now)?;
+        self.sync_once_and_persist(coordinator, peers, store, now)
+    }
+
+    pub fn probe_peers_parallel_and_persist(
+        &self,
+        peers: &mut PeerManager,
+        store: &SqlitePeerStore,
+        now: u64,
+    ) -> Result<usize, SyncError> {
+        if !self.config.discover_peers
+            || self.config.parallel_peer_probes == 0
+            || (peers.len() >= self.config.peer_discovery_target
+                && peers.iter().any(|peer| peer.last_height.0 > 0))
+        {
+            return Ok(0);
+        }
+
+        let candidates = peers.select_outbound(self.config.parallel_peer_probes, now);
+        if candidates.len() <= 1 {
+            return Ok(0);
+        }
+
+        thread::scope(|scope| -> Result<usize, SyncError> {
+            let (sender, receiver) = mpsc::channel();
+            for address in candidates {
+                let sender = sender.clone();
+                let network = self.network.clone();
+                let local_version = self.local_version.clone();
+                let timeout = self
+                    .config
+                    .parallel_peer_probe_timeout
+                    .min(self.config.timeout);
+                scope.spawn(move || {
+                    let _ = sender.send(probe_tcp_header_peer(
+                        address,
+                        network,
+                        local_version,
+                        timeout,
+                    ));
+                });
+            }
+            drop(sender);
+
+            let mut successful = 0usize;
+            for result in receiver {
+                match result {
+                    ParallelPeerProbe::Success {
+                        address,
+                        remote_height,
+                        discovered,
+                    } => {
+                        peers.record_success(address, remote_height, now);
+                        peers.seed(discovered);
+                        successful = successful.saturating_add(1);
+                    }
+                    ParallelPeerProbe::Failure(failure) => {
+                        peers.record_transient_failure(failure.address);
+                    }
+                }
+                persist_peer_manager(Some(store), peers)?;
+            }
+            Ok(successful)
+        })
+    }
+}
+
+enum ParallelPeerProbe {
+    Success {
+        address: SocketAddr,
+        remote_height: Height,
+        discovered: Vec<SocketAddr>,
+    },
+    Failure(HeaderPeerFailure),
+}
+
+fn probe_tcp_header_peer(
+    address: SocketAddr,
+    network: Network,
+    local_version: VersionPacket,
+    timeout: Duration,
+) -> ParallelPeerProbe {
+    let mut peer = match PeerConnection::connect(address, network, timeout) {
+        Ok(peer) => peer,
+        Err(error) => {
+            return ParallelPeerProbe::Failure(HeaderPeerFailure {
+                address,
+                stage: HeaderPeerFailureStage::Connect,
+                error: error.to_string(),
+            });
+        }
+    };
+    let mut session = HeaderSyncSession::new(local_version);
+    let remote = match peer.handshake(&mut session) {
+        Ok(remote) => remote,
+        Err(error) => {
+            return ParallelPeerProbe::Failure(HeaderPeerFailure {
+                address,
+                stage: HeaderPeerFailureStage::Handshake,
+                error: error.to_string(),
+            });
+        }
+    };
+    let discovered = peer.request_addresses().unwrap_or_default();
+    ParallelPeerProbe::Success {
+        address,
+        remote_height: remote.height,
+        discovered,
     }
 }
 
@@ -869,6 +1018,16 @@ fn record_chain_failure(
     }
 }
 
+fn persist_peer_manager(
+    store: Option<&SqlitePeerStore>,
+    peers: &PeerManager,
+) -> Result<(), SyncError> {
+    if let Some(store) = store {
+        store.save_manager(peers)?;
+    }
+    Ok(())
+}
+
 fn verified_resource_value(
     root_name: String,
     name_hash: NameHash,
@@ -938,7 +1097,7 @@ mod tests {
     use hns_chain::MemoryHeaderStore;
     use hns_core::network;
     use hns_core::pow::verify_pow;
-    use hns_p2p::{PeerConnection, VersionPacket};
+    use hns_p2p::{AddrPacket, NetAddress, Packet, PeerConnection, SERVICE_NETWORK, VersionPacket};
     use hns_resolver::HnsResourceValueProvider;
     use hns_urkel::{FailClosedProofVerifier, ProofKind};
     use std::cell::RefCell;
@@ -1076,6 +1235,53 @@ mod tests {
             assert_eq!(persisted.last_connected_at, Some(500));
             assert_eq!(persisted.successes, 1);
             assert_eq!(persisted.failures, 0);
+        }
+
+        cleanup_db_path(&path);
+    }
+
+    #[test]
+    fn header_sync_runner_persists_discovery_before_header_download() {
+        let path = temp_db_path("sync-peers-early");
+        let mut coordinator = seeded_coordinator();
+        let address: std::net::SocketAddr = "127.0.0.1:12044".parse().unwrap();
+        let discovered: std::net::SocketAddr = "127.0.0.2:12038".parse().unwrap();
+        let mut peers = PeerManager::default();
+        peers.seed([address]);
+        let check_path = path.clone();
+        let connector = ScriptedHeaderConnector::new([(
+            address,
+            ScriptedHeaderPeer::headers(Height(42), Vec::new())
+                .with_addresses(vec![discovered])
+                .with_request_headers_callback(move || {
+                    let store = SqlitePeerStore::open(&check_path).unwrap();
+                    let persisted = store.load_peer(address).unwrap().unwrap();
+                    assert_eq!(persisted.last_height, Height(42));
+                    assert_eq!(persisted.last_connected_at, Some(700));
+                    assert_eq!(persisted.successes, 0);
+                    assert!(store.load_peer(discovered).unwrap().is_some());
+                    store.flush().unwrap();
+                }),
+        )]);
+        let runner = HeaderSyncRunner::with_config(
+            network::mainnet(),
+            connector,
+            HeaderSyncRunnerConfig {
+                preferred_peers: 1,
+                ..HeaderSyncRunnerConfig::default()
+            },
+        );
+
+        {
+            let store = SqlitePeerStore::open(&path).unwrap();
+            let result = runner
+                .sync_once_and_persist(&mut coordinator, &mut peers, &store, 700)
+                .unwrap();
+
+            assert_eq!(result.attempted, 1);
+            assert_eq!(result.successful, 1);
+            assert_eq!(result.accepted, 0);
+            store.flush().unwrap();
         }
 
         cleanup_db_path(&path);
@@ -1257,6 +1463,46 @@ mod tests {
         assert!(peers.get(first_discovered).is_some());
         assert!(peers.get(second_discovered).is_some());
         assert_eq!(peers.get(discovery_candidate).unwrap().successes, 1);
+    }
+
+    #[test]
+    fn header_sync_runner_parallel_probe_persists_heights_and_addresses() {
+        let path = temp_db_path("parallel-probe");
+        let discovered: std::net::SocketAddr = "127.0.0.3:12038".parse().unwrap();
+        let (first, first_server) = spawn_probe_server(Height(42), vec![discovered]);
+        let (second, second_server) = spawn_probe_server(Height(43), Vec::new());
+        let mut peers = PeerManager::default();
+        peers.seed([first, second]);
+        let runner = HeaderSyncRunner::with_config(
+            network::mainnet(),
+            TcpHeaderPeerConnector,
+            HeaderSyncRunnerConfig {
+                parallel_peer_probes: 4,
+                ..HeaderSyncRunnerConfig::default()
+            },
+        );
+
+        {
+            let store = SqlitePeerStore::open(&path).unwrap();
+            let successful = runner
+                .probe_peers_parallel_and_persist(&mut peers, &store, 900)
+                .unwrap();
+
+            assert_eq!(successful, 2);
+            assert_eq!(peers.get(first).unwrap().last_height, Height(42));
+            assert_eq!(peers.get(second).unwrap().last_height, Height(43));
+            assert!(peers.get(discovered).is_some());
+            assert_eq!(
+                store.load_peer(first).unwrap().unwrap().last_height,
+                Height(42)
+            );
+            assert!(store.load_peer(discovered).unwrap().is_some());
+            store.flush().unwrap();
+        }
+
+        first_server.join().unwrap();
+        second_server.join().unwrap();
+        cleanup_db_path(&path);
     }
 
     #[test]
@@ -1582,6 +1828,49 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
+    fn spawn_probe_server(
+        remote_height: Height,
+        addresses: Vec<SocketAddr>,
+    ) -> (SocketAddr, thread::JoinHandle<()>) {
+        let network = network::mainnet();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut peer = PeerConnection::new(stream, network);
+
+            assert!(matches!(peer.receive_packet().unwrap(), Packet::Version(_),));
+            peer.send_packet(&Packet::Version(VersionPacket {
+                height: remote_height,
+                ..VersionPacket::default()
+            }))
+            .unwrap();
+            assert_eq!(peer.receive_packet().unwrap(), Packet::Verack);
+            peer.send_packet(&Packet::Verack).unwrap();
+            assert_eq!(peer.receive_packet().unwrap(), Packet::GetAddr);
+            peer.send_packet(&Packet::Addr(AddrPacket {
+                items: addresses
+                    .into_iter()
+                    .map(|address| NetAddress {
+                        time: 1,
+                        services: SERVICE_NETWORK,
+                        address: address.ip(),
+                        port: address.port(),
+                    })
+                    .collect(),
+            }))
+            .unwrap();
+        });
+
+        (address, server)
+    }
+
     struct ScriptedHeaderConnector {
         peers: RefCell<HashMap<std::net::SocketAddr, ScriptedHeaderPeer>>,
     }
@@ -1617,6 +1906,7 @@ mod tests {
         remote_height: Height,
         headers: VecDeque<Result<Vec<BlockHeader>, P2pError>>,
         addresses: Vec<SocketAddr>,
+        on_request_headers: Option<Box<dyn FnMut()>>,
     }
 
     impl ScriptedHeaderPeer {
@@ -1632,6 +1922,7 @@ mod tests {
                 remote_height,
                 headers: batches.into_iter().map(Ok).collect(),
                 addresses: Vec::new(),
+                on_request_headers: None,
             }
         }
 
@@ -1643,11 +1934,17 @@ mod tests {
                 remote_height,
                 headers: errors.into_iter().map(Err).collect(),
                 addresses: Vec::new(),
+                on_request_headers: None,
             }
         }
 
         fn with_addresses(mut self, addresses: Vec<SocketAddr>) -> Self {
             self.addresses = addresses;
+            self
+        }
+
+        fn with_request_headers_callback(mut self, callback: impl FnMut() + 'static) -> Self {
+            self.on_request_headers = Some(Box::new(callback));
             self
         }
     }
@@ -1669,6 +1966,9 @@ mod tests {
             _locator: Vec<Hash>,
             _stop: Hash,
         ) -> Result<Vec<BlockHeader>, P2pError> {
+            if let Some(callback) = self.on_request_headers.as_mut() {
+                callback();
+            }
             self.headers.pop_front().unwrap_or_else(|| Ok(Vec::new()))
         }
 
