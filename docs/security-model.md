@@ -87,7 +87,7 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - No page resolved through the HNS DoH compatibility fallback should be labeled as plain local `DANE verified` or `HNS verified`; the toolbar must show an explicit `via DoH` compatibility state.
 - No unbounded or panic-prone X.509 parsing for DANE SPKI selector matching.
 - No QUIC downgrade without an explicit policy event.
-- No local gateway listener beyond `127.0.0.1` or `::1`.
+- No local gateway listener beyond loopback, and no fixed browser proxy port in normal app startup.
 - No origin fetch unless the gateway resolution name matches the requested origin host.
 - No intercepted HNS redirect should be followed unless the target remains inside HNS resolution policy and the redirect chain stays under the configured bound.
 - No main-frame HNS gateway 4xx/5xx response should leave the toolbar in verified state.
@@ -98,4 +98,4 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - No decoded chunked origin response should be exposed to WebView with stale `Transfer-Encoding` or mismatched `Content-Length` framing; native gateway file-backed bodies are returned with fixed decoded lengths.
 - No WebView SSL error should call `proceed()` unless the requested URL is an HNS HTTPS URL and the presented certificate's SHA-256 fingerprint exactly matches the local certificate generated and pinned for that HNS host.
 - No HNS WebSocket or HTTP Upgrade request should be silently downgraded to a normal GET by stripping hop-by-hop Upgrade headers; until native stream tunneling is implemented, these requests must fail closed before native gateway routing.
-- Browser proxy listener currently binds `127.0.0.1` only, routes HNS HTTP through the native persistent-cache gateway path, preserves normal ICANN HTTP Upgrade tunnels, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and fails HNS Upgrade requests closed.
+- Browser proxy listener currently binds a randomized `127.0.0.1` port only, routes HNS HTTP through the native persistent-cache gateway path, preserves normal ICANN HTTP Upgrade tunnels, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and fails HNS Upgrade requests closed.

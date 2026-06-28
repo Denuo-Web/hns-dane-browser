@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         proxyController = HnsProxyController(this)
-        loopbackProxyServer = LoopbackProxyServer(DEFAULT_GATEWAY_PORT, filesDir)
+        loopbackProxyServer = LoopbackProxyServer(EPHEMERAL_GATEWAY_PORT, filesDir)
         webViewGatewayInterceptor = HnsWebViewGatewayInterceptor(
             dataDir = filesDir,
             allowProxyFallbackForBodyRequests = { proxyAvailable },
@@ -208,8 +208,14 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
 
         val gatewayStarted = loopbackProxyServer.start()
-        proxyController.applyLoopbackProxy(DEFAULT_GATEWAY_PORT) { applied ->
-            proxyAvailable = applied && gatewayStarted
+        val gatewayPort = loopbackProxyServer.boundPort()
+        if (gatewayStarted && gatewayPort != null) {
+            proxyController.applyLoopbackProxy(gatewayPort) { applied ->
+                proxyAvailable = applied
+                refreshSecurityState()
+            }
+        } else {
+            proxyAvailable = false
             refreshSecurityState()
         }
 
@@ -513,7 +519,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val DEFAULT_GATEWAY_PORT = 15353
+        private const val EPHEMERAL_GATEWAY_PORT = 0
         private const val DEFAULT_HOME = "https://handshake.org/"
         private const val SYNC_PROGRESS_MAX = 1000
         private const val PAGE_PROGRESS_MAX = 100

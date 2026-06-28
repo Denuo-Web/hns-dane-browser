@@ -40,6 +40,19 @@ class LoopbackProxyServerTest {
     }
 
     @Test
+    fun bindsEphemeralLoopbackPort() {
+        LoopbackProxyServer(0, hnsGatewayBridge = RecordingGatewayBridge(ByteArray(0))).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            assertTrue(port > 0)
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                assertTrue(socket.isConnected)
+            }
+        }
+    }
+
+    @Test
     fun parsesDottedHnsAbsoluteHttpTarget() {
         val target = ProxyRequestLine.parse("GET https://welcome.2d/path?q=1 HTTP/1.1").toHttpTarget()
 
@@ -136,6 +149,49 @@ class LoopbackProxyServerTest {
                 "/path?q=1",
                 listOf("Host" to "welcome", "Content-Type" to "text/plain", "Content-Length" to "2"),
                 "hi",
+            ),
+            bridge.calls.single(),
+        )
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun hnsRangeRequestPreservesRangeHeadersToNativeGateway() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 10-19/100\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-proxy-range-test").toFile()
+        LoopbackProxyServer(0, dataDir = dataDir, hnsGatewayBridge = bridge).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    (
+                        "GET http://welcome/file.bin HTTP/1.1\r\n" +
+                            "Host: welcome\r\n" +
+                            "Range: bytes=10-19\r\n" +
+                            "If-Range: \"abc\"\r\n\r\n"
+                        ).toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 206 Partial Content\r\n"))
+            }
+        }
+
+        assertEquals(
+            GatewayCall(
+                dataDir.absolutePath,
+                "GET",
+                "http",
+                "welcome",
+                80,
+                "/file.bin",
+                listOf("Host" to "welcome", "Range" to "bytes=10-19", "If-Range" to "\"abc\""),
+                "",
             ),
             bridge.calls.single(),
         )

@@ -1,7 +1,9 @@
+use bytes::Bytes;
 use hns_dane::{
-    DaneCertificateValidationInput, DaneDecision, DaneError, DomainTrustMode, TlsaRecord,
-    WebPkiStatus, evaluate_policy_with_certificate,
+    DaneCertificateChainValidationInput, DaneDecision, DaneError, DomainTrustMode, TlsaRecord,
+    WebPkiStatus, evaluate_policy_with_certificate_chain,
 };
+use http::{HeaderName, HeaderValue, Request as Http2Request};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -78,6 +80,8 @@ pub enum TransportError {
     UnsupportedTransferEncoding,
     #[error("HTTP protocol upgrade is unsupported")]
     UnsupportedUpgrade,
+    #[error("origin HTTP/2 error: {0}")]
+    Http2(String),
     #[error("origin TLS error: {0}")]
     Tls(String),
     #[error("origin request is invalid")]
@@ -257,7 +261,7 @@ impl TcpHttpTransport {
             .map_err(io_error)?;
 
         let decision = Arc::new(Mutex::new(None));
-        let config = self.client_config(request.tls.clone(), Arc::clone(&decision))?;
+        let config = self.client_config(request.tls.clone(), Arc::clone(&decision), Vec::new())?;
         let server_name = ServerName::try_from(request.host.clone())
             .map_err(|_| TransportError::InvalidRequest)?;
         let connection = ClientConnection::new(Arc::new(config), server_name).map_err(tls_error)?;
@@ -293,7 +297,7 @@ impl TcpHttpTransport {
             .map_err(io_error)?;
 
         let decision = Arc::new(Mutex::new(None));
-        let config = self.client_config(request.tls.clone(), Arc::clone(&decision))?;
+        let config = self.client_config(request.tls.clone(), Arc::clone(&decision), Vec::new())?;
         let server_name = ServerName::try_from(request.host.clone())
             .map_err(|_| TransportError::InvalidRequest)?;
         let connection = ClientConnection::new(Arc::new(config), server_name).map_err(tls_error)?;
@@ -314,10 +318,118 @@ impl TcpHttpTransport {
         Ok(response)
     }
 
+    fn fetch_https_http2(&self, request: &OriginRequest) -> Result<OriginResponse, TransportError> {
+        let mut body = Vec::new();
+        let head = self.fetch_https_http2_to_writer(request, &mut body)?;
+        Ok(OriginResponse {
+            status: head.status,
+            headers: head.headers,
+            body,
+            dane_decision: head.dane_decision,
+        })
+    }
+
+    fn fetch_https_http2_to_writer(
+        &self,
+        request: &OriginRequest,
+        body: &mut dyn Write,
+    ) -> Result<OriginResponseHead, TransportError> {
+        validate_request(request, self.limits)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .map_err(io_error)?;
+        runtime.block_on(self.fetch_https_http2_to_writer_async(request, body))
+    }
+
+    async fn fetch_https_http2_to_writer_async(
+        &self,
+        request: &OriginRequest,
+        body: &mut dyn Write,
+    ) -> Result<OriginResponseHead, TransportError> {
+        tokio::time::timeout(
+            self.read_timeout,
+            self.fetch_https_http2_to_writer_inner(request, body),
+        )
+        .await
+        .map_err(|_| TransportError::Io("HTTP/2 origin request timed out".to_owned()))?
+    }
+
+    async fn fetch_https_http2_to_writer_inner(
+        &self,
+        request: &OriginRequest,
+        body: &mut dyn Write,
+    ) -> Result<OriginResponseHead, TransportError> {
+        let connection_host = request.connect_host.as_deref().unwrap_or(&request.host);
+        let stream = connect_async(connection_host, request.port, self.connect_timeout).await?;
+
+        let decision = Arc::new(Mutex::new(None));
+        let config = self.client_config(
+            request.tls.clone(),
+            Arc::clone(&decision),
+            vec![b"h2".to_vec()],
+        )?;
+        let server_name = ServerName::try_from(request.host.clone())
+            .map_err(|_| TransportError::InvalidRequest)?;
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let tls_stream = connector
+            .connect(server_name, stream)
+            .await
+            .map_err(io_error)?;
+        if tls_stream.get_ref().1.alpn_protocol() != Some(b"h2".as_slice()) {
+            return Err(TransportError::UnsupportedTransport);
+        }
+
+        let (mut sender, connection) = h2::client::handshake(tls_stream).await.map_err(h2_error)?;
+        let connection_task = tokio::spawn(connection);
+        let h2_request = build_http2_request(request)?;
+        let end_stream = request.body.is_empty();
+        let (response, mut send_stream) = sender
+            .send_request(h2_request, end_stream)
+            .map_err(h2_error)?;
+        if !request.body.is_empty() {
+            send_stream
+                .send_data(Bytes::copy_from_slice(&request.body), true)
+                .map_err(h2_error)?;
+        }
+
+        let response = response.await.map_err(h2_error)?;
+        let status = response.status().as_u16();
+        let headers = http2_response_headers(response.headers())?;
+        if transfer_encoding(&headers)?.is_some() {
+            return Err(TransportError::MalformedResponse);
+        }
+        let expected_body_len = content_length(&headers)?;
+        let mut response_body = response.into_body();
+        let body_len = if response_has_no_body(&request.method, status) {
+            0
+        } else {
+            read_http2_body_to_writer(
+                &mut response_body,
+                self.limits.max_response_body_bytes,
+                body,
+            )
+            .await?
+        };
+        if expected_body_len.is_some_and(|expected| expected != body_len) {
+            return Err(TransportError::MalformedResponse);
+        }
+        connection_task.abort();
+
+        Ok(OriginResponseHead {
+            status,
+            headers,
+            body_len,
+            dane_decision: tls_decision(decision)?,
+        })
+    }
+
     fn client_config(
         &self,
         tls: TlsValidation,
         decision: Arc<Mutex<Option<DaneDecision>>>,
+        alpn_protocols: Vec<Vec<u8>>,
     ) -> Result<ClientConfig, TransportError> {
         let provider = rustls::crypto::ring::default_provider();
         let webpki = WebPkiServerVerifier::builder_with_provider(
@@ -332,12 +444,13 @@ impl TcpHttpTransport {
             decision,
         });
 
-        let config = ClientConfig::builder_with_provider(Arc::new(provider))
+        let mut config = ClientConfig::builder_with_provider(Arc::new(provider))
             .with_safe_default_protocol_versions()
             .map_err(tls_error)?
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth();
+        config.alpn_protocols = alpn_protocols;
         Ok(config)
     }
 }
@@ -350,13 +463,14 @@ impl OriginTransport for FailClosedTransport {
 
 impl OriginTransport for TcpHttpTransport {
     fn fetch(&self, request: &OriginRequest) -> Result<OriginResponse, TransportError> {
-        if request.protocol != OriginProtocol::Http11 {
-            return Err(TransportError::UnsupportedTransport);
-        }
-
-        match request.scheme.to_ascii_lowercase().as_str() {
-            "http" => self.fetch_http11(request),
-            "https" => self.fetch_https_http11(request),
+        match (
+            request.scheme.to_ascii_lowercase().as_str(),
+            request.protocol,
+        ) {
+            ("http", OriginProtocol::Http11) => self.fetch_http11(request),
+            ("https", OriginProtocol::Http11) => self.fetch_https_http11(request),
+            ("https", OriginProtocol::Http2) => self.fetch_https_http2(request),
+            ("http", _) | ("https", _) => Err(TransportError::UnsupportedTransport),
             _ => Err(TransportError::UnsupportedScheme),
         }
     }
@@ -366,13 +480,14 @@ impl OriginTransport for TcpHttpTransport {
         request: &OriginRequest,
         body: &mut dyn Write,
     ) -> Result<OriginResponseHead, TransportError> {
-        if request.protocol != OriginProtocol::Http11 {
-            return Err(TransportError::UnsupportedTransport);
-        }
-
-        match request.scheme.to_ascii_lowercase().as_str() {
-            "http" => self.fetch_http11_to_writer(request, body),
-            "https" => self.fetch_https_http11_to_writer(request, body),
+        match (
+            request.scheme.to_ascii_lowercase().as_str(),
+            request.protocol,
+        ) {
+            ("http", OriginProtocol::Http11) => self.fetch_http11_to_writer(request, body),
+            ("https", OriginProtocol::Http11) => self.fetch_https_http11_to_writer(request, body),
+            ("https", OriginProtocol::Http2) => self.fetch_https_http2_to_writer(request, body),
+            ("http", _) | ("https", _) => Err(TransportError::UnsupportedTransport),
             _ => Err(TransportError::UnsupportedScheme),
         }
     }
@@ -407,11 +522,17 @@ impl ServerCertVerifier for DaneServerCertVerifier {
             WebPkiStatus::Invalid
         };
 
-        match evaluate_policy_with_certificate(DaneCertificateValidationInput {
+        let intermediate_der = intermediates
+            .iter()
+            .map(|certificate| certificate.as_ref())
+            .collect::<Vec<_>>();
+
+        match evaluate_policy_with_certificate_chain(DaneCertificateChainValidationInput {
             mode: self.tls.mode,
             dnssec_secure: self.tls.dnssec_secure,
             tlsa_records: &self.tls.tlsa_records,
-            cert_der: end_entity.as_ref(),
+            end_entity_der: end_entity.as_ref(),
+            intermediate_der: &intermediate_der,
             webpki_status,
         }) {
             Ok(DaneDecision::Failed) => Err(RustlsError::General(
@@ -473,6 +594,103 @@ fn connect(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Transp
         .unwrap_or_else(|| TransportError::Io("no resolved socket addresses".to_owned())))
 }
 
+async fn connect_async(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<tokio::net::TcpStream, TransportError> {
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(io_error)?
+        .collect::<Vec<_>>();
+    let mut last_error = None;
+    for address in addresses {
+        match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(address)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => last_error = Some(error.to_string()),
+            Err(_) => last_error = Some(format!("connect to {address} timed out")),
+        }
+    }
+
+    Err(last_error
+        .map(TransportError::Io)
+        .unwrap_or_else(|| TransportError::Io("no resolved socket addresses".to_owned())))
+}
+
+fn build_http2_request(request: &OriginRequest) -> Result<Http2Request<()>, TransportError> {
+    let authority = host_header(&request.host, request.port, &request.scheme);
+    let uri = format!(
+        "{}://{}{}",
+        request.scheme, authority, request.path_and_query
+    )
+    .parse::<http::Uri>()
+    .map_err(|_| TransportError::InvalidRequest)?;
+    let mut h2_request = Http2Request::builder()
+        .method(request.method.as_str())
+        .uri(uri)
+        .body(())
+        .map_err(|_| TransportError::InvalidRequest)?;
+    {
+        let headers = h2_request.headers_mut();
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("hns-browser/0.1.5"),
+        );
+        headers.insert(
+            HeaderName::from_static("accept"),
+            HeaderValue::from_static("*/*"),
+        );
+        for (name, value) in &request.headers {
+            if is_hop_by_hop_header(name)
+                || name.eq_ignore_ascii_case("host")
+                || name.eq_ignore_ascii_case("content-length")
+            {
+                continue;
+            }
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| TransportError::InvalidRequest)?;
+            let value = HeaderValue::from_str(value).map_err(|_| TransportError::InvalidRequest)?;
+            headers.append(name, value);
+        }
+    }
+    Ok(h2_request)
+}
+
+fn http2_response_headers(
+    headers: &http::HeaderMap<HeaderValue>,
+) -> Result<Vec<(String, String)>, TransportError> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            Ok((
+                name.as_str().to_owned(),
+                value
+                    .to_str()
+                    .map_err(|_| TransportError::MalformedResponse)?
+                    .to_owned(),
+            ))
+        })
+        .collect()
+}
+
+async fn read_http2_body_to_writer(
+    stream: &mut h2::RecvStream,
+    limit: usize,
+    body: &mut dyn Write,
+) -> Result<usize, TransportError> {
+    let mut total = 0usize;
+    while let Some(chunk) = stream.data().await {
+        let chunk = chunk.map_err(h2_error)?;
+        total = checked_body_len(total, chunk.len(), limit)?;
+        body.write_all(&chunk).map_err(io_error)?;
+        stream
+            .flow_control()
+            .release_capacity(chunk.len())
+            .map_err(h2_error)?;
+    }
+    Ok(total)
+}
+
 fn validate_request(
     request: &OriginRequest,
     limits: TransportLimits,
@@ -516,7 +734,7 @@ fn build_http_request(request: &OriginRequest) -> Result<Vec<u8>, TransportError
     let mut out = Vec::new();
     write!(
         out,
-        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: hns-browser/0.1.4\r\nAccept: */*\r\n",
+        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: hns-browser/0.1.5\r\nAccept: */*\r\n",
         request.method.to_ascii_uppercase(),
         request.path_and_query,
         host_header(&request.host, request.port, &request.scheme),
@@ -898,6 +1116,20 @@ fn tls_error(error: RustlsError) -> TransportError {
     TransportError::Tls(error.to_string())
 }
 
+fn h2_error(error: h2::Error) -> TransportError {
+    TransportError::Http2(error.to_string())
+}
+
+fn tls_decision(
+    decision: Arc<Mutex<Option<DaneDecision>>>,
+) -> Result<DaneDecision, TransportError> {
+    decision
+        .lock()
+        .map_err(|_| TransportError::Tls("TLS decision lock is poisoned".to_owned()))?
+        .clone()
+        .ok_or_else(|| TransportError::Tls("TLS certificate policy was not evaluated".to_owned()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1051,6 +1283,22 @@ mod tests {
     }
 
     #[test]
+    fn forwards_range_request_header_to_origin() {
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        request
+            .headers
+            .push(("Range".to_owned(), "bytes=10-19".to_owned()));
+        request
+            .headers
+            .push(("If-Range".to_owned(), "\"abc\"".to_owned()));
+
+        let text = String::from_utf8(build_http_request(&request).unwrap()).unwrap();
+
+        assert!(text.contains("Range: bytes=10-19\r\n"));
+        assert!(text.contains("If-Range: \"abc\"\r\n"));
+    }
+
+    #[test]
     fn rejects_protocol_upgrade_before_stripping_hop_by_hop_headers() {
         let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
         request
@@ -1130,6 +1378,59 @@ mod tests {
     }
 
     #[test]
+    fn fetches_https_http2_with_dnssec_tlsa_match() {
+        let server = TlsTestServer::start_h2();
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut request = request(server.address);
+        request.scheme = "https".to_owned();
+        request.protocol = OriginProtocol::Http2;
+        request.tls = TlsValidation::hns_strict(true, vec![tlsa_spki_exact(&server.cert_der)]);
+
+        let response = transport.fetch(&request).unwrap();
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"ok");
+        assert_eq!(
+            response.dane_decision,
+            DaneDecision::Matched(TlsaUsage::DaneEe),
+        );
+        let request_text = server.request();
+        assert!(request_text.starts_with("GET https://example.com:"));
+        assert!(request_text.ends_with("/path?q=1"));
+    }
+
+    #[test]
+    fn fetches_https_with_dane_ta_intermediate_match() {
+        let server = TlsTestServer::start_with_intermediate();
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut request = request(server.address);
+        request.scheme = "https".to_owned();
+        request.tls = TlsValidation::hns_strict(
+            true,
+            vec![tlsa_spki_exact_with_usage(
+                server.intermediate_cert_der.as_ref().unwrap(),
+                TlsaUsage::DaneTa,
+            )],
+        );
+
+        let response = transport.fetch(&request).unwrap();
+
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.dane_decision,
+            DaneDecision::Matched(TlsaUsage::DaneTa)
+        );
+    }
+
+    #[test]
     fn rejects_insecure_tlsa_https() {
         let server = TlsTestServer::start();
         let transport = TcpHttpTransport::new(
@@ -1199,8 +1500,12 @@ mod tests {
     }
 
     fn tlsa_spki_exact(cert_der: &[u8]) -> TlsaRecord {
+        tlsa_spki_exact_with_usage(cert_der, TlsaUsage::DaneEe)
+    }
+
+    fn tlsa_spki_exact_with_usage(cert_der: &[u8], usage: TlsaUsage) -> TlsaRecord {
         TlsaRecord {
-            usage: TlsaUsage::DaneEe,
+            usage,
             selector: TlsaSelector::SubjectPublicKeyInfo,
             matching: TlsaMatching::Exact,
             association_data: hns_dane::extract_spki_der(cert_der).unwrap(),
@@ -1254,6 +1559,7 @@ mod tests {
     struct TlsTestServer {
         address: SocketAddr,
         cert_der: Vec<u8>,
+        intermediate_cert_der: Option<Vec<u8>>,
         request_rx: mpsc::Receiver<String>,
     }
 
@@ -1264,13 +1570,130 @@ mod tests {
             let cert_der = cert.der().to_vec();
             let key_der =
                 PrivateKeyDer::from(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
-            let config = ServerConfig::builder_with_provider(Arc::new(
+            Self::start_with_chain(vec![cert_der.clone()], key_der, cert_der, None)
+        }
+
+        fn start_h2() -> Self {
+            let rcgen::CertifiedKey { cert, signing_key } =
+                rcgen::generate_simple_self_signed(vec!["example.com".to_owned()]).unwrap();
+            let cert_der = cert.der().to_vec();
+            let key_der =
+                PrivateKeyDer::from(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+            let mut config = ServerConfig::builder_with_provider(Arc::new(
                 rustls::crypto::ring::default_provider(),
             ))
             .with_safe_default_protocol_versions()
             .unwrap()
             .with_no_client_auth()
             .with_single_cert(vec![CertificateDer::from(cert_der.clone())], key_der)
+            .unwrap();
+            config.alpn_protocols = vec![b"h2".to_vec()];
+
+            let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let (request_tx, request_rx) = mpsc::channel();
+
+            thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .enable_time()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async move {
+                    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+                    let stream = acceptor.accept(stream).await.unwrap();
+                    let mut connection = h2::server::handshake(stream).await.unwrap();
+                    if let Some(request) = connection.accept().await {
+                        let (request, mut respond) = request.unwrap();
+                        request_tx
+                            .send(format!("{} {}", request.method(), request.uri()))
+                            .unwrap();
+                        let response = http::Response::builder()
+                            .status(200)
+                            .header("content-length", "2")
+                            .header("x-test", "h2")
+                            .body(())
+                            .unwrap();
+                        let mut send = respond.send_response(response, false).unwrap();
+                        send.send_data(Bytes::from_static(b"ok"), true).unwrap();
+                        connection.graceful_shutdown();
+                        let _ =
+                            tokio::time::timeout(Duration::from_millis(100), connection.accept())
+                                .await;
+                    }
+                });
+            });
+
+            Self {
+                address,
+                cert_der,
+                intermediate_cert_der: None,
+                request_rx,
+            }
+        }
+
+        fn start_with_intermediate() -> Self {
+            let mut intermediate_params =
+                rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+            intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            intermediate_params
+                .key_usages
+                .push(rcgen::KeyUsagePurpose::DigitalSignature);
+            intermediate_params
+                .key_usages
+                .push(rcgen::KeyUsagePurpose::KeyCertSign);
+            intermediate_params
+                .key_usages
+                .push(rcgen::KeyUsagePurpose::CrlSign);
+            let intermediate_key = rcgen::KeyPair::generate().unwrap();
+            let intermediate =
+                rcgen::CertifiedIssuer::self_signed(intermediate_params, intermediate_key).unwrap();
+            let intermediate_cert_der = intermediate.der().to_vec();
+
+            let mut leaf_params =
+                rcgen::CertificateParams::new(vec!["example.com".to_owned()]).unwrap();
+            leaf_params.use_authority_key_identifier_extension = true;
+            leaf_params
+                .key_usages
+                .push(rcgen::KeyUsagePurpose::DigitalSignature);
+            leaf_params
+                .extended_key_usages
+                .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+            let leaf_key = rcgen::KeyPair::generate().unwrap();
+            let leaf_cert = leaf_params.signed_by(&leaf_key, &intermediate).unwrap();
+            let cert_der = leaf_cert.der().to_vec();
+            let key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
+
+            Self::start_with_chain(
+                vec![cert_der.clone(), intermediate_cert_der.clone()],
+                key_der,
+                cert_der,
+                Some(intermediate_cert_der),
+            )
+        }
+
+        fn start_with_chain(
+            cert_chain_der: Vec<Vec<u8>>,
+            key_der: PrivateKeyDer<'static>,
+            cert_der: Vec<u8>,
+            intermediate_cert_der: Option<Vec<u8>>,
+        ) -> Self {
+            let config = ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                cert_chain_der
+                    .into_iter()
+                    .map(CertificateDer::from)
+                    .collect(),
+                key_der,
+            )
             .unwrap();
 
             let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
@@ -1301,6 +1724,7 @@ mod tests {
             Self {
                 address,
                 cert_der,
+                intermediate_cert_der,
                 request_rx,
             }
         }

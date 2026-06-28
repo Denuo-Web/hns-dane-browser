@@ -21,6 +21,8 @@ pub const DEFAULT_OUTBOUND_PEERS: usize = 8;
 pub const DEFAULT_MAX_HEADER_BATCHES_PER_PEER: usize = 16;
 pub const DEFAULT_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_MALFORMED_BAN_SECONDS: u64 = 24 * 60 * 60;
+pub const DEFAULT_PEER_DISCOVERY_TARGET: usize = 64;
+pub const DEFAULT_PEER_DISCOVERY_QUERY_PEERS: usize = 8;
 const MAX_HSD_NAME_STATE_NAME_BYTES: usize = 63;
 const MAX_HSD_NAME_STATE_DATA_BYTES: usize = 512;
 const HSD_NAME_STATE_FIXED_TAIL_BYTES: usize = 10;
@@ -41,6 +43,8 @@ pub struct HeaderSyncRunnerConfig {
     pub preferred_peers: usize,
     pub max_header_batches_per_peer: usize,
     pub discover_peers: bool,
+    pub peer_discovery_target: usize,
+    pub peer_discovery_query_peers: usize,
     pub timeout: Duration,
     pub stop: Hash,
     pub malformed_ban_seconds: u64,
@@ -169,6 +173,8 @@ impl Default for HeaderSyncRunnerConfig {
             preferred_peers: DEFAULT_OUTBOUND_PEERS,
             max_header_batches_per_peer: DEFAULT_MAX_HEADER_BATCHES_PER_PEER,
             discover_peers: true,
+            peer_discovery_target: DEFAULT_PEER_DISCOVERY_TARGET,
+            peer_discovery_query_peers: DEFAULT_PEER_DISCOVERY_QUERY_PEERS,
             timeout: DEFAULT_SYNC_TIMEOUT,
             stop: Hash::ZERO,
             malformed_ban_seconds: DEFAULT_MALFORMED_BAN_SECONDS,
@@ -272,9 +278,11 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         now: u64,
     ) -> Result<HeaderSyncRunResult, SyncError> {
         let outbound = peers.select_outbound(self.config.preferred_peers, now);
+        let mut attempted_addresses = HashSet::new();
         let mut result = HeaderSyncRunResult::empty();
 
         for address in outbound {
+            attempted_addresses.insert(address);
             result.attempted = result.attempted.saturating_add(1);
             match self.sync_peer(coordinator, peers, address, now)? {
                 HeaderPeerSyncOutcome::Success(peer_result) => {
@@ -285,6 +293,8 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                 HeaderPeerSyncOutcome::Failure(failure) => result.failures.push(failure),
             }
         }
+
+        self.discover_more_peers(peers, now, &attempted_addresses);
 
         Ok(result)
     }
@@ -423,6 +433,50 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                 best,
             },
         )))
+    }
+
+    fn discover_more_peers(
+        &self,
+        peers: &mut PeerManager,
+        now: u64,
+        attempted_addresses: &HashSet<SocketAddr>,
+    ) {
+        if !self.config.discover_peers
+            || peers.len() >= self.config.peer_discovery_target
+            || self.config.peer_discovery_query_peers == 0
+        {
+            return;
+        }
+
+        let candidates = peers.select_discovery_outbound(
+            self.config.peer_discovery_query_peers,
+            now,
+            attempted_addresses,
+        );
+        for address in candidates {
+            if peers.len() >= self.config.peer_discovery_target {
+                break;
+            }
+
+            match self
+                .connector
+                .connect(address, &self.network, self.config.timeout)
+            {
+                Ok(mut peer) => {
+                    let mut session = HeaderSyncSession::new(self.local_version.clone());
+                    match peer.handshake(&mut session) {
+                        Ok(remote) => {
+                            if let Ok(discovered) = peer.request_addresses() {
+                                peers.seed(discovered);
+                            }
+                            peers.record_success(address, remote.height, now);
+                        }
+                        Err(_) => peers.record_transient_failure(address),
+                    }
+                }
+                Err(_) => peers.record_transient_failure(address),
+            }
+        }
     }
 }
 
@@ -1160,6 +1214,49 @@ mod tests {
 
         assert_eq!(result.successful, 1);
         assert!(peers.get(discovered).is_some());
+    }
+
+    #[test]
+    fn header_sync_runner_queries_additional_peers_for_discovery() {
+        let mut coordinator = seeded_coordinator();
+        let primary: std::net::SocketAddr = "10.0.0.1:12038".parse().unwrap();
+        let discovery_candidate: std::net::SocketAddr = "10.0.0.2:12038".parse().unwrap();
+        let first_discovered: std::net::SocketAddr = "203.0.113.1:12038".parse().unwrap();
+        let second_discovered: std::net::SocketAddr = "203.0.114.1:12038".parse().unwrap();
+        let mut peers = PeerManager::default();
+        peers.seed([primary, discovery_candidate]);
+        let connector = ScriptedHeaderConnector::new([
+            (
+                primary,
+                ScriptedHeaderPeer::headers(Height(0), Vec::new())
+                    .with_addresses(vec![first_discovered]),
+            ),
+            (
+                discovery_candidate,
+                ScriptedHeaderPeer::headers(Height(0), Vec::new())
+                    .with_addresses(vec![second_discovered]),
+            ),
+        ]);
+        let runner = HeaderSyncRunner::with_config(
+            network::mainnet(),
+            connector,
+            HeaderSyncRunnerConfig {
+                preferred_peers: 1,
+                peer_discovery_target: 4,
+                peer_discovery_query_peers: 1,
+                ..HeaderSyncRunnerConfig::default()
+            },
+        );
+
+        let result = runner
+            .sync_once(&mut coordinator, &mut peers, 1_000)
+            .unwrap();
+
+        assert_eq!(result.attempted, 1);
+        assert_eq!(result.successful, 1);
+        assert!(peers.get(first_discovered).is_some());
+        assert!(peers.get(second_discovered).is_some());
+        assert_eq!(peers.get(discovery_candidate).unwrap().successes, 1);
     }
 
     #[test]

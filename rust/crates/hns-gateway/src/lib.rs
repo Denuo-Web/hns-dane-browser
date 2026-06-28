@@ -83,7 +83,7 @@ impl Default for GatewayConfig {
             auth_token: None,
             require_secure_resolution: true,
             hns_https_mode: HnsHttpsMode::Strict,
-            supported_origin_protocols: vec![OriginProtocol::Http11],
+            supported_origin_protocols: vec![OriginProtocol::Http11, OriginProtocol::Http2],
         }
     }
 }
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn defaults_to_http11_when_unsupported_alpn_allows_default_protocols() {
         let gateway = Gateway::new(
-            GatewayConfig::default(),
+            gateway_config_with_protocols(vec![OriginProtocol::Http11]),
             ScriptedResolver::new(
                 vec![
                     response(
@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn rejects_https_service_when_no_supported_alpn_remains() {
         let gateway = Gateway::new(
-            GatewayConfig::default(),
+            gateway_config_with_protocols(vec![OriginProtocol::Http11]),
             StaticResolver {
                 secure: true,
                 records: vec![

@@ -245,7 +245,7 @@ impl Default for VersionPacket {
             time: 0,
             remote: NetAddress::default(),
             nonce: ZERO_NONCE,
-            agent: "/hns-browser:0.1.4/".to_owned(),
+            agent: "/hns-browser:0.1.5/".to_owned(),
             height: Height(0),
             no_relay: true,
         }
@@ -341,6 +341,52 @@ impl PeerManager {
         peers.sort_by(|left, right| {
             left.score
                 .cmp(&right.score)
+                .then_with(|| right.last_height.cmp(&left.last_height))
+                .then_with(|| left.address.cmp(&right.address))
+        });
+
+        let mut selected = Vec::new();
+        let mut selected_groups = HashSet::new();
+        for peer in &peers {
+            if selected.len() >= preferred_count {
+                return selected;
+            }
+
+            let group = PeerAddressGroup::from_socket_addr(peer.address);
+            if selected_groups.insert(group) {
+                selected.push(peer.address);
+            }
+        }
+
+        for peer in peers {
+            if selected.len() >= preferred_count {
+                break;
+            }
+
+            if !selected.contains(&peer.address) {
+                selected.push(peer.address);
+            }
+        }
+
+        selected
+    }
+
+    pub fn select_discovery_outbound(
+        &self,
+        preferred_count: usize,
+        now: u64,
+        exclude: &HashSet<SocketAddr>,
+    ) -> Vec<SocketAddr> {
+        let mut peers = self
+            .peers
+            .values()
+            .filter(|peer| !peer.is_banned(now) && !exclude.contains(&peer.address))
+            .collect::<Vec<_>>();
+        peers.sort_by(|left, right| {
+            left.successes
+                .cmp(&right.successes)
+                .then_with(|| left.score.cmp(&right.score))
+                .then_with(|| left.last_connected_at.cmp(&right.last_connected_at))
                 .then_with(|| right.last_height.cmp(&left.last_height))
                 .then_with(|| left.address.cmp(&right.address))
         });
@@ -1755,6 +1801,26 @@ mod tests {
             vec![best_same_group, diverse],
         );
         assert_eq!(manager.address_group_count(100), 2);
+    }
+
+    #[test]
+    fn peer_manager_discovery_prefers_unqueried_non_excluded_peers() {
+        let mut manager = PeerManager::default();
+        let active: SocketAddr = "10.1.0.1:12038".parse().unwrap();
+        let queried: SocketAddr = "10.2.0.1:12038".parse().unwrap();
+        let unqueried_same_group: SocketAddr = "10.2.0.2:12038".parse().unwrap();
+        let unqueried_diverse: SocketAddr = "10.3.0.1:12038".parse().unwrap();
+        let mut exclude = HashSet::new();
+
+        manager.record_success(active, Height(100), 100);
+        manager.record_success(queried, Height(99), 100);
+        manager.seed([unqueried_same_group, unqueried_diverse]);
+        exclude.insert(active);
+
+        assert_eq!(
+            manager.select_discovery_outbound(2, 200, &exclude),
+            vec![unqueried_same_group, unqueried_diverse],
+        );
     }
 
     #[test]

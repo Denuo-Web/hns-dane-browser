@@ -383,11 +383,11 @@ fn doh_answer_from_body(
 }
 
 pub fn core_version() -> &'static str {
-    "hns-browser-rust-core/0.1.4"
+    "hns-browser-rust-core/0.1.5"
 }
 
 pub fn diagnostics_json() -> &'static str {
-    r#"{"core":"hns-browser-rust-core","version":"0.1.4","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","android-hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","x509-spki-extraction","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-proof-scheduler","android-native-sync-once","android-sync-status","android-sync-outcome-status","android-sync-progress-heights","android-sync-high-batch-catchup","android-clear-resolver-cache","android-persistent-gateway-resolver","android-gateway-live-proof-fetch","android-gateway-header-forwarding","android-gateway-body-forwarding","android-gateway-file-body-stream","android-webview-hns-intercept","android-service-worker-hns-intercept","android-hns-redirect-follow","android-actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","android-proxy-gateway-hook","android-local-hns-connect-certs","hns-websocket-upgrade-fail-closed","http-origin-transport","http-origin-response-framing","https-rustls-transport","dane-tls-policy"],"securityDefault":"fail-closed"}"#
+    r#"{"core":"hns-browser-rust-core","version":"0.1.5","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","android-hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-proof-scheduler","android-native-sync-once","android-sync-status","android-sync-outcome-status","android-sync-progress-heights","android-sync-high-batch-catchup","android-clear-resolver-cache","android-persistent-gateway-resolver","android-gateway-live-proof-fetch","android-gateway-header-forwarding","android-gateway-range-forwarding","android-gateway-body-forwarding","android-gateway-file-body-stream","android-webview-hns-intercept","android-service-worker-hns-intercept","android-hns-redirect-follow","android-actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","android-proxy-gateway-hook","android-random-loopback-proxy-port","android-local-hns-connect-certs","hns-websocket-upgrade-fail-closed","http-origin-transport","http2-origin-transport","http-origin-response-framing","https-rustls-transport","dane-tls-policy"],"securityDefault":"fail-closed"}"#
 }
 
 pub fn sync_once(data_dir: &str) -> String {
@@ -877,6 +877,11 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
             "HNS Origin Transport Failed",
             "Origin connection failed closed.",
         ),
+        GatewayError::Transport(TransportError::Http2(_)) => (
+            502,
+            "HNS HTTP/2 Transport Failed",
+            "Origin HTTP/2 exchange failed closed.",
+        ),
         GatewayError::Resolver(ResolverError::CachePoisoned)
         | GatewayError::Resolver(ResolverError::Storage(_))
         | GatewayError::NonLoopbackBind => (
@@ -1039,8 +1044,9 @@ fn run_sync_once(
         network,
         TcpHeaderPeerConnector,
         HeaderSyncRunnerConfig {
-            preferred_peers: 4,
+            preferred_peers: 8,
             max_header_batches_per_peer: ANDROID_HEADER_SYNC_BATCHES_PER_PEER,
+            peer_discovery_target: ANDROID_MIN_PEER_TARGET,
             timeout,
             ..HeaderSyncRunnerConfig::default()
         },
@@ -1730,7 +1736,7 @@ mod tests {
 
     #[test]
     fn version_is_stable() {
-        assert_eq!(core_version(), "hns-browser-rust-core/0.1.4");
+        assert_eq!(core_version(), "hns-browser-rust-core/0.1.5");
     }
 
     #[test]
@@ -1793,6 +1799,7 @@ mod tests {
         assert!(diagnostics_json().contains(r#""p2p-static-peer-source""#));
         assert!(diagnostics_json().contains(r#""p2p-dns-seed-source""#));
         assert!(diagnostics_json().contains(r#""p2p-getaddr-peer-discovery""#));
+        assert!(diagnostics_json().contains(r#""p2p-discovery-rotation""#));
         assert!(diagnostics_json().contains(r#""p2p-peer-diversity""#));
         assert!(diagnostics_json().contains(r#""p2p-sqlite-peer-store""#));
     }
@@ -1811,12 +1818,14 @@ mod tests {
         assert!(diagnostics_json().contains(r#""android-persistent-gateway-resolver""#));
         assert!(diagnostics_json().contains(r#""android-gateway-live-proof-fetch""#));
         assert!(diagnostics_json().contains(r#""android-gateway-header-forwarding""#));
+        assert!(diagnostics_json().contains(r#""android-gateway-range-forwarding""#));
         assert!(diagnostics_json().contains(r#""android-gateway-body-forwarding""#));
         assert!(diagnostics_json().contains(r#""android-gateway-file-body-stream""#));
         assert!(diagnostics_json().contains(r#""android-webview-hns-intercept""#));
         assert!(diagnostics_json().contains(r#""android-service-worker-hns-intercept""#));
         assert!(diagnostics_json().contains(r#""android-hns-redirect-follow""#));
         assert!(diagnostics_json().contains(r#""android-hns-doh-compat-resolver""#));
+        assert!(diagnostics_json().contains(r#""android-random-loopback-proxy-port""#));
     }
 
     #[test]
@@ -1827,8 +1836,11 @@ mod tests {
     #[test]
     fn diagnostics_reports_origin_transport_framing() {
         assert!(diagnostics_json().contains(r#""http-origin-transport""#));
+        assert!(diagnostics_json().contains(r#""http2-origin-transport""#));
         assert!(diagnostics_json().contains(r#""http-origin-response-framing""#));
         assert!(diagnostics_json().contains(r#""https-rustls-transport""#));
+        assert!(diagnostics_json().contains(r#""dane-certificate-chain-policy""#));
+        assert!(diagnostics_json().contains(r#""dane-tls-policy""#));
     }
 
     #[test]
