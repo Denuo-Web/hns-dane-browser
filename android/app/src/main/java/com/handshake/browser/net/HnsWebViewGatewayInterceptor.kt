@@ -71,6 +71,7 @@ class HnsWebViewGatewayInterceptor(
             if (allowProxyFallbackForBodyRequests()) {
                 return null
             }
+            GatewayEventLog.record("webview_reject", target.host, 501, "HNS Method Unsupported")
             return plainInterceptResponse(
                 statusCode = 501,
                 reason = "HNS Method Unsupported",
@@ -90,6 +91,7 @@ class HnsWebViewGatewayInterceptor(
             body = ByteArray(0),
         )?.let { fileResponse ->
             parseGatewayHttpFileResponse(fileResponse.head, fileResponse.bodyFile)
+                ?.also { recordGatewayStatus(target.host, it, "webview_native_file_response") }
                 ?: run {
                     fileResponse.bodyFile.delete()
                     null
@@ -108,12 +110,18 @@ class HnsWebViewGatewayInterceptor(
                 statusCode = 503,
                 reason = "HNS Resolution Unavailable",
                 detail = "Native HNS gateway is unavailable.",
-            )
-            parseGatewayHttpResponse(bytes) ?: plainInterceptResponse(
+            ).also {
+                GatewayEventLog.record("webview_gateway_unavailable", target.host, 503, "HNS Resolution Unavailable")
+            }
+            parseGatewayHttpResponse(bytes)?.also {
+                recordGatewayStatus(target.host, it, "webview_native_response")
+            } ?: plainInterceptResponse(
                 statusCode = 502,
                 reason = "HNS Gateway Error",
                 detail = "Native HNS gateway returned a malformed response.",
-            )
+            ).also {
+                GatewayEventLog.record("webview_malformed_response", target.host, 502, "HNS Gateway Error")
+            }
         }
 
         return response.followHnsRedirects(
@@ -147,6 +155,7 @@ class HnsWebViewGatewayInterceptor(
         }
         discardBodyFile()
         if (redirectsRemaining <= 0) {
+            GatewayEventLog.record("webview_redirect", target.host, 508, "HNS Redirect Loop")
             return plainInterceptResponse(
                 statusCode = 508,
                 reason = "HNS Redirect Loop",
@@ -158,14 +167,19 @@ class HnsWebViewGatewayInterceptor(
             statusCode = 502,
             reason = "HNS Redirect Invalid",
             detail = "Native HNS gateway returned a redirect without a Location header.",
-        )
+        ).also {
+            GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Invalid")
+        }
         val redirectUrl = target.resolve(location) ?: return plainInterceptResponse(
             statusCode = 502,
             reason = "HNS Redirect Invalid",
             detail = "Native HNS gateway returned an invalid redirect target.",
-        )
+        ).also {
+            GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Invalid")
+        }
         val redirectTarget = HnsWebViewTarget.parse(redirectUrl)
         if (redirectTarget == null || !HnsHostPolicy.requiresHnsResolution(redirectTarget.host)) {
+            GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Unsupported")
             return plainInterceptResponse(
                 statusCode = 502,
                 reason = "HNS Redirect Unsupported",
@@ -182,7 +196,15 @@ class HnsWebViewGatewayInterceptor(
             statusCode = 502,
             reason = "HNS Redirect Unsupported",
             detail = "Native HNS gateway redirect target is not interceptable.",
-        )
+        ).also {
+            GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Unsupported")
+        }
+    }
+
+    private fun recordGatewayStatus(host: String, response: HnsInterceptedResponse, stage: String) {
+        if (response.statusCode >= 400) {
+            GatewayEventLog.record(stage, host, response.statusCode, response.reason)
+        }
     }
 
     private companion object {

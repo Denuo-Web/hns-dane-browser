@@ -9,6 +9,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewFeature
 import com.handshake.browser.BuildConfig
+import com.handshake.browser.net.GatewayEventLog
 import com.handshake.browser.net.HnsSyncForegroundService
 import com.handshake.browser.net.NativeBridge
 import java.util.concurrent.atomic.AtomicBoolean
@@ -65,6 +66,7 @@ class DiagnosticsActivity : ComponentActivity() {
             "Third-party cookies blocked",
             BrowserCookiePreferences.blockThirdPartyCookies(this).toString(),
         ))
+        root.addView(row("Recent gateway events", GatewayEventLog.snapshotText()))
 
         setContentView(
             ScrollView(this).apply {

@@ -3,6 +3,7 @@ package com.handshake.browser.net
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.io.IOException
@@ -15,6 +16,11 @@ import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 
 class LoopbackProxyServerTest {
+    @Before
+    fun clearGatewayEvents() {
+        GatewayEventLog.clear()
+    }
+
     @Test
     fun parsesConnectRequestLine() {
         val line = ProxyRequestLine.parse("CONNECT example.com:443 HTTP/1.1")
@@ -157,6 +163,44 @@ class LoopbackProxyServerTest {
     }
 
     @Test
+    fun hnsGatewayFailureRecordsSanitizedDiagnosticEvent() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 503 HNS Resolution Unavailable\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-proxy-event-test").toFile()
+        LoopbackProxyServer(0, dataDir = dataDir, hnsGatewayBridge = bridge).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    (
+                        "POST http://welcome/private?q=token HTTP/1.1\r\n" +
+                            "Host: welcome\r\nContent-Length: 2\r\n\r\nhi"
+                        ).toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 503 HNS Resolution Unavailable\r\n"))
+            }
+        }
+
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("native_response", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(503, event.status)
+        assertEquals("HNS_Resolution_Unavailable", event.reason)
+        val text = GatewayEventLog.snapshotText()
+        assertFalse(text.contains("private"))
+        assertFalse(text.contains("token"))
+        assertFalse(text.contains("secret"))
+        assertFalse(text.contains("hi"))
+        dataDir.deleteRecursively()
+    }
+
+    @Test
     fun hnsRangeRequestPreservesRangeHeadersToNativeGateway() {
         val bridge = RecordingGatewayBridge(
             "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 10-19/100\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789"
@@ -264,6 +308,12 @@ class LoopbackProxyServerTest {
         }
 
         assertTrue(bridge.calls.isEmpty())
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("proxy_reject", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(400, event.status)
+        assertEquals("HNS_Host_Header_Mismatch", event.reason)
+        assertFalse(GatewayEventLog.snapshotText().contains("othername"))
         dataDir.deleteRecursively()
     }
 

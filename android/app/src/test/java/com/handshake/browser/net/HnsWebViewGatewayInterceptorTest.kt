@@ -6,12 +6,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlin.io.path.createTempDirectory
 
 class HnsWebViewGatewayInterceptorTest {
+    @Before
+    fun clearGatewayEvents() {
+        GatewayEventLog.clear()
+    }
+
     @Test
     fun hnsHttpsGetUsesNativeGatewayBridge() {
         val bridge = RecordingGatewayBridge(
@@ -300,6 +306,12 @@ class HnsWebViewGatewayInterceptorTest {
         assertEquals("HNS Method Unsupported", response.reason)
         assertTrue(response.body.toString(StandardCharsets.UTF_8).contains("bodyless requests"))
         assertTrue(bridge.calls.isEmpty())
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("webview_reject", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(501, event.status)
+        assertEquals("HNS_Method_Unsupported", event.reason)
+        assertFalse(GatewayEventLog.snapshotText().contains("form"))
         dataDir.deleteRecursively()
     }
 
@@ -334,6 +346,36 @@ class HnsWebViewGatewayInterceptorTest {
         requireNotNull(response)
         assertEquals(502, response.statusCode)
         assertEquals("HNS Gateway Error", response.reason)
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("webview_malformed_response", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(502, event.status)
+        assertEquals("HNS_Gateway_Error", event.reason)
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun hnsWebViewGatewayFailureRecordsSanitizedEvent() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 502 HNS Origin Address Missing\r\nContent-Length: 11\r\n\r\nsecret-body"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-webview-event-test").toFile()
+        val interceptor = HnsWebViewGatewayInterceptor(dataDir, bridge)
+
+        val response = interceptor.intercept("GET", "https://welcome/private?q=token", emptyMap())
+
+        requireNotNull(response)
+        assertEquals(502, response.statusCode)
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("webview_native_response", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(502, event.status)
+        assertEquals("HNS_Origin_Address_Missing", event.reason)
+        val text = GatewayEventLog.snapshotText()
+        assertFalse(text.contains("private"))
+        assertFalse(text.contains("token"))
+        assertFalse(text.contains("secret-body"))
         dataDir.deleteRecursively()
     }
 

@@ -106,6 +106,7 @@ class LoopbackProxyServer(
 
     private fun handleHnsConnect(client: Socket, target: ConnectTarget) {
         runCatching { hnsConnectTerminator.prepare(target) }.getOrElse {
+            GatewayEventLog.record("connect_prepare", target.host, 501, "HNS HTTPS Termination Unavailable")
             throw ProxyHttpException(501, "HNS HTTPS Termination Unavailable")
         }
         client.getOutputStream().write(CONNECT_OK)
@@ -168,38 +169,67 @@ class LoopbackProxyServer(
     }
 
     private fun handleHnsGatewayHttp(client: Socket, request: ProxyRequest, target: HttpTarget) {
-        if (request.isProtocolUpgrade() || target.scheme.equals("ws", ignoreCase = true) || target.scheme.equals("wss", ignoreCase = true)) {
-            throw ProxyHttpException(501, "HNS Protocol Upgrade Unsupported")
+        try {
+            if (request.isProtocolUpgrade() || target.scheme.equals("ws", ignoreCase = true) || target.scheme.equals("wss", ignoreCase = true)) {
+                throw ProxyHttpException(501, "HNS Protocol Upgrade Unsupported")
+            }
+            request.validateHostHeaderMatches(target)
+            val body = readHnsRequestBody(client.getInputStream(), request)
+            val gatewayHeaders = request.headersForGateway(strictHnsMode())
+            val fileResponse = hnsGatewayBridge.httpResponseBodyFile(
+                dataDir = dataDir.absolutePath,
+                method = request.line.method,
+                scheme = target.scheme,
+                host = target.host,
+                port = target.port,
+                pathAndQuery = target.pathAndQuery,
+                headers = gatewayHeaders,
+                body = body,
+            )
+            if (fileResponse != null) {
+                recordGatewayStatus(target.host, fileResponse.head, "native_file_response")
+                writeGatewayFileResponse(client.getOutputStream(), fileResponse)
+                return
+            }
+            val response = hnsGatewayBridge.httpResponse(
+                dataDir = dataDir.absolutePath,
+                method = request.line.method,
+                scheme = target.scheme,
+                host = target.host,
+                port = target.port,
+                pathAndQuery = target.pathAndQuery,
+                headers = gatewayHeaders,
+                body = body,
+            ) ?: throw ProxyHttpException(503, "HNS Resolution Unavailable")
+            recordGatewayStatus(target.host, response, "native_response")
+            client.getOutputStream().write(response)
+            client.getOutputStream().flush()
+        } catch (error: ProxyHttpException) {
+            GatewayEventLog.record("proxy_reject", target.host, error.status, error.reason)
+            throw error
         }
-        request.validateHostHeaderMatches(target)
-        val body = readHnsRequestBody(client.getInputStream(), request)
-        val gatewayHeaders = request.headersForGateway(strictHnsMode())
-        val fileResponse = hnsGatewayBridge.httpResponseBodyFile(
-            dataDir = dataDir.absolutePath,
-            method = request.line.method,
-            scheme = target.scheme,
-            host = target.host,
-            port = target.port,
-            pathAndQuery = target.pathAndQuery,
-            headers = gatewayHeaders,
-            body = body,
-        )
-        if (fileResponse != null) {
-            writeGatewayFileResponse(client.getOutputStream(), fileResponse)
-            return
+    }
+
+    private fun recordGatewayStatus(host: String, responseHead: ByteArray, stage: String) {
+        val line = responseStatusLine(responseHead)
+        val parts = line.split(' ', limit = 3)
+        val status = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        val reason = parts.getOrNull(2).orEmpty().ifBlank { "unknown" }
+        if (status >= 400 || status == 0) {
+            GatewayEventLog.record(stage, host, status, reason)
         }
-        val response = hnsGatewayBridge.httpResponse(
-            dataDir = dataDir.absolutePath,
-            method = request.line.method,
-            scheme = target.scheme,
-            host = target.host,
-            port = target.port,
-            pathAndQuery = target.pathAndQuery,
-            headers = gatewayHeaders,
-            body = body,
-        ) ?: throw ProxyHttpException(503, "HNS Resolution Unavailable")
-        client.getOutputStream().write(response)
-        client.getOutputStream().flush()
+    }
+
+    private fun responseStatusLine(responseHead: ByteArray): String {
+        val limit = minOf(responseHead.size, MAX_STATUS_LINE_BYTES)
+        var end = limit
+        for (index in 0 until limit) {
+            if (responseHead[index] == '\n'.code.toByte()) {
+                end = if (index > 0 && responseHead[index - 1] == '\r'.code.toByte()) index - 1 else index
+                break
+            }
+        }
+        return String(responseHead, 0, end, StandardCharsets.ISO_8859_1)
     }
 
     private fun writeGatewayFileResponse(output: OutputStream, response: HnsGatewayFileResponse) {
@@ -373,6 +403,7 @@ class LoopbackProxyServer(
     companion object {
         private const val LOOPBACK = "127.0.0.1"
         private const val MAX_HEADER_BYTES = 64 * 1024
+        private const val MAX_STATUS_LINE_BYTES = 512
         private const val MAX_HNS_BODY_BYTES = 1024 * 1024L
         private const val MAX_CHUNK_LINE_BYTES = 8 * 1024
         private const val MAX_CHUNK_TRAILER_BYTES = 64 * 1024
