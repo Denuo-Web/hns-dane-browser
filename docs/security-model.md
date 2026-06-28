@@ -21,6 +21,21 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - Browser-visible HNS gateway errors must identify the failing stage without exposing private request bodies.
 - Verified HNS non-inclusion must surface as name-not-found instead of origin-address-missing.
 
+## Hardened WebView Profile
+
+The Android WebView shell follows a hardened browser profile derived from Android WebView platform security guidance, OWASP MASVS/MASTG WebView controls, RFC 6454 origin semantics, and the applicable W3C web-platform security standards.
+
+Applied WebView controls:
+
+- JavaScript is enabled for the main browser WebView because general web compatibility requires it, but no JavaScript/native bridge is exposed to untrusted content and legacy default bridge names are removed.
+- Local file access, file-origin cross-access, universal file-origin access, and content-provider access are disabled.
+- Mixed active/passive content is blocked with `WebSettings.MIXED_CONTENT_NEVER_ALLOW`.
+- Safe Browsing is explicitly enabled where supported by the platform WebView.
+- JavaScript pop-up windows and multiple WebView windows are disabled.
+- WebView debugging is tied to `BuildConfig.DEBUG`, so production release builds do not enable WebView remote debugging.
+- Cleartext network policy is denied except for the explicit loopback gateway allowance in Android Network Security Config; the gateway still binds only to randomized `127.0.0.1` ports.
+- App asset loads should use HTTPS-style app-asset origins or native interception instead of broad `file://` access.
+
 ## Review Checklist
 
 - Parsers are bounded and return structured errors.
@@ -98,4 +113,8 @@ The default proof-backed path does not trust a single peer, external HNS resolve
 - No decoded chunked origin response should be exposed to WebView with stale `Transfer-Encoding` or mismatched `Content-Length` framing; native gateway file-backed bodies are returned with fixed decoded lengths.
 - No WebView SSL error should call `proceed()` unless the requested URL is an HNS HTTPS URL and the presented certificate's SHA-256 fingerprint exactly matches the local certificate generated and pinned for that HNS host.
 - No HNS WebSocket or HTTP Upgrade request should be silently downgraded to a normal GET by stripping hop-by-hop Upgrade headers; until native stream tunneling is implemented, these requests must fail closed before native gateway routing.
+- No WebView JavaScript/native bridge should be exposed to untrusted web content; browser UI/native operations must remain outside page script reachability.
+- No WebView `file://` or `content://` access should be enabled for normal browsing; app assets must use safe app-asset origins or native response interception.
+- No mixed-content downgrade should be allowed inside the WebView.
+- No production build should enable WebView debugging.
 - Browser proxy listener currently binds a randomized `127.0.0.1` port only, routes HNS HTTP through the native persistent-cache gateway path, preserves normal ICANN HTTP Upgrade tunnels, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and fails HNS Upgrade requests closed.

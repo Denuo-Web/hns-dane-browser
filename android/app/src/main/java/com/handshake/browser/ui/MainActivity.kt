@@ -19,6 +19,7 @@ import android.webkit.WebChromeClient
 import android.webkit.ServiceWorkerController
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.http.SslError
@@ -30,6 +31,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewAssetLoader
 import com.handshake.browser.BuildConfig
 import com.handshake.browser.R
 import com.handshake.browser.core.BrowserSecurityPolicy
@@ -86,6 +88,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var pageProgressBar: ProgressBar
     private lateinit var proxyController: HnsProxyController
     private lateinit var loopbackProxyServer: LoopbackProxyServer
+    private lateinit var assetLoader: WebViewAssetLoader
     private lateinit var webViewGatewayInterceptor: HnsWebViewGatewayInterceptor
     private var proxyAvailable: Boolean = false
     private var currentTargetKind: BrowserTargetKind? = null
@@ -98,7 +101,6 @@ class MainActivity : ComponentActivity() {
     private var pageIsLoading: Boolean = false
     private var pageLoadProgress: Int = 0
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -123,6 +125,9 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+        assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
         configureServiceWorkerInterception()
         requestNotificationPermissionIfNeeded()
 
@@ -164,10 +169,7 @@ class MainActivity : ComponentActivity() {
         }
 
         webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.loadsImagesAutomatically = true
-            settings.mediaPlaybackRequiresUserGesture = true
+            BrowserWebViewHardening.applyTo(this, allowJavaScript = true)
             webViewClient = BrowserClient()
             webChromeClient = BrowserChromeClient()
         }
@@ -515,7 +517,11 @@ class MainActivity : ComponentActivity() {
         override fun shouldInterceptRequest(
             view: WebView,
             request: WebResourceRequest,
-        ) = webViewGatewayInterceptor.intercept(request) ?: super.shouldInterceptRequest(view, request)
+        ): WebResourceResponse? {
+            assetLoader.shouldInterceptRequest(request.url)?.let { return it }
+            return webViewGatewayInterceptor.intercept(request)
+                ?: super.shouldInterceptRequest(view, request)
+        }
 
         @SuppressLint("WebViewClientOnReceivedSslError")
         override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
@@ -571,7 +577,8 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val EPHEMERAL_GATEWAY_PORT = 0
-        private const val DEFAULT_HOME = "file:///android_asset/hns_directory.html"
+        private const val DEFAULT_HOME =
+            "https://appassets.androidplatform.net/assets/hns_directory.html"
         private const val SYNC_PROGRESS_MAX = 1000
         private const val PAGE_PROGRESS_MAX = 100
         private const val SYNC_STATUS_POLL_MS = 2_000L

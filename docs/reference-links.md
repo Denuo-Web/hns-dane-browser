@@ -22,6 +22,8 @@ Use these for WebView, proxying, lifecycle, foreground behavior, and optional VP
 - [WebResourceRequest](https://developer.android.com/reference/android/webkit/WebResourceRequest)
 - [WebResourceResponse](https://developer.android.com/reference/android/webkit/WebResourceResponse)
 - [WebSettings](https://developer.android.com/reference/android/webkit/WebSettings)
+- [Android WebView native bridges risk guidance](https://developer.android.com/privacy-and-security/risks/insecure-webview-native-bridges)
+- [Android WebView unsafe file inclusion guidance](https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion)
 - [CookieManager](https://developer.android.com/reference/android/webkit/CookieManager)
 - [ServiceWorkerController](https://developer.android.com/reference/android/webkit/ServiceWorkerController)
 - [Android Network Security Config](https://developer.android.com/privacy-and-security/security-config)
@@ -30,6 +32,28 @@ Use these for WebView, proxying, lifecycle, foreground behavior, and optional VP
 - [Optional compatibility mode, VpnService](https://developer.android.com/develop/connectivity/vpn)
 - [VpnService.Builder](https://developer.android.com/reference/android/net/VpnService.Builder)
 - [Chrome Root Store and local trust limitations](https://chromium.googlesource.com/chromium/src/+/main/net/data/ssl/chrome_root_store/faq.md)
+
+## WebView Hardening Profile References
+
+Use these for Android WebView shell hardening, native-bridge avoidance, local-file isolation, mixed-content blocking, Safe Browsing, and mobile platform security review.
+
+- [Android Developers, WebView native bridges](https://developer.android.com/privacy-and-security/risks/insecure-webview-native-bridges)
+- [Android Developers, WebViews unsafe file inclusion](https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion)
+- [Android Developers, WebSettings API reference](https://developer.android.com/reference/android/webkit/WebSettings)
+- [OWASP MASVS-PLATFORM-1](https://mas.owasp.org/MASVS/controls/MASVS-PLATFORM-1/)
+- [OWASP MASVS-NETWORK-1](https://mas.owasp.org/MASVS/controls/MASVS-NETWORK-1/)
+- [OWASP MASTG Android WebView best practices](https://mas.owasp.org/MASTG/knowledge/android/MASVS-PLATFORM/MASTG-KNOW-0018/)
+- [OWASP MASWE-0068, JavaScript Bridges in WebViews](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0068/)
+- [OWASP MASWE-0069, WebViews Allows Access to Local Resources](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0069/)
+- [OWASP MASWE-0070, JavaScript Loaded from Untrusted Sources](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0070/)
+- [OWASP MASWE-0071, WebViews Loading Content from Untrusted Sources](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0071/)
+- [OWASP MASWE-0073, Insecure WebResourceResponse Implementations](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0073/)
+- [OWASP MASWE-0074, Web Content Debugging Enabled](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0074/)
+- [RFC 6454, The Web Origin Concept](https://www.rfc-editor.org/info/rfc6454)
+- [W3C Content Security Policy Level 2](https://www.w3.org/TR/CSP2/)
+- [W3C Content Security Policy Level 3](https://www.w3.org/TR/CSP3/)
+- [W3C Mixed Content](https://www.w3.org/TR/mixed-content/)
+- [W3C Permissions Policy](https://www.w3.org/TR/permissions-policy-1/)
 
 ## Android Build Stack
 
