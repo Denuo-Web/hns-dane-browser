@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Denuo HNS Directory</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172326;
+      --muted: #53676c;
+      --line: #b6c7cc;
+      --paper: #fbf8ed;
+      --panel: #fffdf6;
+      --link: #064fb5;
+      --ok: #126b35;
+      --warn: #8a5200;
+    }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.45;
+    }
+    header, main, footer {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+    header {
+      border-bottom: 3px double var(--line);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 30px;
+    }
+    h2 {
+      border-bottom: 1px solid var(--line);
+      font-size: 21px;
+      margin-top: 28px;
+      padding-bottom: 4px;
+    }
+    a {
+      color: var(--link);
+    }
+    .note, .site, .submit {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 12px;
+      margin: 10px 0;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+    .ok {
+      color: var(--ok);
+      font-weight: bold;
+    }
+    .warn {
+      color: var(--warn);
+      font-weight: bold;
+    }
+    code {
+      background: #efe8d0;
+      padding: 1px 4px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Denuo HNS Directory</h1>
+    <div class="meta">A local starting page for testing Handshake resolution paths in HNS Browser.</div>
+  </header>
+  <main>
+    <section class="note">
+      Open a site, then use <strong>☰ → Resolver trace</strong> to confirm the local path:
+      HNS proof, delegated nameserver attempts, DNSSEC, DANE, and DoH fallback.
+    </section>
+
+    <h2>Verified Direct HNS Sites</h2>
+    <p>These should load from HNS resource records without third-party DoH.</p>
+    <div class="site">
+      <a href="https://nathan.woodburn/">nathan.woodburn/</a>
+      <div class="meta"><span class="ok">Known working sample.</span> Last checked locally: open and inspect Resolver trace.</div>
+    </div>
+
+    <h2>Delegated HNS Sites</h2>
+    <p>These use NS/DS records and their own authoritative nameservers.</p>
+    <div class="site">
+      <a href="https://gday.hnsau/">gday.hnsau/</a>
+      <div class="meta">Expected path: HNS proof + direct authoritative DNS. Confirm UDP/TCP 53 in Resolver trace.</div>
+    </div>
+
+    <h2>DANE-Verified HNS Sites</h2>
+    <p>Sites in this section should expose TLSA records and pass DANE when available.</p>
+    <div class="site">
+      <a href="https://nathan.woodburn/">nathan.woodburn/</a>
+      <div class="meta">Check <code>TLSA</code> and <code>DANE</code> status in Resolver trace after load.</div>
+    </div>
+
+    <h2>Compatibility Sites</h2>
+    <p>These may currently need HNS DoH fallback when direct delegated resolution fails.</p>
+    <div class="site">
+      <a href="https://theshake/">theshake/</a>
+      <div class="meta"><span class="warn">Compatibility candidate.</span> Strict HNS mode should fail closed if authoritative DNS is unavailable.</div>
+    </div>
+    <div class="site">
+      <a href="https://niami/">niami/</a>
+      <div class="meta">Use this to compare strict mode vs compatibility mode.</div>
+    </div>
+
+    <h2>Recently Working</h2>
+    <p>This packaged directory is static today. Runtime local-check history will be added after visit logging is persisted.</p>
+    <div class="site">
+      <a href="https://nathan.woodburn/">nathan.woodburn/</a>
+      <div class="meta">Resolution path: inspect locally with Resolver trace. DoH fallback should show yes/no.</div>
+    </div>
+
+    <h2>Submit a Site</h2>
+    <div class="submit">
+      To test your name, enter it in the omnibar and open <strong>Resolver trace</strong>.
+      A scanner-backed submission flow will be added once local trace persistence is available.
+    </div>
+
+    <h2>Make My HNS Domain Work</h2>
+    <div class="site">
+      Common fixes:
+      <ul>
+        <li>Direct site: add <code>SYNTH4</code> or <code>GLUE4</code> with a reachable address.</li>
+        <li>Delegated site: add <code>NS</code> plus usable <code>GLUE4/GLUE6</code>, then serve authoritative DNS on UDP/TCP 53.</li>
+        <li>Strict DANE: add HNS <code>DS</code>, DNSSEC-signed zone data, and <code>TLSA</code> for <code>_443._tcp.name.</code></li>
+      </ul>
+    </div>
+  </main>
+  <footer>
+    <div class="meta">This directory is bundled locally with the app. It does not require network access to display.</div>
+  </footer>
+</body>
+</html>

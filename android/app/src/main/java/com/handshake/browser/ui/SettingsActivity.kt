@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -36,11 +37,15 @@ class SettingsActivity : ComponentActivity() {
             applySystemBarPadding()
             addView(heading("Settings"))
             addView(status)
+            addView(strictHnsModeOption())
             addView(actionButton("View diagnostics") {
                 startActivity(Intent(this@SettingsActivity, DiagnosticsActivity::class.java))
             })
             addView(actionButton("Cookie options") {
                 startActivity(Intent(this@SettingsActivity, CookieSettingsActivity::class.java))
+            })
+            addView(actionButton("Make my HNS domain work") {
+                startActivity(Intent(this@SettingsActivity, HnsDomainWizardActivity::class.java))
             })
             addView(actionButton("Clear resolver cache") {
                 clearResolverCache()
@@ -77,6 +82,22 @@ class SettingsActivity : ComponentActivity() {
             this.text = text
             setAllCaps(false)
             setOnClickListener { action() }
+        }
+
+    private fun strictHnsModeOption(): CheckBox =
+        CheckBox(this).apply {
+            text = "Strict HNS mode: never use third-party HNS DoH fallback"
+            textSize = 16f
+            setPadding(0, 0, 0, 14)
+            isChecked = HnsResolutionPreferences.strictHnsMode(this@SettingsActivity)
+            setOnCheckedChangeListener { _, checked ->
+                HnsResolutionPreferences.setStrictHnsMode(this@SettingsActivity, checked)
+                status.text = if (checked) {
+                    "Strict HNS mode enabled. Delegated resolution failures fail closed."
+                } else {
+                    "Compatibility mode enabled. HNS DoH fallback may be used when direct delegated resolution fails."
+                }
+            }
         }
 
     private fun linkRow(label: String, value: String, uri: String, copyLabel: String, copyText: String): TextView =

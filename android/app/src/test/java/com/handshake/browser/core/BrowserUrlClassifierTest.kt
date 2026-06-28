@@ -59,6 +59,14 @@ class BrowserUrlClassifierTest {
     }
 
     @Test
+    fun bundledAndroidAssetPageLoadsAsExactUrl() {
+        val target = classifier.classify("file:///android_asset/hns_directory.html")
+
+        assertEquals(BrowserTargetKind.ExactUrl, target.kind)
+        assertEquals("file:///android_asset/hns_directory.html", target.url)
+    }
+
+    @Test
     fun explicitDottedHnsUrlUsesHnsModeWhenTldIsNotCommonIcann() {
         val target = classifier.classify("https://welcome.2d/path")
 

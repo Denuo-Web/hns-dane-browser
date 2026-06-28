@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
     private var mainFrameHnsStatusCode: Int? = null
     private var mainFrameHnsTlsPolicy: HnsPageTlsPolicy? = null
     private var mainFrameHnsResolverPolicy: HnsPageResolverPolicy? = null
+    private var mainFrameHnsTraceJson: String? = null
     private var lastSyncSnapshot: HnsSyncSnapshot? = null
     private var syncReceiverRegistered: Boolean = false
     private var pageIsLoading: Boolean = false
@@ -103,15 +104,21 @@ class MainActivity : ComponentActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         proxyController = HnsProxyController(this)
-        loopbackProxyServer = LoopbackProxyServer(EPHEMERAL_GATEWAY_PORT, filesDir)
+        loopbackProxyServer = LoopbackProxyServer(
+            EPHEMERAL_GATEWAY_PORT,
+            filesDir,
+            strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+        )
         webViewGatewayInterceptor = HnsWebViewGatewayInterceptor(
             dataDir = filesDir,
             allowProxyFallbackForBodyRequests = { proxyAvailable },
-            onMainFrameHnsStatus = { statusCode, tlsPolicy, resolverPolicy ->
+            strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+            onMainFrameHnsStatus = { statusCode, tlsPolicy, resolverPolicy, traceJson ->
                 runOnUiThread {
                     mainFrameHnsStatusCode = statusCode
                     mainFrameHnsTlsPolicy = tlsPolicy
                     mainFrameHnsResolverPolicy = resolverPolicy
+                    mainFrameHnsTraceJson = traceJson
                     refreshSecurityState()
                 }
             },
@@ -353,7 +360,13 @@ class MainActivity : ComponentActivity() {
             }
             menu.add(0, MENU_REFRESH, 2, "↻ Refresh")
                 .setIcon(android.R.drawable.ic_popup_sync)
-            menu.add(0, MENU_SETTINGS, 3, "Settings")
+            menu.add(0, MENU_RESOLVER_TRACE, 3, "Resolver trace")
+                .setIcon(android.R.drawable.ic_menu_info_details)
+            menu.add(0, MENU_HNS_PROOF_DETAILS, 4, "HNS proof details")
+                .setIcon(android.R.drawable.ic_menu_search)
+            menu.add(0, MENU_TLSA_INSPECTOR, 5, "TLSA inspector")
+                .setIcon(android.R.drawable.ic_menu_view)
+            menu.add(0, MENU_SETTINGS, 6, "Settings")
                 .setIcon(android.R.drawable.ic_menu_manage)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
@@ -371,6 +384,18 @@ class MainActivity : ComponentActivity() {
                     }
                     MENU_REFRESH -> {
                         webView.reload()
+                        true
+                    }
+                    MENU_RESOLVER_TRACE -> {
+                        openResolverTrace()
+                        true
+                    }
+                    MENU_HNS_PROOF_DETAILS -> {
+                        openHnsProofDetails()
+                        true
+                    }
+                    MENU_TLSA_INSPECTOR -> {
+                        openTlsaInspector()
                         true
                     }
                     MENU_SETTINGS -> {
@@ -394,6 +419,7 @@ class MainActivity : ComponentActivity() {
         mainFrameHnsStatusCode = null
         mainFrameHnsTlsPolicy = null
         mainFrameHnsResolverPolicy = null
+        mainFrameHnsTraceJson = null
         pageIsLoading = true
         pageLoadProgress = 0
         refreshSecurityState()
@@ -481,6 +507,7 @@ class MainActivity : ComponentActivity() {
             mainFrameHnsStatusCode = null
             mainFrameHnsTlsPolicy = null
             mainFrameHnsResolverPolicy = null
+            mainFrameHnsTraceJson = null
             refreshSecurityState()
             return false
         }
@@ -518,9 +545,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openResolverTrace() {
+        startActivity(
+            Intent(this, HnsResolverTraceActivity::class.java)
+                .putExtra(HnsResolverTraceActivity.EXTRA_URL, omnibox.text.toString())
+                .putExtra(HnsResolverTraceActivity.EXTRA_TRACE_JSON, mainFrameHnsTraceJson),
+        )
+    }
+
+    private fun openHnsProofDetails() {
+        startActivity(
+            Intent(this, HnsProofDetailsActivity::class.java)
+                .putExtra(HnsProofDetailsActivity.EXTRA_URL, omnibox.text.toString())
+                .putExtra(HnsProofDetailsActivity.EXTRA_TRACE_JSON, mainFrameHnsTraceJson),
+        )
+    }
+
+    private fun openTlsaInspector() {
+        startActivity(
+            Intent(this, HnsTlsaInspectorActivity::class.java)
+                .putExtra(HnsTlsaInspectorActivity.EXTRA_URL, omnibox.text.toString())
+                .putExtra(HnsTlsaInspectorActivity.EXTRA_TRACE_JSON, mainFrameHnsTraceJson),
+        )
+    }
+
     companion object {
         private const val EPHEMERAL_GATEWAY_PORT = 0
-        private const val DEFAULT_HOME = "https://handshake.org/"
+        private const val DEFAULT_HOME = "file:///android_asset/hns_directory.html"
         private const val SYNC_PROGRESS_MAX = 1000
         private const val PAGE_PROGRESS_MAX = 100
         private const val SYNC_STATUS_POLL_MS = 2_000L
@@ -528,6 +579,9 @@ class MainActivity : ComponentActivity() {
         private const val MENU_BACK = 1
         private const val MENU_FORWARD = 2
         private const val MENU_REFRESH = 3
-        private const val MENU_SETTINGS = 4
+        private const val MENU_RESOLVER_TRACE = 4
+        private const val MENU_HNS_PROOF_DETAILS = 5
+        private const val MENU_TLSA_INSPECTOR = 6
+        private const val MENU_SETTINGS = 7
     }
 }

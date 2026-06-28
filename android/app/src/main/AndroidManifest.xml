@@ -29,6 +29,18 @@
             android:name=".ui.LegalActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.HnsResolverTraceActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.HnsProofDetailsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.HnsTlsaInspectorActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.HnsDomainWizardActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="true">

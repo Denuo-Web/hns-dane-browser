@@ -32,6 +32,10 @@ class BrowserUrlClassifier(
         }
 
         val lower = trimmed.lowercase(Locale.US)
+        if (lower.startsWith("file:///android_asset/")) {
+            return BrowserTarget(BrowserTargetKind.ExactUrl, trimmed, null)
+        }
+
         if (lower.startsWith("https://") || lower.startsWith("http://")) {
             return exact(trimmed)
         }
