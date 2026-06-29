@@ -71,6 +71,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine("Nameserver candidates: ${trace.optJSONArray("nameserverCandidates")?.join(", ") ?: "unknown"}")
             appendLine("Authoritative UDP 53: ${authoritativeDns?.optString("udp53") ?: "unknown"}")
             appendLine("Authoritative TCP 53: ${authoritativeDns?.optString("tcp53") ?: "unknown"}")
+            appendLine("Resolver attempts: ${dnsAttemptsSummary(trace)}")
             appendLine("DNSSEC: ${trace.optString("dnssec", "unknown")}")
             appendLine("Origin address: ${trace.optString("originAddress", "unknown")}")
             appendLine("TLSA owner: ${tls?.optString("tlsaOwner")?.takeIf { it.isNotBlank() } ?: "none"}")
@@ -81,6 +82,25 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine()
             appendLine("Suggested fix:")
             appendLine(suggestedFix(trace))
+        }
+    }
+
+    private fun dnsAttemptsSummary(trace: JSONObject): String {
+        val attempts = trace.optJSONArray("dnsAttempts") ?: return "none"
+        if (attempts.length() == 0) {
+            return "none"
+        }
+        return (0 until attempts.length()).joinToString(" | ") { index ->
+            val attempt = attempts.optJSONObject(index)
+            val protocol = attempt?.optString("protocol")?.takeIf { it.isNotBlank() } ?: "unknown"
+            val server = attempt?.optString("server")?.takeIf { it.isNotBlank() } ?: "unknown"
+            val status = attempt?.optString("status")?.takeIf { it.isNotBlank() } ?: "unknown"
+            val elapsed = attempt
+                ?.takeIf { it.has("elapsedMs") }
+                ?.optLong("elapsedMs")
+                ?.let { "${it}ms" }
+                ?: "unknown"
+            "$protocol $server $status $elapsed"
         }
     }
 

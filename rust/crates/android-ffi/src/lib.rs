@@ -29,12 +29,13 @@ use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jbyteArray, jint, jstring};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_RESOURCE_CACHE_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub const MAX_GATEWAY_HEADER_TEXT_BYTES: usize = 64 * 1024;
@@ -47,6 +48,7 @@ const DNSSEC_DO_FLAG: u32 = 0x8000;
 const DEFAULT_DNS_UDP_PAYLOAD: usize = 1232;
 const DEFAULT_GATEWAY_PROOF_PEERS: usize = 2;
 const DEFAULT_GATEWAY_PROOF_TIMEOUT: Duration = Duration::from_secs(3);
+const ANDROID_COMPAT_AUTHORITATIVE_DNS_TIMEOUT: Duration = Duration::from_millis(900);
 const RESOURCE_PROOF_CACHE_CANONICAL_WINDOW: u32 = 144;
 const ANDROID_HEADER_SYNC_PEERS: usize = 12;
 const ANDROID_HEADER_SYNC_BATCHES_PER_PEER: usize = 16;
@@ -282,7 +284,7 @@ enum AndroidGatewayResolver {
     Compatibility(FallbackResolver<AndroidPrimaryResolver, HnsDohResolver>),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct DnsTraceRecorder {
     events: Arc<Mutex<Vec<DnsTraceEvent>>>,
 }
@@ -307,6 +309,7 @@ struct DnsTraceEvent {
     protocol: &'static str,
     server: String,
     status: String,
+    elapsed_ms: u64,
     error: Option<String>,
 }
 
@@ -323,37 +326,86 @@ impl<T> TracingDnsTransport<T> {
 
 impl<T: DnsTransport> DnsTransport for TracingDnsTransport<T> {
     fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        let started = Instant::now();
         let result = self.inner.exchange_udp(server, query);
-        self.trace.push(dns_trace_event("udp53", server, &result));
+        self.trace.push(dns_trace_event(
+            "udp53",
+            server.to_string(),
+            elapsed_millis(started),
+            &result,
+        ));
         result
     }
 
     fn exchange_tcp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        let started = Instant::now();
         let result = self.inner.exchange_tcp(server, query);
-        self.trace.push(dns_trace_event("tcp53", server, &result));
+        self.trace.push(dns_trace_event(
+            "tcp53",
+            server.to_string(),
+            elapsed_millis(started),
+            &result,
+        ));
         result
     }
 }
 
 fn dns_trace_event(
     protocol: &'static str,
-    server: SocketAddr,
+    server: String,
+    elapsed_ms: u64,
     result: &Result<Vec<u8>, ResolverError>,
 ) -> DnsTraceEvent {
     match result {
         Ok(_) => DnsTraceEvent {
             protocol,
-            server: server.to_string(),
+            server,
             status: "ok".to_owned(),
+            elapsed_ms,
             error: None,
         },
         Err(error) => DnsTraceEvent {
             protocol,
-            server: server.to_string(),
+            server,
             status: dns_trace_error_status(error).to_owned(),
+            elapsed_ms,
             error: Some(error.to_string()),
         },
     }
+}
+
+fn doh_trace_event(
+    server: String,
+    elapsed_ms: u64,
+    result: &Result<OriginResponse, TransportError>,
+) -> DnsTraceEvent {
+    match result {
+        Ok(response) if response.status == 200 => DnsTraceEvent {
+            protocol: "hns_doh",
+            server,
+            status: "ok".to_owned(),
+            elapsed_ms,
+            error: None,
+        },
+        Ok(response) => DnsTraceEvent {
+            protocol: "hns_doh",
+            server,
+            status: "http_error".to_owned(),
+            elapsed_ms,
+            error: Some(format!("HTTP {}", response.status)),
+        },
+        Err(error) => DnsTraceEvent {
+            protocol: "hns_doh",
+            server,
+            status: "transport_error".to_owned(),
+            elapsed_ms,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
 fn dns_trace_error_status(error: &ResolverError) -> &'static str {
@@ -391,7 +443,9 @@ impl FallbackMarker {
     fn mark(&self, reason: &'static str) {
         self.used.store(true, Ordering::Relaxed);
         if let Ok(mut fallback_reason) = self.reason.lock() {
-            *fallback_reason = Some(reason);
+            if fallback_reason.is_none() {
+                *fallback_reason = Some(reason);
+            }
         }
     }
 
@@ -408,6 +462,7 @@ struct FallbackResolver<P, F> {
     primary: P,
     fallback: F,
     fallback_marker: FallbackMarker,
+    fallback_roots: Arc<Mutex<HashMap<String, &'static str>>>,
 }
 
 impl<P, F> FallbackResolver<P, F> {
@@ -421,6 +476,22 @@ impl<P, F> FallbackResolver<P, F> {
             primary,
             fallback,
             fallback_marker,
+            fallback_roots: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn cached_fallback_reason(&self, request: &ResolutionRequest) -> Option<&'static str> {
+        let root = fallback_cache_root(request);
+        self.fallback_roots
+            .lock()
+            .ok()
+            .and_then(|roots| roots.get(&root).copied())
+    }
+
+    fn remember_fallback_reason(&self, request: &ResolutionRequest, reason: &'static str) {
+        let root = fallback_cache_root(request);
+        if let Ok(mut roots) = self.fallback_roots.lock() {
+            roots.entry(root).or_insert(reason);
         }
     }
 }
@@ -431,11 +502,17 @@ where
     F: Resolver,
 {
     fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+        if let Some(reason) = self.cached_fallback_reason(request) {
+            self.fallback_marker.mark(reason);
+            return self.fallback.resolve(request);
+        }
+
         match self.primary.resolve(request) {
             Ok(answer) => Ok(answer),
             Err(error) if doh_fallback_reason(&error).is_some() => {
-                self.fallback_marker
-                    .mark(doh_fallback_reason(&error).expect("fallback reason checked"));
+                let reason = doh_fallback_reason(&error).expect("fallback reason checked");
+                self.remember_fallback_reason(request, reason);
+                self.fallback_marker.mark(reason);
                 self.fallback.resolve(request)
             }
             Err(error) => Err(error),
@@ -443,19 +520,31 @@ where
     }
 }
 
+fn fallback_cache_root(request: &ResolutionRequest) -> String {
+    hns_trace_root(&request.qname).to_ascii_lowercase()
+}
+
 #[derive(Clone, Debug)]
 struct HnsDohResolver {
     transport: TcpHttpTransport,
     host: String,
     path: String,
+    trace: DnsTraceRecorder,
 }
 
 impl Default for HnsDohResolver {
     fn default() -> Self {
+        Self::new(DnsTraceRecorder::default())
+    }
+}
+
+impl HnsDohResolver {
+    fn new(trace: DnsTraceRecorder) -> Self {
         Self {
             transport: TcpHttpTransport::default(),
             host: HNS_DOH_HOST.to_owned(),
             path: HNS_DOH_PATH.to_owned(),
+            trace,
         }
     }
 }
@@ -467,6 +556,7 @@ impl Resolver for HnsDohResolver {
         let qtype = RecordType::from_code(request.qtype);
         let id = next_doh_query_id();
         let query = build_doh_query(id, &qname, qtype)?;
+        let started = Instant::now();
         let response = self.transport.fetch(&OriginRequest {
             method: "POST".to_owned(),
             scheme: "https".to_owned(),
@@ -485,6 +575,11 @@ impl Resolver for HnsDohResolver {
             ],
             body: query,
         });
+        self.trace.push(doh_trace_event(
+            format!("{}:443{}", self.host, self.path),
+            elapsed_millis(started),
+            &response,
+        ));
         let response = response.map_err(|error| {
             ResolverError::DnsTransport(format!("HNS DoH compatibility resolver failed: {error}"))
         })?;
@@ -915,19 +1010,28 @@ fn android_gateway_resolver(
     fallback_marker: FallbackMarker,
     dns_trace: DnsTraceRecorder,
 ) -> AndroidGatewayResolver {
+    let authoritative_dns_transport = android_authoritative_dns_transport(mode);
     let primary = DelegatingResolver::new(
         GatewayProofProvider::new(base, values),
         AuthoritativeDnssecResolver::new(
-            TracingDnsTransport::new(UdpTcpDnsTransport::default(), dns_trace),
+            TracingDnsTransport::new(authoritative_dns_transport, dns_trace.clone()),
             SystemDnssecVerifier,
         ),
     );
     match mode {
         GatewayResolutionMode::Strict => AndroidGatewayResolver::Strict(primary),
         GatewayResolutionMode::Compatibility => AndroidGatewayResolver::Compatibility(
-            FallbackResolver::with_marker(primary, HnsDohResolver::default(), fallback_marker),
+            FallbackResolver::with_marker(primary, HnsDohResolver::new(dns_trace), fallback_marker),
         ),
     }
+}
+
+fn android_authoritative_dns_transport(mode: GatewayResolutionMode) -> UdpTcpDnsTransport {
+    let mut transport = UdpTcpDnsTransport::default();
+    if mode == GatewayResolutionMode::Compatibility {
+        transport.timeout = ANDROID_COMPAT_AUTHORITATIVE_DNS_TIMEOUT;
+    }
+    transport
 }
 
 fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'static str> {
@@ -1346,10 +1450,11 @@ fn dns_trace_attempts_json(events: &[DnsTraceEvent]) -> String {
                 .map(|error| format!(r#""{}""#, json_escape(error)))
                 .unwrap_or_else(|| "null".to_owned());
             format!(
-                r#"{{"protocol":"{}","server":"{}","status":"{}","error":{}}}"#,
+                r#"{{"protocol":"{}","server":"{}","status":"{}","elapsedMs":{},"error":{}}}"#,
                 event.protocol,
                 json_escape(&event.server),
                 json_escape(&event.status),
+                event.elapsed_ms,
                 error,
             )
         })
@@ -1360,6 +1465,7 @@ fn dns_trace_attempts_json(events: &[DnsTraceEvent]) -> String {
 fn nameserver_candidates_json(events: &[DnsTraceEvent]) -> String {
     let servers = events
         .iter()
+        .filter(|event| matches!(event.protocol, "udp53" | "tcp53"))
         .map(|event| event.server.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     format!(
@@ -3488,12 +3594,14 @@ mod tests {
             protocol: "udp53",
             server: "192.0.2.53:53".to_owned(),
             status: "timeout".to_owned(),
+            elapsed_ms: 901,
             error: Some("operation timed out".to_owned()),
         });
         dns_trace.push(DnsTraceEvent {
             protocol: "tcp53",
             server: "192.0.2.53:53".to_owned(),
             status: "transport_error".to_owned(),
+            elapsed_ms: 12,
             error: Some("connection refused".to_owned()),
         });
         let trace = resolution_trace_json(
@@ -3524,6 +3632,7 @@ mod tests {
         assert!(
             trace.contains(r#""protocol":"udp53","server":"192.0.2.53:53","status":"timeout""#)
         );
+        assert!(trace.contains(r#""elapsedMs":901"#));
     }
 
     #[test]
@@ -3599,6 +3708,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolved, answer);
+    }
+
+    #[test]
+    fn fallback_resolver_skips_primary_after_root_fallback() {
+        use std::sync::atomic::AtomicUsize;
+
+        let primary_calls = Arc::new(AtomicUsize::new(0));
+        let answer = ResolutionAnswer {
+            name: DnsName::from_ascii("shakeshift").unwrap(),
+            records: vec![address_record("shakeshift", [203, 0, 113, 10])],
+            secure: true,
+        };
+        let resolver = FallbackResolver::new(
+            CountingErrorResolver {
+                calls: primary_calls.clone(),
+                error: || ResolverError::DnsTransport("closed".to_owned()),
+            },
+            TestResolver::answer(answer),
+        );
+
+        resolver
+            .resolve(&ResolutionRequest {
+                qname: "shakeshift".to_owned(),
+                qtype: RecordType::A.code(),
+            })
+            .unwrap();
+        resolver
+            .resolve(&ResolutionRequest {
+                qname: "_443._tcp.shakeshift".to_owned(),
+                qtype: RecordType::Tlsa.code(),
+            })
+            .unwrap();
+
+        assert_eq!(primary_calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -3701,7 +3844,7 @@ mod tests {
             host: "welcome",
             port: 80,
             path_and_query: "/",
-            header_text: "",
+            header_text: "X-HNS-Browser-Strict-Mode: 1\r\n",
             body: &[],
         });
         let text = String::from_utf8(response).unwrap();
@@ -4152,6 +4295,11 @@ mod tests {
         outcome: TestResolverOutcome,
     }
 
+    struct CountingErrorResolver {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        error: fn() -> ResolverError,
+    }
+
     enum TestResolverOutcome {
         Answer(ResolutionAnswer),
         Error(fn() -> ResolverError),
@@ -4177,6 +4325,13 @@ mod tests {
                 TestResolverOutcome::Answer(answer) => Ok(answer.clone()),
                 TestResolverOutcome::Error(error) => Err(error()),
             }
+        }
+    }
+
+    impl Resolver for CountingErrorResolver {
+        fn resolve(&self, _request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Err((self.error)())
         }
     }
 
