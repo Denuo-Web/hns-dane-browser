@@ -1,11 +1,15 @@
 package com.handshake.browser.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewFeature
 import com.handshake.browser.BuildConfig
@@ -28,7 +32,8 @@ class DiagnosticsActivity : ComponentActivity() {
             applySystemBarPadding()
         }
 
-        val syncStatus = row("Sync status", NativeBridge.syncStatus(filesDir.absolutePath))
+        var latestSyncStatus = NativeBridge.syncStatus(filesDir.absolutePath)
+        val syncStatus = row("Sync status", latestSyncStatus)
 
         root.addView(row("Build", buildLabel()))
         root.addView(row("Rust core", NativeBridge.version()))
@@ -47,6 +52,7 @@ class DiagnosticsActivity : ComponentActivity() {
                         val status = NativeBridge.syncStatus(filesDir.absolutePath)
                         runOnUiThread {
                             if (running.get()) {
+                                latestSyncStatus = status
                                 syncStatus.text = "Sync status: running $status"
                             }
                         }
@@ -56,6 +62,7 @@ class DiagnosticsActivity : ComponentActivity() {
                     val status = NativeBridge.syncOnce(filesDir.absolutePath)
                     running.set(false)
                     runOnUiThread {
+                        latestSyncStatus = status
                         syncStatus.text = "Sync status: $status"
                         isEnabled = true
                     }
@@ -68,6 +75,18 @@ class DiagnosticsActivity : ComponentActivity() {
             BrowserCookiePreferences.blockThirdPartyCookies(this).toString(),
         ))
         root.addView(row("Recent gateway events", GatewayEventLog.snapshotText()))
+        root.addView(Button(this).apply {
+            text = "Copy diagnostic bundle"
+            setOnClickListener {
+                copyDiagnosticBundle(latestSyncStatus)
+            }
+        })
+        root.addView(Button(this).apply {
+            text = "Share diagnostic bundle"
+            setOnClickListener {
+                shareDiagnosticBundle(latestSyncStatus)
+            }
+        })
 
         setContentView(
             ScrollView(this).apply {
@@ -83,6 +102,32 @@ class DiagnosticsActivity : ComponentActivity() {
             setTextIsSelectable(true)
             setPadding(0, 10, 0, 10)
         }
+
+    private fun copyDiagnosticBundle(syncStatus: String) {
+        getSystemService(ClipboardManager::class.java)
+            .setPrimaryClip(ClipData.newPlainText("HNS Browser diagnostic bundle", diagnosticBundle(syncStatus)))
+        Toast.makeText(this, "Diagnostic bundle copied", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareDiagnosticBundle(syncStatus: String) {
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/markdown"
+            putExtra(Intent.EXTRA_SUBJECT, "HNS Browser diagnostic bundle")
+            putExtra(Intent.EXTRA_TEXT, diagnosticBundle(syncStatus))
+        }
+        startActivity(Intent.createChooser(sendIntent, "Share diagnostic bundle"))
+    }
+
+    private fun diagnosticBundle(syncStatus: String): String =
+        DiagnosticReport.markdown(
+            buildLabel = buildLabel(),
+            rustCore = NativeBridge.version(),
+            rustDiagnostics = NativeBridge.diagnostics(),
+            syncStatus = syncStatus,
+            proxyOverrideSupported = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE),
+            thirdPartyCookiesBlocked = BrowserCookiePreferences.blockThirdPartyCookies(this),
+            gatewayEvents = GatewayEventLog.snapshotText(),
+        )
 
     private fun buildLabel(): String {
         val channel = if (BuildConfig.DEBUG) "debug demo" else "release"

@@ -44,6 +44,7 @@ captures/
 *.hprof
 *.prof
 *.profm
+*.sha256
 
 # Kotlin/Gradle extras
 .kotlin/
