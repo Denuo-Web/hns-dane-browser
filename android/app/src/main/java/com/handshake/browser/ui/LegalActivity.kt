@@ -26,6 +26,15 @@ class LegalActivity : ComponentActivity() {
             applySystemBarPadding()
             addView(heading("License and User Agreement"))
             addView(row("Build", buildLabel()))
+            addView(section("Privacy Policy"))
+            addView(row("Summary", BrowserAppInfo.PRIVACY_POLICY_SUMMARY))
+            addView(linkRow(
+                "Privacy policy URL",
+                BrowserAppInfo.PRIVACY_POLICY_URL,
+                BrowserAppInfo.PRIVACY_POLICY_URL,
+                "privacy policy URL",
+                BrowserAppInfo.PRIVACY_POLICY_URL,
+            ))
             addView(section("License"))
             addView(row(BrowserAppInfo.LICENSE_NAME, BrowserAppInfo.LICENSE_SUMMARY))
             addView(section("User Agreement"))

@@ -109,9 +109,16 @@ class SettingsActivity : ComponentActivity() {
 
             addView(sectionHeading("About / legal / support"))
             addView(statusRow("Build", buildLabel()))
-            addView(actionButton("License and user agreement") {
+            addView(actionButton("Privacy, license, and user agreement") {
                 startActivity(Intent(this@SettingsActivity, LegalActivity::class.java))
             })
+            addView(linkRow(
+                label = "Privacy policy",
+                value = BrowserAppInfo.PRIVACY_POLICY_URL,
+                uri = BrowserAppInfo.PRIVACY_POLICY_URL,
+                copyLabel = "privacy policy URL",
+                copyText = BrowserAppInfo.PRIVACY_POLICY_URL,
+            ))
             addView(linkRow(
                 label = "Source code",
                 value = BrowserAppInfo.SOURCE_CODE_URL,
