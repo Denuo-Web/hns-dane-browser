@@ -838,6 +838,113 @@ class LoopbackProxyServerTest {
         dataDir.deleteRecursively()
     }
 
+    @Test
+    fun gatewayRateLimiterEnforcesActiveClientLimit() {
+        val limiter = LoopbackGatewayRateLimiter(
+            maxActiveClients = 1,
+            maxHnsRequestsPerWindow = 10,
+            maxHnsRequestsPerHostPerWindow = 10,
+        )
+
+        assertTrue(limiter.tryAcquireClient())
+        assertFalse(limiter.tryAcquireClient())
+        limiter.releaseClient()
+        assertTrue(limiter.tryAcquireClient())
+        limiter.releaseClient()
+    }
+
+    @Test
+    fun gatewayRateLimiterEnforcesAndPrunesHnsWindows() {
+        var now = 1_000L
+        val limiter = LoopbackGatewayRateLimiter(
+            maxActiveClients = 4,
+            maxHnsRequestsPerWindow = 1,
+            maxHnsRequestsPerHostPerWindow = 1,
+            windowMillis = 1_000L,
+            clockMillis = { now },
+        )
+
+        assertTrue(limiter.tryAdmitHnsRequest("Welcome."))
+        assertFalse(limiter.tryAdmitHnsRequest("welcome"))
+
+        now = 2_001L
+        assertTrue(limiter.tryAdmitHnsRequest("welcome"))
+    }
+
+    @Test
+    fun gatewayRateLimiterBoundsTrackedHostState() {
+        var now = 1_000L
+        val limiter = LoopbackGatewayRateLimiter(
+            maxActiveClients = 4,
+            maxHnsRequestsPerWindow = 10,
+            maxHnsRequestsPerHostPerWindow = 10,
+            maxTrackedHnsHosts = 1,
+            windowMillis = 1_000L,
+            clockMillis = { now },
+        )
+
+        assertTrue(limiter.tryAdmitHnsRequest("one"))
+        assertFalse(limiter.tryAdmitHnsRequest("two"))
+
+        now = 2_001L
+        assertTrue(limiter.tryAdmitHnsRequest("two"))
+    }
+
+    @Test
+    fun hnsGatewayRateLimitFailsClosedBeforeNativeGateway() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val limiter = LoopbackGatewayRateLimiter(
+            maxActiveClients = 4,
+            maxHnsRequestsPerWindow = 1,
+            maxHnsRequestsPerHostPerWindow = 1,
+            windowMillis = 60_000L,
+            clockMillis = { 1_000L },
+        )
+        val dataDir = createTempDirectory("hns-proxy-rate-limit-test").toFile()
+        LoopbackProxyServer(
+            0,
+            dataDir = dataDir,
+            hnsGatewayBridge = bridge,
+            rateLimiter = limiter,
+        ).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET http://welcome/first HTTP/1.1\r\nHost: welcome\r\n\r\n"
+                        .toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"))
+            }
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET http://welcome/second HTTP/1.1\r\nHost: welcome\r\n\r\n"
+                        .toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 429 Too Many Requests\r\n"))
+            }
+        }
+
+        assertEquals(1, bridge.calls.size)
+        val event = GatewayEventLog.snapshot().single()
+        assertEquals("proxy_reject", event.stage)
+        assertEquals("welcome", event.host)
+        assertEquals(429, event.status)
+        assertEquals("Too_Many_Requests", event.reason)
+        dataDir.deleteRecursively()
+    }
+
     private data class GatewayCall(
         val dataDir: String,
         val method: String,

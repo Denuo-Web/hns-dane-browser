@@ -57,6 +57,7 @@ import com.handshake.browser.net.HnsWebViewGatewayInterceptor
 import com.handshake.browser.net.HnsWebViewSslErrorPolicy
 import com.handshake.browser.net.LoopbackProxyServer
 import com.handshake.browser.net.NativeBridge
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
@@ -112,6 +113,8 @@ class MainActivity : ComponentActivity() {
     private var proxyOverrideApplied: Boolean = false
     private var proxyOverrideClearing: Boolean = false
     private var proxyStartPending: Boolean = false
+    private var proxyGatewayPort: Int? = null
+    private var proxyScopedHost: String? = null
     @Volatile
     private var activeMainFrameUrl: String? = null
     private var pageIsLoading: Boolean = false
@@ -230,8 +233,6 @@ class MainActivity : ComponentActivity() {
 
         setContentView(root)
 
-        startLoopbackGateway()
-
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) {
@@ -319,25 +320,66 @@ class MainActivity : ComponentActivity() {
         val gatewayStarted = gateway.start()
         val gatewayPort = gateway.boundPort()
         if (gatewayStarted && gatewayPort != null) {
-            proxyController.applyLoopbackProxy(gatewayPort) { applied ->
-                if (loopbackProxyServer !== gateway) {
-                    return@applyLoopbackProxy
-                }
-                proxyAvailable = applied
-                proxyOverrideApplied = applied
-                if (!applied) {
-                    loopbackProxyServer = null
-                    gateway.close()
-                }
-                refreshSecurityState()
-            }
+            proxyGatewayPort = gatewayPort
+            refreshLoopbackProxyScope()
         } else {
             if (loopbackProxyServer === gateway) {
                 loopbackProxyServer = null
             }
             proxyAvailable = false
+            proxyGatewayPort = null
+            proxyScopedHost = null
             gateway.close()
             refreshSecurityState()
+        }
+    }
+
+    private fun refreshLoopbackProxyScope() {
+        val gateway = loopbackProxyServer ?: return
+        val gatewayPort = proxyGatewayPort ?: gateway.boundPort() ?: return
+        val hnsHost = currentHnsProxyHost()
+        if (proxyOverrideClearing) {
+            proxyStartPending = true
+            return
+        }
+        if (hnsHost == null) {
+            clearLoopbackProxyOverride()
+            return
+        }
+        if (proxyOverrideApplied && proxyAvailable && proxyScopedHost == hnsHost) {
+            return
+        }
+
+        proxyController.applyLoopbackProxy(gatewayPort, hnsHost) { applied ->
+            if (loopbackProxyServer !== gateway || currentHnsProxyHost() != hnsHost) {
+                return@applyLoopbackProxy
+            }
+            proxyAvailable = applied
+            proxyOverrideApplied = applied
+            proxyScopedHost = if (applied) hnsHost else null
+            refreshSecurityState()
+        }
+    }
+
+    private fun clearLoopbackProxyOverride() {
+        proxyScopedHost = null
+        proxyAvailable = false
+        if (!proxyOverrideApplied || proxyOverrideClearing) {
+            refreshSecurityState()
+            return
+        }
+
+        proxyOverrideClearing = true
+        proxyController.clear {
+            proxyOverrideClearing = false
+            proxyOverrideApplied = false
+            val shouldApplyPendingScope = proxyStartPending && activityStarted && !activityDestroyed
+            proxyStartPending = false
+            if (shouldApplyPendingScope) {
+                refreshLoopbackProxyScope()
+            } else {
+                refreshSecurityState()
+            }
         }
     }
 
@@ -347,10 +389,14 @@ class MainActivity : ComponentActivity() {
         if (gateway != null) {
             loopbackProxyServer = null
             proxyAvailable = false
+            proxyGatewayPort = null
+            proxyScopedHost = null
             gateway.close()
             refreshSecurityState()
         } else {
             proxyAvailable = false
+            proxyGatewayPort = null
+            proxyScopedHost = null
         }
 
         if (!shouldClearProxy) {
@@ -368,6 +414,7 @@ class MainActivity : ComponentActivity() {
             proxyStartPending = false
             if (shouldRestart) {
                 startLoopbackGateway()
+                refreshLoopbackProxyScope()
             } else {
                 refreshSecurityState()
             }
@@ -598,6 +645,7 @@ class MainActivity : ComponentActivity() {
         activeMainFrameUrl = target.url
         pageIsLoading = true
         pageLoadProgress = 0
+        refreshLoopbackProxyScope()
         refreshSecurityState()
         refreshPageProgress()
         webView.loadUrl(target.url)
@@ -692,6 +740,7 @@ class MainActivity : ComponentActivity() {
             mainFrameHnsTlsPolicy = null
             mainFrameHnsResolverPolicy = null
             mainFrameHnsTraceJson = null
+            refreshLoopbackProxyScope()
             refreshSecurityState()
             refreshPageProgress()
         }
@@ -705,6 +754,7 @@ class MainActivity : ComponentActivity() {
             mainFrameHnsTlsPolicy = null
             mainFrameHnsResolverPolicy = null
             mainFrameHnsTraceJson = null
+            refreshLoopbackProxyScope()
             refreshSecurityState()
             return false
         }
@@ -898,6 +948,19 @@ class MainActivity : ComponentActivity() {
             ?: omnibox.text.toString()
                 .trim()
                 .takeIf { it.isNotBlank() && it != "about:blank" }
+
+    private fun currentHnsProxyHost(): String? {
+        val activeUrl = activeMainFrameUrl ?: return null
+        val target = classifier.classify(activeUrl)
+        if (target.kind != BrowserTargetKind.HnsName) {
+            return null
+        }
+        return target.displayHost
+            ?.trim()
+            ?.trimEnd('.')
+            ?.lowercase(Locale.US)
+            ?.takeIf { it.isNotBlank() }
+    }
 
     private fun isActiveMainFrameRequest(url: String): Boolean {
         val activeUrl = activeMainFrameUrl ?: return false

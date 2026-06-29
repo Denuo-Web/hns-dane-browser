@@ -19,6 +19,7 @@ import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
 class LoopbackProxyServer(
@@ -29,6 +30,7 @@ class LoopbackProxyServer(
     private val strictHnsMode: () -> Boolean = { false },
     private val onHnsStatus: (String, Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, String?) -> Unit = { _, _, _, _, _ -> },
     private val executor: ExecutorService = Executors.newCachedThreadPool(),
+    private val rateLimiter: LoopbackGatewayRateLimiter = LoopbackGatewayRateLimiter(),
 ) : Closeable {
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
@@ -51,7 +53,17 @@ class LoopbackProxyServer(
                         if (running.get()) error.printStackTrace()
                         null
                     } ?: continue
-                    executor.submit { handleClient(client) }
+                    if (!rateLimiter.tryAcquireClient()) {
+                        rejectClient(client, 429, "Too Many Requests")
+                        continue
+                    }
+                    executor.submit {
+                        try {
+                            handleClient(client)
+                        } finally {
+                            rateLimiter.releaseClient()
+                        }
+                    }
                 }
             }
             true
@@ -69,6 +81,15 @@ class LoopbackProxyServer(
     }
 
     fun boundPort(): Int? = serverSocket?.localPort
+
+    private fun rejectClient(client: Socket, status: Int, reason: String) {
+        client.use { clientSocket ->
+            runCatching {
+                clientSocket.soTimeout = SOCKET_TIMEOUT_MS
+                writePlainError(clientSocket.getOutputStream(), status, reason)
+            }
+        }
+    }
 
     private fun handleClient(client: Socket) {
         client.use { clientSocket ->
@@ -177,6 +198,9 @@ class LoopbackProxyServer(
                 throw ProxyHttpException(501, "HNS Protocol Upgrade Unsupported")
             }
             request.validateHostHeaderMatches(target)
+            if (!rateLimiter.tryAdmitHnsRequest(target.host)) {
+                throw ProxyHttpException(429, "Too Many Requests")
+            }
             val body = readHnsRequestBody(client.getInputStream(), request)
             val gatewayHeaders = request.headersForGateway(strictHnsMode())
             val fileResponse = hnsGatewayBridge.httpResponseBodyFile(
@@ -456,6 +480,85 @@ private class ProxyHttpException(
     val status: Int,
     val reason: String,
 ) : IOException(reason)
+
+class LoopbackGatewayRateLimiter(
+    private val maxActiveClients: Int = DEFAULT_MAX_ACTIVE_CLIENTS,
+    private val maxHnsRequestsPerWindow: Int = DEFAULT_MAX_HNS_REQUESTS_PER_WINDOW,
+    private val maxHnsRequestsPerHostPerWindow: Int = DEFAULT_MAX_HNS_REQUESTS_PER_HOST_PER_WINDOW,
+    private val maxTrackedHnsHosts: Int = DEFAULT_MAX_TRACKED_HNS_HOSTS,
+    private val windowMillis: Long = DEFAULT_WINDOW_MILLIS,
+    private val clockMillis: () -> Long = { System.currentTimeMillis() },
+) {
+    private val clientPermits = Semaphore(maxActiveClients)
+    private val lock = Any()
+    private val allHnsRequests = ArrayDeque<Long>()
+    private val hnsRequestsByHost = linkedMapOf<String, ArrayDeque<Long>>()
+
+    init {
+        require(maxActiveClients > 0) { "maxActiveClients must be positive" }
+        require(maxHnsRequestsPerWindow > 0) { "maxHnsRequestsPerWindow must be positive" }
+        require(maxHnsRequestsPerHostPerWindow > 0) { "maxHnsRequestsPerHostPerWindow must be positive" }
+        require(maxTrackedHnsHosts > 0) { "maxTrackedHnsHosts must be positive" }
+        require(windowMillis > 0) { "windowMillis must be positive" }
+    }
+
+    fun tryAcquireClient(): Boolean =
+        clientPermits.tryAcquire()
+
+    fun releaseClient() {
+        clientPermits.release()
+    }
+
+    fun tryAdmitHnsRequest(host: String): Boolean =
+        synchronized(lock) {
+            val now = clockMillis()
+            val normalizedHost = host.trim().trimEnd('.').lowercase(Locale.US)
+            prune(allHnsRequests, now)
+            pruneTrackedHosts(now)
+            if (!hnsRequestsByHost.containsKey(normalizedHost) && hnsRequestsByHost.size >= maxTrackedHnsHosts) {
+                return@synchronized false
+            }
+            val hostRequests = hnsRequestsByHost.getOrPut(normalizedHost) { ArrayDeque() }
+            prune(hostRequests, now)
+
+            if (allHnsRequests.size >= maxHnsRequestsPerWindow) {
+                return@synchronized false
+            }
+            if (hostRequests.size >= maxHnsRequestsPerHostPerWindow) {
+                return@synchronized false
+            }
+
+            allHnsRequests.addLast(now)
+            hostRequests.addLast(now)
+            true
+        }
+
+    private fun pruneTrackedHosts(now: Long) {
+        val hosts = hnsRequestsByHost.iterator()
+        while (hosts.hasNext()) {
+            val entry = hosts.next()
+            prune(entry.value, now)
+            if (entry.value.isEmpty()) {
+                hosts.remove()
+            }
+        }
+    }
+
+    private fun prune(requests: ArrayDeque<Long>, now: Long) {
+        val cutoff = now - windowMillis
+        while (requests.isNotEmpty() && requests.first() <= cutoff) {
+            requests.removeFirst()
+        }
+    }
+
+    companion object {
+        private const val DEFAULT_MAX_ACTIVE_CLIENTS = 64
+        private const val DEFAULT_MAX_HNS_REQUESTS_PER_WINDOW = 240
+        private const val DEFAULT_MAX_HNS_REQUESTS_PER_HOST_PER_WINDOW = 80
+        private const val DEFAULT_MAX_TRACKED_HNS_HOSTS = 256
+        private const val DEFAULT_WINDOW_MILLIS = 10_000L
+    }
+}
 
 private data class ParsedGatewayResponseHead(
     val status: Int,

@@ -34,7 +34,7 @@ Applied WebView controls:
 - Safe Browsing is explicitly enabled where supported by the platform WebView.
 - JavaScript pop-up windows and multiple WebView windows are disabled.
 - WebView debugging is tied to `BuildConfig.DEBUG`, so production release builds do not enable WebView remote debugging.
-- Cleartext network policy is denied except for the explicit loopback gateway allowance in Android Network Security Config; the gateway binds only to randomized `127.0.0.1` ports and is closed when the main browser activity leaves the foreground.
+- Cleartext network policy is denied except for the explicit loopback gateway allowance in Android Network Security Config; the gateway binds only to randomized `127.0.0.1` ports, is closed when the main browser activity leaves the foreground, is scoped to the active HNS host when WebView reverse-bypass support is available, and applies bounded active-client and HNS request admission limits.
 - App asset loads should use HTTPS-style app-asset origins or native interception instead of broad `file://` access.
 
 ## Review Checklist
@@ -103,10 +103,11 @@ Applied WebView controls:
 - No page resolved through the HNS DoH compatibility fallback should be labeled as plain local `DANE verified` or `HNS verified`; the toolbar must show an explicit `via DoH` compatibility state.
 - No unbounded or panic-prone X.509 parsing for DANE SPKI selector matching.
 - No QUIC downgrade without an explicit policy event.
-- No local gateway listener beyond loopback, no fixed browser proxy port in normal app startup, and no long-lived browser proxy listener while the main browser activity is stopped.
+- No local gateway listener beyond loopback, no fixed browser proxy port in normal app startup, no intentional ICANN browsing through the HNS proxy override, and no long-lived browser proxy listener while the main browser activity is stopped.
 - No origin fetch unless the gateway resolution name matches the requested origin host.
 - No intercepted HNS redirect should be followed unless the target remains inside HNS resolution policy and the redirect chain stays under the configured bound.
 - No main-frame HNS gateway 4xx/5xx response should leave the toolbar in verified state.
+- No local gateway request flood should create unbounded worker tasks, HNS resolution calls, or per-host limiter state; excess requests fail closed with `429 Too Many Requests`.
 - No gateway diagnostic event should persist URL paths, query strings, request headers, request bodies, or response bodies; the app-private event store remains bounded to recent sanitized failures.
 - No HNS origin connect attempt should use origin-host system DNS when secure resolution has not produced an explicit connect address.
 - No insecure resolver result when gateway secure-resolution mode is enabled.
@@ -119,4 +120,4 @@ Applied WebView controls:
 - No WebView `file://` or `content://` access should be enabled for normal browsing; app assets must use safe app-asset origins or native response interception.
 - No mixed-content downgrade should be allowed inside the WebView.
 - No production build should enable WebView debugging.
-- Browser proxy listener currently binds a randomized `127.0.0.1` port only while the main browser activity is foregrounded, routes HNS HTTP through the native persistent-cache gateway path, preserves normal ICANN HTTP Upgrade tunnels, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and fails HNS Upgrade requests closed.
+- Browser proxy listener currently binds a randomized `127.0.0.1` port only while the main browser activity is foregrounded, applies the WebView proxy override only for the active HNS host where supported, rejects excess concurrent clients and HNS request bursts, routes HNS HTTP through the native persistent-cache gateway path, preserves normal ICANN HTTP Upgrade tunnels, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and fails HNS Upgrade requests closed.
