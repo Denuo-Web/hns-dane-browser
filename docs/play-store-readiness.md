@@ -13,7 +13,7 @@ This checklist maps HNS Browser to current Google Play release requirements and 
 | 64-bit native code | Ready | Release bundle includes `arm64-v8a` and `x86_64` `libhns_browser_ffi.so`; no 32-bit ABI is shipped. |
 | Restricted permissions | Ready | Manifest does not request location, contacts, SMS, call logs, camera, microphone, all-files, package visibility, or account permissions. |
 | Foreground service | Play Console declaration required | App uses `dataSync` foreground service for visible HNS header/proof sync. Complete the Foreground service declaration and provide a short demo video. |
-| Privacy policy | Ready | Use `https://denuoweb.com/hns-browser/privacy`; it is hosted as static HTML and mirrored in-app. |
+| Privacy policy | Ready | Use `https://denuoweb.com/work/hns-browser/privacy`; it is hosted as static HTML and mirrored in-app. |
 | Data safety form | Draft below | No ads/analytics/accounts. Disclose local browsing data and network sharing needed for browser/HNS function. |
 | Ads declaration | Ready | Declare “No ads.” Donations do not unlock features. |
 | Account deletion | Not applicable | The app does not create developer-operated accounts. |
@@ -106,9 +106,9 @@ Use the Play Console definitions and answer conservatively. Suggested basis for 
 
 Use an active, publicly accessible, non-PDF URL. Current hosted URL:
 
-<https://denuoweb.com/hns-browser/privacy>
+<https://denuoweb.com/work/hns-browser/privacy>
 
-This route is deployed from `/home/den/Documents/denuowebsite/web/public/hns-browser/privacy/index.html` so it is readable without JavaScript. Keep the website policy, app copy, and repo copy synchronized when the app behavior changes.
+This route is deployed from `/home/den/Documents/denuowebsite/web/public/work/hns-browser/privacy/index.html` so it is readable without JavaScript. Keep the website policy, app copy, and repo copy synchronized when the app behavior changes.
 
 ## Store Listing Draft
 
