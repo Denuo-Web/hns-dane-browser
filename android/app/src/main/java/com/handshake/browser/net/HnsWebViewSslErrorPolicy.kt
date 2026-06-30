@@ -9,14 +9,21 @@ object HnsWebViewSslErrorPolicy {
     fun canProceed(error: SslError): Boolean {
         val url = error.url ?: return false
         val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        if (uri.scheme?.lowercase(Locale.US) != "https") {
-            return false
-        }
-        val host = uri.httpAuthorityHost() ?: return false
-        if (!HnsHostPolicy.requiresHnsResolution(host)) {
-            return false
-        }
+        val host = eligiblePinnedLocalCertificateHost(uri) ?: return false
         val certificate = error.certificate?.getX509Certificate() ?: return false
         return HnsLocalCertificateRegistry.hasPinnedCertificate(host, certificate)
+    }
+
+    internal fun isEligiblePinnedLocalCertificateUrl(url: String): Boolean {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return false
+        return eligiblePinnedLocalCertificateHost(uri) != null
+    }
+
+    private fun eligiblePinnedLocalCertificateHost(uri: URI): String? {
+        if (uri.scheme?.lowercase(Locale.US) !in setOf("https", "wss")) {
+            return null
+        }
+        val host = uri.httpAuthorityHost() ?: return null
+        return host.takeIf { HnsHostPolicy.requiresHnsResolution(it) }
     }
 }
