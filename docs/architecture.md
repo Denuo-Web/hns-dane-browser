@@ -33,6 +33,8 @@ Android UI / Browser Shell
 ## Android Modules
 
 - `MainActivity`: WebView browser shell with custom omnibox, left-side security status, shared HNS host policy, live-polled first-page sync progress bar and target stats, a separate WebView loading bar, hamburger-menu back/forward/refresh/settings actions, Service Worker HNS interception setup, security state, and navigation controls.
+- `HnsBrowserApplication`: process-level WebView startup initializer using AndroidX WebKit async startup so WebView work begins before the browser shell constructs its first `WebView`.
+- `BrowserWebViewHardening`: shared WebView settings profile for the browser shell, including local-file isolation, mixed-content blocking, Safe Browsing, WebAuthn browser support when the installed WebView supports it, speculative-loading disablement, and removal of legacy JavaScript bridge names.
 - `SettingsActivity`: settings dashboard linking to diagnostics, cookie options, legal/user-agreement content, native resolver-cache clearing, and donation links.
 - `CookieSettingsActivity`: cookie preferences with persisted third-party cookie blocking and delete-cookies action.
 - `LegalActivity`: license, user agreement, build label, publisher-in-license language, and source-code link.

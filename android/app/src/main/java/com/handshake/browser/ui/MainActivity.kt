@@ -3,6 +3,7 @@ package com.handshake.browser.ui
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -21,12 +22,13 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.webkit.URLUtil
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
-import android.webkit.ServiceWorkerController
 import android.webkit.SslErrorHandler
+import android.webkit.URLUtil
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.http.SslError
@@ -39,7 +41,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.ContextCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import androidx.webkit.WebViewRenderProcess
+import androidx.webkit.WebViewRenderProcessClient
 import com.handshake.browser.BuildConfig
 import com.handshake.browser.R
 import com.handshake.browser.core.BrowserSecurityPolicy
@@ -201,6 +208,7 @@ class MainActivity : ComponentActivity() {
                 handleDownload(url, userAgent, contentDisposition, mimeType)
             }
         }
+        configureRendererRecovery()
 
         BrowserCookiePreferences.applyTo(webView)
 
@@ -440,8 +448,56 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configureServiceWorkerInterception() {
-        ServiceWorkerController.getInstance()
-            .setServiceWorkerClient(HnsServiceWorkerGatewayClient(webViewGatewayInterceptor))
+        if (
+            !WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) ||
+            !WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
+        ) {
+            return
+        }
+
+        val serviceWorkerController = ServiceWorkerControllerCompat.getInstance()
+        val serviceWorkerSettings = serviceWorkerController.serviceWorkerWebSettings
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_CACHE_MODE)) {
+            serviceWorkerSettings.cacheMode = WebSettings.LOAD_NO_CACHE
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_CONTENT_ACCESS)) {
+            serviceWorkerSettings.allowContentAccess = false
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_FILE_ACCESS)) {
+            serviceWorkerSettings.allowFileAccess = false
+        }
+        serviceWorkerController.setServiceWorkerClient(
+            HnsServiceWorkerGatewayClient(webViewGatewayInterceptor),
+        )
+    }
+
+    private fun configureRendererRecovery() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
+            return
+        }
+
+        WebViewCompat.setWebViewRenderProcessClient(
+            webView,
+            ContextCompat.getMainExecutor(this),
+            object : WebViewRenderProcessClient() {
+                override fun onRenderProcessUnresponsive(
+                    view: WebView,
+                    renderer: WebViewRenderProcess?,
+                ) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        getString(R.string.toast_webview_renderer_unresponsive),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    renderer?.terminate()
+                }
+
+                override fun onRenderProcessResponsive(
+                    view: WebView,
+                    renderer: WebViewRenderProcess?,
+                ) = Unit
+            },
+        )
     }
 
     private fun unregisterSyncSnapshotReceiver() {
@@ -745,6 +801,14 @@ class MainActivity : ComponentActivity() {
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val requestUrl = request.url.toString()
+            val scheme = request.url.scheme?.lowercase(Locale.US)
+            if (!request.isForMainFrame) {
+                return scheme != null && scheme !in SUBFRAME_ALLOWED_SCHEMES
+            }
+            if (scheme !in WEB_NAVIGATION_SCHEMES) {
+                return handleExternalMainFrameNavigation(request.url)
+            }
+
             activeMainFrameUrl = requestUrl
             val target = classifier.classify(requestUrl)
             currentTargetKind = target.kind
@@ -791,6 +855,22 @@ class MainActivity : ComponentActivity() {
             recordHistoryEntry(url, view.title)
             refreshSecurityState()
             refreshPageProgress()
+        }
+
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            pageIsLoading = false
+            pageLoadProgress = 0
+            refreshSecurityState()
+            refreshPageProgress()
+            Toast.makeText(
+                this@MainActivity,
+                getString(R.string.toast_webview_renderer_restarted),
+                Toast.LENGTH_SHORT,
+            ).show()
+            stopLoopbackGateway()
+            view.destroy()
+            finish()
+            return true
         }
     }
 
@@ -866,6 +946,27 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_TEXT, url)
         }
         startActivity(Intent.createChooser(sendIntent, getString(R.string.menu_share_current_url)))
+    }
+
+    private fun handleExternalMainFrameNavigation(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        if (scheme == "about" && uri.toString() == "about:blank") {
+            activeMainFrameUrl = uri.toString()
+            currentTargetKind = BrowserTargetKind.ExactUrl
+            return false
+        }
+        if (scheme in EXTERNAL_VIEW_SCHEMES) {
+            val intent = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+            try {
+                startActivity(intent)
+            } catch (error: ActivityNotFoundException) {
+                Toast.makeText(this, getString(R.string.toast_no_app_for_link), Toast.LENGTH_SHORT).show()
+            }
+            return true
+        }
+
+        Toast.makeText(this, getString(R.string.toast_link_not_supported), Toast.LENGTH_SHORT).show()
+        return true
     }
 
     private fun recordHistoryEntry(url: String, title: String?) {
@@ -998,5 +1099,8 @@ class MainActivity : ComponentActivity() {
         private const val MENU_HNS_PROOF_DETAILS = 10
         private const val MENU_TLSA_INSPECTOR = 11
         private const val MENU_SETTINGS = 12
+        private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
+        private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
+        private val SUBFRAME_ALLOWED_SCHEMES = setOf("http", "https", "about", "data", "blob")
     }
 }

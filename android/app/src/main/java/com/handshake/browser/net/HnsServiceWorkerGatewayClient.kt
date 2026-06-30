@@ -1,12 +1,12 @@
 package com.handshake.browser.net
 
-import android.webkit.ServiceWorkerClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import androidx.webkit.ServiceWorkerClientCompat
 
 class HnsServiceWorkerGatewayClient(
     private val interceptor: HnsWebViewGatewayInterceptor,
-) : ServiceWorkerClient() {
+) : ServiceWorkerClientCompat() {
     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
         interceptor.intercept(request)
 }

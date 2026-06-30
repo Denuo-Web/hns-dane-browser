@@ -32,8 +32,13 @@ Applied WebView controls:
 - Local file access, file-origin cross-access, universal file-origin access, and content-provider access are disabled.
 - Mixed active/passive content is blocked with `WebSettings.MIXED_CONTENT_NEVER_ALLOW`.
 - Safe Browsing is explicitly enabled where supported by the platform WebView.
+- AndroidX WebKit feature checks gate optional WebView, Service Worker, proxy, renderer-process, WebAuthn, Safe Browsing, and speculative-loading APIs before use.
+- WebView asynchronous startup is initiated from `Application.onCreate` through AndroidX WebKit so startup work can run before the first browser `WebView` is constructed.
 - JavaScript pop-up windows and multiple WebView windows are disabled.
 - WebView debugging is tied to `BuildConfig.DEBUG`, so production release builds do not enable WebView remote debugging.
+- Main-frame navigation allows only HTTP(S) in WebView plus `about:blank`; recognized external schemes are opened through Android `ACTION_VIEW`, and unsupported schemes are blocked before they can mutate browser state.
+- Service Worker interception uses the same native HNS gateway policy as normal WebView request interception, with Service Worker file/content access disabled where supported.
+- Renderer hangs and renderer-process exits are handled explicitly so a bad page can be terminated or closed without crashing the whole browser process.
 - Cleartext network policy is denied except for the explicit loopback gateway allowance in Android Network Security Config; the gateway binds only to randomized `127.0.0.1` ports while an HNS page needs proxy support, refuses WebView proxy override when host-scoped reverse-bypass support is unavailable, rejects non-HNS proxy traffic, enforces the active HNS host/subdomain scope, closes when the main browser activity leaves the foreground, and applies bounded active-client and HNS request admission limits.
 - App asset loads should use HTTPS-style app-asset origins or native interception instead of broad `file://` access.
 
@@ -118,6 +123,7 @@ Applied WebView controls:
 - No HNS WebSocket or HTTP Upgrade request should be silently downgraded to a normal GET by stripping hop-by-hop Upgrade headers; these requests must enter the native stream tunnel after HNS resolution, HTTPS/SVCB policy, and DANE validation, and fail closed if the native tunnel path is unavailable or validation fails.
 - No WebView JavaScript/native bridge should be exposed to untrusted web content; browser UI/native operations must remain outside page script reachability.
 - No WebView `file://` or `content://` access should be enabled for normal browsing; app assets must use safe app-asset origins or native response interception.
+- No main-frame non-HTTP(S) URL should be passed through to WebView except `about:blank`; external schemes require explicit Android intent handling and unsupported schemes are blocked.
 - No mixed-content downgrade should be allowed inside the WebView.
 - No production build should enable WebView debugging.
 - Browser proxy listener currently binds a randomized `127.0.0.1` port only while an active HNS page needs proxy support and the main browser activity is foregrounded, applies the WebView proxy override only for the active HNS host/subdomains when reverse-bypass scoping is supported, rejects non-HNS proxy traffic, rejects excess concurrent clients and HNS request bursts, routes HNS HTTP through the native persistent-cache gateway path, defaults bare HNS omnibox entries to HTTPS native interception, directly intercepts bodyless HNS WebView and Service Worker HTTP/HTTPS requests into the native gateway with file-backed response bodies, terminates in-scope HNS CONNECT locally before routing the decrypted bounded HTTP/1.1 request through the same native gateway path, and routes HNS Upgrade requests through the native tunnel with fail-closed fallback when tunneling is unavailable.

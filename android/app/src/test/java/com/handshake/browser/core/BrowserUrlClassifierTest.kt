@@ -79,6 +79,22 @@ class BrowserUrlClassifierTest {
     }
 
     @Test
+    fun malformedHttpUrlsBecomeSearches() {
+        for (input in listOf("https://", "https:///path", "http://example.com:bad/")) {
+            val target = classifier.classify(input)
+
+            assertEquals(input, BrowserTargetKind.Search, target.kind)
+        }
+    }
+
+    @Test
+    fun userInfoHttpUrlsBecomeSearches() {
+        val target = classifier.classify("https://example.com@welcome/path")
+
+        assertEquals(BrowserTargetKind.Search, target.kind)
+    }
+
+    @Test
     fun explicitDottedHnsUrlUsesHnsModeWhenTldIsNotCommonIcann() {
         val target = classifier.classify("https://welcome.2d/path")
 

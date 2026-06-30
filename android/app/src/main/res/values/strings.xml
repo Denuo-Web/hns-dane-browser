@@ -28,6 +28,10 @@
     <string name="clip_current_url">Current URL</string>
     <string name="toast_no_current_url">No current URL</string>
     <string name="toast_current_url_copied">Current URL copied</string>
+    <string name="toast_link_not_supported">This link type is not supported</string>
+    <string name="toast_no_app_for_link">No app can open this link</string>
+    <string name="toast_webview_renderer_unresponsive">Page stopped responding</string>
+    <string name="toast_webview_renderer_restarted">WebView renderer was restarted</string>
     <string name="toast_download_queued">Download queued: %1$s</string>
     <string name="toast_download_not_supported">Download not supported: %1$s</string>
     <string name="sync_notification_channel">Handshake sync</string>

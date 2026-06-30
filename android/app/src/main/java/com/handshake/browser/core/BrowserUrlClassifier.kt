@@ -65,14 +65,15 @@ class BrowserUrlClassifier(
     }
 
     private fun exact(url: String): BrowserTarget {
-        val host = runCatching { URI(url).host }.getOrNull()
-            ?: url.substringAfter("://", "")
-                .substringBefore('/')
-                .substringBefore('?')
-                .substringBefore('#')
-                .substringBeforeLast(':')
-                .ifBlank { null }
-        val kind = if (host?.let(HnsHostPolicy::requiresHnsResolution) == true) {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return search(url)
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        if (scheme != "http" && scheme != "https") {
+            return search(url)
+        }
+        val host = uri.httpAuthorityHost()
+            ?.takeIf(::isValidHttpHost)
+            ?: return search(url)
+        val kind = if (HnsHostPolicy.requiresHnsResolution(host)) {
             BrowserTargetKind.HnsName
         } else {
             BrowserTargetKind.ExactUrl
@@ -98,4 +99,64 @@ class BrowserUrlClassifier(
                 label.all { it.isLetterOrDigit() || it == '-' }
         }
     }
+
+    private fun isValidHttpHost(host: String): Boolean {
+        if (host.contains(':')) {
+            return host.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it == ':' || it == '.' }
+        }
+
+        return isValidHost(host)
+    }
+
+    private fun URI.httpAuthorityHost(): String? {
+        val authority = rawAuthority ?: return null
+        if (authority.isBlank() || authority.contains('@')) {
+            return null
+        }
+        host?.let { return normalizeHost(it) }
+
+        val hostPart = if (authority.startsWith("[")) {
+            val endBracket = authority.indexOf(']')
+            if (endBracket <= 1) {
+                return null
+            }
+            val remainder = authority.substring(endBracket + 1)
+            if (remainder.isNotEmpty() && !isValidPortSuffix(remainder)) {
+                return null
+            }
+            authority.substring(1, endBracket)
+        } else {
+            val colonCount = authority.count { it == ':' }
+            if (colonCount > 1) {
+                return null
+            }
+            if (colonCount == 1) {
+                val separator = authority.indexOf(':')
+                val remainder = authority.substring(separator)
+                if (!isValidPortSuffix(remainder)) {
+                    return null
+                }
+                authority.substring(0, separator)
+            } else {
+                authority
+            }
+        }
+
+        return normalizeHost(hostPart)
+    }
+
+    private fun normalizeHost(host: String): String? {
+        if (host.isBlank() || host.any { it.isWhitespace() || it == '/' || it == '?' || it == '#' }) {
+            return null
+        }
+
+        return runCatching {
+            IDN.toASCII(host.removeSurrounding("[", "]")).lowercase(Locale.US)
+        }.getOrNull()
+    }
+
+    private fun isValidPortSuffix(value: String): Boolean =
+        value.length > 1 &&
+            value[0] == ':' &&
+            value.drop(1).toIntOrNull()?.let { it in 1..65535 } == true
 }
