@@ -38,8 +38,8 @@ export HNS_BROWSER_UPLOAD_KEY_PASSWORD='...'
 Then run:
 
 ```sh
-/home/den/APK_Workbench/scripts/dev/apkw-gradle.sh \
-  --project-dir /home/den/Backups/Documents/handshake/Browser/android \
+"$HOME/APK_Workbench/scripts/dev/apkw-gradle.sh" \
+  --project-dir "$HOME/path/to/handshake/Browser/android" \
   :app:verifyPlayReleaseBundle
 ```
 
@@ -108,7 +108,7 @@ Use an active, publicly accessible, non-PDF URL. Current hosted URL:
 
 <https://denuoweb.com/work/hns-browser/privacy>
 
-This route is deployed from `/home/den/Documents/denuowebsite/web/public/work/hns-browser/privacy/index.html` so it is readable without JavaScript. Keep the website policy, app copy, and repo copy synchronized when the app behavior changes.
+This route is deployed from the Denuo Web site checkout at `web/public/work/hns-browser/privacy/index.html` so it is readable without JavaScript. Keep the website policy, app copy, and repo copy synchronized when the app behavior changes.
 
 ## Store Listing Draft
 
