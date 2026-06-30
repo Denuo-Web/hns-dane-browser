@@ -443,10 +443,10 @@ struct FallbackMarker {
 impl FallbackMarker {
     fn mark(&self, reason: &'static str) {
         self.used.store(true, Ordering::Relaxed);
-        if let Ok(mut fallback_reason) = self.reason.lock() {
-            if fallback_reason.is_none() {
-                *fallback_reason = Some(reason);
-            }
+        if let Ok(mut fallback_reason) = self.reason.lock()
+            && fallback_reason.is_none()
+        {
+            *fallback_reason = Some(reason);
         }
     }
 
@@ -4322,6 +4322,7 @@ mod tests {
         let peer_store = SqlitePeerStore::open(base.join("peers.sqlite")).unwrap();
         let mut peers = PeerManager::default();
         peers.seed([proof_address]);
+        peers.record_observed_height(proof_address, remote_height, now_unix_seconds());
         peer_store.save_manager(&peers).unwrap();
 
         let origin_listener = TcpListener::bind("127.0.0.1:0").unwrap();

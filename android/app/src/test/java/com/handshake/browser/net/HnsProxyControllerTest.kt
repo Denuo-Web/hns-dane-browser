@@ -11,7 +11,6 @@ class HnsProxyControllerTest {
         val config = loopbackProxyConfig(
             port = 12345,
             hnsHost = "Nathan.Woodburn.",
-            reverseBypassSupported = true,
         )
 
         assertTrue(config.isReverseBypassEnabled)
@@ -20,15 +19,10 @@ class HnsProxyControllerTest {
     }
 
     @Test
-    fun loopbackProxyConfigFallsBackToPlainProxyWithoutReverseBypassSupport() {
-        val config = loopbackProxyConfig(
-            port = 12345,
-            hnsHost = "nathan.woodburn",
-            reverseBypassSupported = false,
-        )
-
-        assertFalse(config.isReverseBypassEnabled)
-        assertTrue(config.bypassRules.isEmpty())
-        assertEquals("http://127.0.0.1:12345", config.proxyRules.single().url)
+    fun loopbackProxyRequiresReverseBypassAndHostScope() {
+        assertTrue(canApplyLoopbackProxy("nathan.woodburn", reverseBypassSupported = true))
+        assertFalse(canApplyLoopbackProxy("nathan.woodburn", reverseBypassSupported = false))
+        assertFalse(canApplyLoopbackProxy(null, reverseBypassSupported = true))
+        assertFalse(canApplyLoopbackProxy("   ", reverseBypassSupported = true))
     }
 }

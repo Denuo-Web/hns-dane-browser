@@ -305,6 +305,8 @@ class MainActivity : ComponentActivity() {
             EPHEMERAL_GATEWAY_PORT,
             filesDir,
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+            enforceHnsHostScope = true,
+            scopedHnsHost = { currentHnsProxyHost() },
             onHnsStatus = { host, statusCode, tlsPolicy, resolverPolicy, traceJson ->
                 runOnUiThread {
                     if (isActiveMainFrameHost(host) && mainFrameHnsStatusCode == null) {
@@ -323,6 +325,10 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (loopbackProxyServer != null) {
+            return
+        }
+        if (currentHnsProxyHost() == null) {
+            proxyStartPending = false
             return
         }
 
@@ -346,17 +352,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshLoopbackProxyScope() {
-        val gateway = loopbackProxyServer ?: return
-        val gatewayPort = proxyGatewayPort ?: gateway.boundPort() ?: return
         val hnsHost = currentHnsProxyHost()
         if (proxyOverrideClearing) {
-            proxyStartPending = true
+            proxyStartPending = hnsHost != null
             return
         }
         if (hnsHost == null) {
-            clearLoopbackProxyOverride()
+            stopLoopbackGateway()
             return
         }
+
+        val gateway = loopbackProxyServer
+        if (gateway == null) {
+            startLoopbackGateway()
+            return
+        }
+        val gatewayPort = proxyGatewayPort ?: gateway.boundPort() ?: return
         if (proxyOverrideApplied && proxyAvailable && proxyScopedHost == hnsHost) {
             return
         }
@@ -368,28 +379,10 @@ class MainActivity : ComponentActivity() {
             proxyAvailable = applied
             proxyOverrideApplied = applied
             proxyScopedHost = if (applied) hnsHost else null
-            refreshSecurityState()
-        }
-    }
-
-    private fun clearLoopbackProxyOverride() {
-        proxyScopedHost = null
-        proxyAvailable = false
-        if (!proxyOverrideApplied || proxyOverrideClearing) {
-            refreshSecurityState()
-            return
-        }
-
-        proxyOverrideClearing = true
-        proxyController.clear {
-            proxyOverrideClearing = false
-            proxyOverrideApplied = false
-            val shouldApplyPendingScope = proxyStartPending && activityStarted && !activityDestroyed
-            proxyStartPending = false
-            if (shouldApplyPendingScope) {
-                refreshLoopbackProxyScope()
-            } else {
+            if (applied) {
                 refreshSecurityState()
+            } else {
+                stopLoopbackGateway()
             }
         }
     }

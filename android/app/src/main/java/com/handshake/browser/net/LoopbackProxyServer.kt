@@ -28,6 +28,8 @@ class LoopbackProxyServer(
     private val hnsGatewayBridge: HnsGatewayBridge = NativeBridge,
     private val hnsConnectTerminator: HnsConnectTerminator = LocalTlsHnsConnectTerminator(),
     private val strictHnsMode: () -> Boolean = { false },
+    private val enforceHnsHostScope: Boolean = false,
+    private val scopedHnsHost: () -> String? = { null },
     private val onHnsStatus: (String, Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, String?) -> Unit = { _, _, _, _, _ -> },
     private val executor: ExecutorService = Executors.newCachedThreadPool(),
     private val rateLimiter: LoopbackGatewayRateLimiter = LoopbackGatewayRateLimiter(),
@@ -50,7 +52,7 @@ class LoopbackProxyServer(
             acceptLoop = executor.submit {
                 while (running.get()) {
                     val client = runCatching { socket.accept() }.getOrElse { error ->
-                        if (running.get()) error.printStackTrace()
+                        if (running.get()) GatewayEventLog.record("proxy_accept", LOOPBACK, 502, error.javaClass.simpleName)
                         null
                     } ?: continue
                     if (!rateLimiter.tryAcquireClient()) {
@@ -116,16 +118,11 @@ class LoopbackProxyServer(
     private fun handleConnect(client: Socket, request: ProxyRequest) {
         val target = ConnectTarget.parse(request.line.target)
         if (requiresHnsResolution(target.host)) {
+            requireHnsHostInScope(target.host)
             handleHnsConnect(client, target)
             return
         }
-        requireNonHnsHost(target.host)
-        Socket().use { origin ->
-            origin.connect(InetSocketAddress(target.host, target.port), CONNECT_TIMEOUT_MS)
-            client.getOutputStream().write(CONNECT_OK)
-            client.getOutputStream().flush()
-            tunnel(client, origin)
-        }
+        throw ProxyHttpException(403, "Proxy Scope Denied")
     }
 
     private fun handleHnsConnect(client: Socket, target: ConnectTarget) {
@@ -147,6 +144,7 @@ class LoopbackProxyServer(
                 if (!requiresHnsResolution(httpTarget.host)) {
                     throw ProxyHttpException(400, "HNS Request Mismatch")
                 }
+                requireHnsHostInScope(httpTarget.host)
                 handleHnsGatewayHttp(tlsClient, tunneledRequest, httpTarget)
             }.onFailure { error ->
                 if (error is ProxyHttpException) {
@@ -161,35 +159,11 @@ class LoopbackProxyServer(
     private fun handleHttp(client: Socket, request: ProxyRequest) {
         val target = request.line.toHttpTarget()
         if (requiresHnsResolution(target.host)) {
+            requireHnsHostInScope(target.host)
             handleHnsGatewayHttp(client, request, target)
             return
         }
-        request.rejectTransferEncoding()
-        val contentLength = request.validatedContentLength()
-        if (request.isProtocolUpgrade()) {
-            if (contentLength != 0L) {
-                throw ProxyHttpException(400, "Protocol Upgrade Request Invalid")
-            }
-            handleHttpUpgrade(client, request, target)
-            return
-        }
-
-        Socket().use { origin ->
-            origin.connect(InetSocketAddress(target.host, target.port), CONNECT_TIMEOUT_MS)
-            origin.getOutputStream().write(request.toOriginBytes(target))
-            copyFixedTo(client.getInputStream(), origin.getOutputStream(), contentLength)
-            origin.getOutputStream().flush()
-            copy(origin.getInputStream(), client.getOutputStream())
-        }
-    }
-
-    private fun handleHttpUpgrade(client: Socket, request: ProxyRequest, target: HttpTarget) {
-        Socket().use { origin ->
-            origin.connect(InetSocketAddress(target.host, target.port), CONNECT_TIMEOUT_MS)
-            origin.getOutputStream().write(request.toOriginUpgradeBytes(target))
-            origin.getOutputStream().flush()
-            tunnel(client, origin)
-        }
+        throw ProxyHttpException(403, "Proxy Scope Denied")
     }
 
     private fun handleHnsGatewayHttp(client: Socket, request: ProxyRequest, target: HttpTarget) {
@@ -322,19 +296,6 @@ class LoopbackProxyServer(
         return readFixed(input, contentLength)
     }
 
-    private fun tunnel(client: Socket, origin: Socket) {
-        val upstream = executor.submit {
-            copy(client.getInputStream(), origin.getOutputStream())
-            runCatching { origin.shutdownOutput() }
-        }
-        val downstream = executor.submit {
-            copy(origin.getInputStream(), client.getOutputStream())
-            runCatching { client.shutdownOutput() }
-        }
-        runCatching { upstream.get() }
-        runCatching { downstream.get() }
-    }
-
     private fun readProxyRequest(input: InputStream): ProxyRequest {
         val bytes = ByteArray(MAX_HEADER_BYTES)
         var count = 0
@@ -454,9 +415,17 @@ class LoopbackProxyServer(
         output.flush()
     }
 
-    private fun requireNonHnsHost(host: String) {
-        if (requiresHnsResolution(host)) {
-            throw ProxyHttpException(501, "HNS HTTPS Unsupported")
+    private fun requireHnsHostInScope(host: String) {
+        if (!enforceHnsHostScope) {
+            return
+        }
+        val scope = scopedHnsHost()
+            ?.normalizeHost()
+            ?.takeIf { it.isNotBlank() }
+            ?: throw ProxyHttpException(403, "HNS Proxy Scope Denied")
+        val requested = host.normalizeHost()
+        if (requested != scope && !requested.endsWith(".$scope")) {
+            throw ProxyHttpException(403, "HNS Proxy Scope Denied")
         }
     }
 
@@ -469,7 +438,6 @@ class LoopbackProxyServer(
         private const val MAX_CHUNK_TRAILER_BYTES = 64 * 1024
         private const val COPY_BUFFER_BYTES = 16 * 1024
         private const val SOCKET_TIMEOUT_MS = 30_000
-        private const val CONNECT_TIMEOUT_MS = 10_000
         private val HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
         private val CONNECT_OK = "HTTP/1.1 200 Connection Established\r\nProxy-Agent: HNS Browser\r\n\r\n"
             .toByteArray(StandardCharsets.ISO_8859_1)
@@ -894,7 +862,10 @@ internal fun requiresHnsResolution(host: String): Boolean {
 }
 
 private fun sameHost(left: String, right: String): Boolean =
-    left.trim().trimEnd('.').lowercase(Locale.US) == right.trim().trimEnd('.').lowercase(Locale.US)
+    left.normalizeHost() == right.normalizeHost()
 
 private fun String.hasHeaderToken(expected: String): Boolean =
     split(',').any { token -> token.trim().equals(expected, ignoreCase = true) }
+
+private fun String.normalizeHost(): String =
+    trim().trimEnd('.').lowercase(Locale.US)

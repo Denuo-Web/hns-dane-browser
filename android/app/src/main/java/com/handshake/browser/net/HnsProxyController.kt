@@ -16,11 +16,13 @@ class HnsProxyController(
             return
         }
 
-        val proxyConfig = loopbackProxyConfig(
-            port = port,
-            hnsHost = hnsHost,
-            reverseBypassSupported = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS),
-        )
+        val reverseBypassSupported = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE_REVERSE_BYPASS)
+        if (!canApplyLoopbackProxy(hnsHost, reverseBypassSupported)) {
+            onComplete(false)
+            return
+        }
+
+        val proxyConfig = loopbackProxyConfig(port, requireNotNull(hnsHost))
 
         ProxyController.getInstance().setProxyOverride(
             proxyConfig,
@@ -46,24 +48,32 @@ class HnsProxyController(
 
 internal fun loopbackProxyConfig(
     port: Int,
-    hnsHost: String?,
-    reverseBypassSupported: Boolean,
+    hnsHost: String,
 ): ProxyConfig {
     val builder = ProxyConfig.Builder()
         .addProxyRule("http://127.0.0.1:$port")
 
     val normalizedHost = hnsHost
-        ?.trim()
-        ?.trimEnd('.')
-        ?.lowercase(Locale.US)
-        ?.takeIf { it.isNotBlank() }
+        .trim()
+        .trimEnd('.')
+        .lowercase(Locale.US)
+    require(normalizedHost.isNotBlank()) { "hnsHost must not be blank" }
 
-    if (normalizedHost != null && reverseBypassSupported) {
-        builder
-            .addBypassRule(normalizedHost)
-            .addBypassRule("*.$normalizedHost")
-            .setReverseBypassEnabled(true)
-    }
+    builder
+        .addBypassRule(normalizedHost)
+        .addBypassRule("*.$normalizedHost")
+        .setReverseBypassEnabled(true)
 
     return builder.build()
+}
+
+internal fun canApplyLoopbackProxy(
+    hnsHost: String?,
+    reverseBypassSupported: Boolean,
+): Boolean {
+    val normalizedHost = hnsHost
+        .orEmpty()
+        .trim()
+        .trimEnd('.')
+    return reverseBypassSupported && normalizedHost.isNotBlank()
 }

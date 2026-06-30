@@ -374,6 +374,72 @@ class LoopbackProxyServerTest {
     }
 
     @Test
+    fun scopedHnsGatewayRejectsRequestsOutsideActiveHostScope() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-proxy-scope-reject-test").toFile()
+        LoopbackProxyServer(
+            0,
+            dataDir = dataDir,
+            hnsGatewayBridge = bridge,
+            enforceHnsHostScope = true,
+            scopedHnsHost = { "welcome" },
+        ).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET http://othername/path HTTP/1.1\r\nHost: othername\r\n\r\n"
+                        .toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 403 HNS Proxy Scope Denied\r\n"))
+            }
+        }
+
+        assertTrue(bridge.calls.isEmpty())
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun scopedHnsGatewayAllowsActiveHostSubdomains() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-proxy-scope-subdomain-test").toFile()
+        LoopbackProxyServer(
+            0,
+            dataDir = dataDir,
+            hnsGatewayBridge = bridge,
+            enforceHnsHostScope = true,
+            scopedHnsHost = { "welcome." },
+        ).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET http://assets.welcome/file.bin HTTP/1.1\r\nHost: assets.welcome\r\n\r\n"
+                        .toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"))
+            }
+        }
+
+        assertEquals("assets.welcome", bridge.calls.single().host)
+        dataDir.deleteRecursively()
+    }
+
+    @Test
     fun hnsChunkedPostRequestDecodesBodyBeforeNativeGateway() {
         val bridge = RecordingGatewayBridge(
             "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
@@ -735,21 +801,8 @@ class LoopbackProxyServerTest {
     }
 
     @Test
-    fun icannPlainWebSocketUpgradePreservesUpgradeHeaders() {
-        val received = ArrayBlockingQueue<String>(1)
+    fun nonHnsProxyRequestsFailClosedWithoutOriginConnection() {
         ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { origin ->
-            val originThread = Thread {
-                origin.accept().use { socket ->
-                    val request = readHeaderText(socket)
-                    received.offer(request)
-                    socket.getOutputStream().write(
-                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
-                            .toByteArray(StandardCharsets.ISO_8859_1),
-                    )
-                    socket.getOutputStream().flush()
-                }
-            }.apply { start() }
-
             LoopbackProxyServer(0, hnsGatewayBridge = RecordingGatewayBridge(ByteArray(0))).use { proxy ->
                 assertTrue(proxy.start())
                 val proxyPort = requireNotNull(proxy.boundPort())
@@ -760,28 +813,19 @@ class LoopbackProxyServerTest {
                             "GET http://127.0.0.1:${origin.localPort}/socket HTTP/1.1\r\n" +
                                 "Host: wrong.example\r\n" +
                                 "Upgrade: websocket\r\n" +
-                                "Connection: keep-alive, Upgrade\r\n" +
-                                "Proxy-Connection: keep-alive\r\n" +
-                                "Sec-WebSocket-Key: test\r\n" +
-                                "Sec-WebSocket-Version: 13\r\n\r\n"
+                                "Connection: keep-alive, Upgrade\r\n\r\n"
                             ).toByteArray(StandardCharsets.ISO_8859_1),
                     )
                     socket.getOutputStream().flush()
 
                     val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
-                    assertTrue(response.startsWith("HTTP/1.1 101 Switching Protocols\r\n"))
+                    assertTrue(response.startsWith("HTTP/1.1 403 Proxy Scope Denied\r\n"))
                 }
-            }
-            originThread.join(1_000)
-        }
 
-        val request = received.poll(1, TimeUnit.SECONDS).orEmpty()
-        assertTrue(request.startsWith("GET /socket HTTP/1.1\r\n"))
-        assertTrue(request.contains("Host: 127.0.0.1:"))
-        assertTrue(request.contains("Upgrade: websocket\r\n"))
-        assertTrue(request.contains("Connection: keep-alive, Upgrade\r\n"))
-        assertFalse(request.contains("Proxy-Connection"))
-        assertFalse(request.contains("Host: wrong.example"))
+                origin.soTimeout = 100
+                assertTrue(runCatching { origin.accept() }.isFailure)
+            }
+        }
     }
 
     @Test
@@ -1051,18 +1095,4 @@ class LoopbackProxyServerTest {
         override fun secure(client: Socket, target: ConnectTarget): Socket = client
     }
 
-    private fun readHeaderText(socket: Socket): String {
-        val output = StringBuilder()
-        val input = socket.getInputStream()
-        var matched = 0
-        while (matched < HEADER_END.size) {
-            val next = input.read()
-            if (next < 0) break
-            output.append(next.toChar())
-            matched = if (next.toByte() == HEADER_END[matched]) matched + 1 else 0
-        }
-        return output.toString()
-    }
-
-    private val HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
 }
