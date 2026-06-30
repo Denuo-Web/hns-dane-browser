@@ -61,7 +61,7 @@ class SettingsActivity : ComponentActivity() {
 
             addView(sectionHeading("HNS resolution"))
             addView(strictHnsModeOption())
-            addView(bodyText("Strict mode never uses the third-party HNS DoH compatibility fallback. Compatibility mode may use it when a current local HNS proof is unavailable or direct delegated resolution fails."))
+            addView(bodyText("Strict mode never uses the third-party HNS DoH compatibility fallback. Compatibility mode may use it only after local HNS proof verification identifies the HNS name path and direct delegated resolution fails."))
             addView(hnsModeStatus)
             addView(actionButton("View diagnostics") {
                 startActivity(Intent(this@SettingsActivity, DiagnosticsActivity::class.java))

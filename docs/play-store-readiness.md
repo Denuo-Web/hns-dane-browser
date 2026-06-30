@@ -19,7 +19,7 @@ This checklist maps HNS Browser to current Google Play release requirements and 
 | Account deletion | Not applicable | The app does not create developer-operated accounts. |
 | App category | Recommended: Tools or Communication | Avoid Finance classification; the app is not a wallet, exchange, lender, or financial service. |
 | Target audience | Recommended: 13+ or 18+ | General-purpose browser can access arbitrary third-party web content; not designed for children. |
-| Testing track | Console action | New personal Play accounts may need a closed test with at least 12 opted-in testers for 14 continuous days before production access. |
+| Testing track | Console/API action | New personal Play accounts may need a closed test with at least 12 opted-in testers for 14 continuous days before production access. Use the closed testing track, not internal testing, when satisfying this requirement. |
 | Store assets | Partially ready | Play icon and feature graphic are in `dist/play-store/`; screenshots and content rating questionnaire still need Console work. |
 
 ## Release Signing
@@ -56,6 +56,16 @@ Do not create a Google Cloud project solely for this repo until the Play Console
 3. Create a service account.
 4. Link that service account in Play Console and grant the minimum release-management role needed.
 5. Store the service-account JSON outside the repo; `service-account*.json` is ignored by `.gitignore`.
+
+Closed testing upload helper:
+
+```sh
+PLAY_TRACK=alpha \
+  scripts/play-upload-closed-testing.sh \
+  dist/play-store/hns-browser-v0.2.1-play-upload-signed.aab
+```
+
+`alpha` is the default Play API track used for the standard closed testing track. If the Play Console app uses a custom closed testing track, set `PLAY_TRACK` to that track ID from Play Console. On 2026-06-29, the local `gcloud` user token could not upload because it lacked the `https://www.googleapis.com/auth/androidpublisher` OAuth scope. Fix that by using a Play-linked service account, setting `PLAY_ACCESS_TOKEN` from a correctly scoped token, or re-authenticating gcloud with the Android Publisher scope.
 
 ## Play Console Declarations
 

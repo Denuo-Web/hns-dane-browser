@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -148,6 +149,8 @@ class MainActivity : ComponentActivity() {
         omnibox = EditText(this).apply {
             hint = getString(R.string.omnibox_hint)
             setSingleLine(true)
+            textSize = 16f
+            minHeight = dp(48)
             imeOptions = EditorInfo.IME_ACTION_GO
             setSelectAllOnFocus(true)
             setOnEditorActionListener { _, actionId, _ ->
@@ -162,6 +165,11 @@ class MainActivity : ComponentActivity() {
 
         securityLabel = TextView(this).apply {
             gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            textSize = 13f
+            minWidth = dp(88)
+            maxWidth = dp(132)
             setPadding(18, 0, 18, 0)
             setTextColor(Color.rgb(28, 71, 75))
             text = getString(R.string.security_syncing)
@@ -174,6 +182,9 @@ class MainActivity : ComponentActivity() {
         syncProgressStats = TextView(this).apply {
             setPadding(16, 0, 16, 8)
             setTextColor(Color.rgb(68, 68, 68))
+            textSize = 12f
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
             text = HnsSyncProgress.fromJson(null).summary()
         }
         pageProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -534,21 +545,19 @@ class MainActivity : ComponentActivity() {
                 setIcon(android.R.drawable.ic_menu_share)
                 isEnabled = currentUrl != null
             }
-            menu.add(0, MENU_DIAGNOSTICS, 8, getString(R.string.menu_diagnostics))
-                .setIcon(android.R.drawable.ic_menu_info_details)
-            menu.add(0, MENU_RESOLVER_TRACE, 9, getString(R.string.menu_resolver_trace)).apply {
+            menu.add(0, MENU_RESOLVER_TRACE, 8, getString(R.string.menu_resolver_trace)).apply {
                 setIcon(android.R.drawable.ic_menu_info_details)
                 isEnabled = hasHnsDiagnosticContext
             }
-            menu.add(0, MENU_HNS_PROOF_DETAILS, 10, getString(R.string.menu_hns_proof_details)).apply {
+            menu.add(0, MENU_HNS_PROOF_DETAILS, 9, getString(R.string.menu_hns_proof_details)).apply {
                 setIcon(android.R.drawable.ic_menu_search)
                 isEnabled = hasHnsDiagnosticContext
             }
-            menu.add(0, MENU_TLSA_INSPECTOR, 11, getString(R.string.menu_tlsa_inspector)).apply {
+            menu.add(0, MENU_TLSA_INSPECTOR, 10, getString(R.string.menu_tlsa_inspector)).apply {
                 setIcon(android.R.drawable.ic_menu_view)
                 isEnabled = hasHnsDiagnosticContext
             }
-            menu.add(0, MENU_SETTINGS, 12, getString(R.string.menu_settings))
+            menu.add(0, MENU_SETTINGS, 11, getString(R.string.menu_settings))
                 .setIcon(android.R.drawable.ic_menu_manage)
             setOnMenuItemClickListener { item ->
                 when (item.itemId) {
@@ -586,10 +595,6 @@ class MainActivity : ComponentActivity() {
                     }
                     MENU_SHARE_URL -> {
                         shareCurrentUrl()
-                        true
-                    }
-                    MENU_DIAGNOSTICS -> {
-                        startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
                         true
                     }
                     MENU_RESOLVER_TRACE -> {
@@ -725,7 +730,7 @@ class MainActivity : ComponentActivity() {
             SecurityState.WebPkiOnly -> getString(R.string.security_webpki)
             SecurityState.MixedPolicy -> getString(R.string.security_hns_webpki)
             SecurityState.ValidationFailed -> getString(R.string.security_failed)
-            SecurityState.ProofUnavailable -> "Proof unavailable"
+            SecurityState.ProofUnavailable -> getString(R.string.security_proof_unavailable)
         }
     }
 
@@ -996,10 +1001,9 @@ class MainActivity : ComponentActivity() {
         private const val MENU_DOWNLOADS = 6
         private const val MENU_COPY_URL = 7
         private const val MENU_SHARE_URL = 8
-        private const val MENU_DIAGNOSTICS = 9
-        private const val MENU_RESOLVER_TRACE = 10
-        private const val MENU_HNS_PROOF_DETAILS = 11
-        private const val MENU_TLSA_INSPECTOR = 12
-        private const val MENU_SETTINGS = 13
+        private const val MENU_RESOLVER_TRACE = 9
+        private const val MENU_HNS_PROOF_DETAILS = 10
+        private const val MENU_TLSA_INSPECTOR = 11
+        private const val MENU_SETTINGS = 12
     }
 }
