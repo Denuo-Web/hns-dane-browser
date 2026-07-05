@@ -37,14 +37,14 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
                     summary = "Copy the raw TLSA/DANE trace payload.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS TLSA inspector JSON", rawJson())
+                    copy("TLSA inspector JSON", rawJson())
                 })
                 addScreenRow(preferenceRow(
                     title = "Copy Markdown",
                     summary = "Copy a compact Markdown report.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS TLSA inspector Markdown", markdownReport())
+                    copy("TLSA inspector Markdown", markdownReport())
                 })
             })
             addView(screenSection("Raw export") {
@@ -67,6 +67,7 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
             appendLine("TLSA owner: ${tls.optString("tlsaOwner", "unknown")}")
             appendLine("TLSA status: ${HnsTlsaTraceFormat.tlsaStatus(tls)}")
             appendLine("TLSA found: ${HnsTlsaTraceFormat.tlsaFound(tls)}")
+            appendLine("TLSA source: ${HnsTlsaTraceFormat.tlsaSource(tls)}")
             appendLine("DNSSEC secure: ${HnsTlsaTraceFormat.dnssecSecure(tls)}")
             appendLine("DANE decision: ${HnsTlsaTraceFormat.daneDecision(tls)}")
             appendLine("Matched usage: ${dane?.optString("matchedUsage", "none") ?: "none"}")
@@ -99,7 +100,7 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
         }
 
     private fun markdownReport(): String =
-        "# HNS TLSA / DANE Report\n\n```\n${rawJson()}\n```\n"
+        "# TLSA / DANE Report\n\n```\n${rawJson()}\n```\n"
 
     private fun rawJson(): String =
         traceJson.ifBlank { """{"error":"no_hns_tlsa_trace_available"}""" }

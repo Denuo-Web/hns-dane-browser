@@ -733,7 +733,7 @@ class MainActivity : ComponentActivity() {
     private fun refreshSecurityState() {
         if (
             pageIsLoading &&
-            currentTargetKind == BrowserTargetKind.HnsName &&
+            currentTargetKind in NATIVE_GATEWAY_TARGET_KINDS &&
             mainFrameHnsStatusCode == null
         ) {
             securityLabel.text = getString(R.string.security_loading)
@@ -1055,7 +1055,7 @@ class MainActivity : ComponentActivity() {
         if (uri.host.equals("appassets.androidplatform.net", ignoreCase = true)) {
             return getString(R.string.toast_download_not_supported, "local app assets cannot be downloaded")
         }
-        if (classifier.classify(url).kind == BrowserTargetKind.HnsName) {
+        if (classifier.classify(url).kind in NATIVE_GATEWAY_TARGET_KINDS) {
             return getString(R.string.toast_download_not_supported, "HNS-resolved downloads are not supported yet")
         }
         return null
@@ -1120,6 +1120,10 @@ class MainActivity : ComponentActivity() {
         private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
         private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
         private val SUBFRAME_ALLOWED_SCHEMES = setOf("http", "https", "about", "data", "blob")
+        private val NATIVE_GATEWAY_TARGET_KINDS = setOf(
+            BrowserTargetKind.HnsName,
+            BrowserTargetKind.NativeGateway,
+        )
     }
 }
 

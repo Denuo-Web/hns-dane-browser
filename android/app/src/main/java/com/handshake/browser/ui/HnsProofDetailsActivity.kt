@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.handshake.browser.core.HnsHostPolicy
 import com.handshake.browser.net.NativeBridge
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,14 +22,18 @@ class HnsProofDetailsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         val host = proofHost()
+        val trace = parsedTrace()
+        val isIcann = HnsResolutionTraceFormat.isIcann(trace) || HnsHostPolicy.isIcannDaneTestHost(host)
         val detailsJson = if (host.isBlank()) {
             """{"host":"","name":null,"nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"invalid_input","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"no HNS host is available for this page"}"""
+        } else if (isIcann) {
+            icannDetailsJson(host, trace)
         } else {
             NativeBridge.hnsProofDetails(filesDir.absolutePath, host)
         }
 
         setSecondaryScreen(
-            title = "HNS Proof Details",
+            title = if (isIcann) "DNSSEC Details" else "HNS Proof Details",
             onSwipeLeft = {
                 openAdjacentHnsDiagnostic(HnsDiagnosticTool.ProofDetails, forward = true, url, traceJson)
             },
@@ -43,17 +48,17 @@ class HnsProofDetailsActivity : ComponentActivity() {
             addView(screenSection("Export") {
                 addScreenRow(preferenceRow(
                     title = "Copy JSON",
-                    summary = "Copy the raw proof details payload.",
+                    summary = "Copy the raw validation details payload.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS proof details JSON", detailsJson)
+                    copy(if (isIcann) "DNSSEC details JSON" else "HNS proof details JSON", detailsJson)
                 })
                 addScreenRow(preferenceRow(
                     title = "Copy Markdown",
                     summary = "Copy a compact Markdown report.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS proof details Markdown", markdownReport(detailsJson))
+                    copy(if (isIcann) "DNSSEC details Markdown" else "HNS proof details Markdown", markdownReport(detailsJson))
                 })
             })
             addView(screenSection("Raw export") {
@@ -86,7 +91,10 @@ class HnsProofDetailsActivity : ComponentActivity() {
 
     private fun friendlySummary(detailsJson: String): String {
         val details = parsedDetails(detailsJson)
-            ?: return "No HNS proof details are available for this page yet."
+            ?: return "No validation details are available for this page yet."
+        if (details.optString("nameClass") == "icann") {
+            return icannFriendlySummary(details)
+        }
         val currentTip = details.optJSONObject("currentTip")
         val resourceValueHex = details.optString("resourceValueHex")
         return buildString {
@@ -106,6 +114,29 @@ class HnsProofDetailsActivity : ComponentActivity() {
         }
     }
 
+    private fun icannDetailsJson(host: String, trace: JSONObject?): String =
+        JSONObject()
+            .put("host", host)
+            .put("nameClass", "icann")
+            .put("hnsProof", "not_applicable")
+            .put("proofStatus", "not_applicable")
+            .put("dnssec", trace?.optString("dnssec", "unknown") ?: "unknown")
+            .put("resolutionSource", trace?.optString("resolutionSource", "unknown") ?: "unknown")
+            .put("resourceRecords", trace?.optJSONArray("resourceRecords") ?: JSONArray())
+            .put("error", JSONObject.NULL)
+            .toString()
+
+    private fun icannFriendlySummary(details: JSONObject): String =
+        buildString {
+            appendLine("Host: ${details.optString("host", "unknown")}")
+            appendLine("Namespace: ICANN DNS")
+            appendLine("HNS proof: not applicable")
+            appendLine("DNSSEC: ${details.optString("dnssec", "unknown")}")
+            appendLine("Resolution source: ${HnsResolutionTraceFormat.resolutionSource(details)}")
+            appendLine("Record types: ${arrayText(details.optJSONArray("resourceRecords"))}")
+            appendLine("Error: ${details.optString("error", "none").takeIf { it != "null" } ?: "none"}")
+        }
+
     private fun currentTipText(currentTip: JSONObject?): String =
         if (currentTip == null) {
             "unknown"
@@ -122,13 +153,19 @@ class HnsProofDetailsActivity : ComponentActivity() {
 
     private fun markdownReport(detailsJson: String): String {
         val details = parsedDetails(detailsJson)
+        val isIcann = details?.optString("nameClass") == "icann"
         return buildString {
-            appendLine("# HNS Proof Details")
+            appendLine(if (isIcann) "# DNSSEC Details" else "# HNS Proof Details")
             appendLine()
             appendLine("Host: ${details?.optString("host", "unknown") ?: "unknown"}")
-            appendLine("Name: ${details?.optString("name", "unknown") ?: "unknown"}")
-            appendLine("Proof status: ${details?.optString("proofStatus", "unknown") ?: "unknown"}")
-            appendLine("Cache status: ${details?.optString("cacheStatus", "unknown") ?: "unknown"}")
+            if (isIcann) {
+                appendLine("Namespace: ICANN DNS")
+                appendLine("DNSSEC: ${details?.optString("dnssec", "unknown") ?: "unknown"}")
+            } else {
+                appendLine("Name: ${details?.optString("name", "unknown") ?: "unknown"}")
+                appendLine("Proof status: ${details?.optString("proofStatus", "unknown") ?: "unknown"}")
+                appendLine("Cache status: ${details?.optString("cacheStatus", "unknown") ?: "unknown"}")
+            }
             appendLine()
             appendLine("```json")
             appendLine(detailsJson)
@@ -138,6 +175,9 @@ class HnsProofDetailsActivity : ComponentActivity() {
 
     private fun parsedDetails(detailsJson: String): JSONObject? =
         runCatching { JSONObject(detailsJson) }.getOrNull()
+
+    private fun parsedTrace(): JSONObject? =
+        HnsResolutionTraceFormat.parse(traceJson)
 
     private fun copy(label: String, value: String) {
         getSystemService(ClipboardManager::class.java)

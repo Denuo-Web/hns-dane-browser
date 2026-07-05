@@ -36,14 +36,14 @@ class HnsResolverTraceActivity : ComponentActivity() {
                     summary = "Copy the raw resolver trace payload.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS resolver trace JSON", rawJson())
+                    copy("resolver trace JSON", rawJson())
                 })
                 addScreenRow(preferenceRow(
                     title = "Copy Markdown",
                     summary = "Copy a compact Markdown report.",
                     actionLabel = "Copy",
                 ) {
-                    copy("HNS resolver trace Markdown", markdownReport())
+                    copy("resolver trace Markdown", markdownReport())
                 })
             })
             addView(screenSection("Raw export") {
@@ -54,7 +54,10 @@ class HnsResolverTraceActivity : ComponentActivity() {
 
     private fun friendlySummary(): String {
         val trace = parsedTrace()
-            ?: return "No HNS resolver trace is available for the current page yet."
+            ?: return "No resolver trace is available for the current page yet."
+        if (HnsResolutionTraceFormat.isIcann(trace)) {
+            return icannSummary(trace)
+        }
         val fallback = trace.optJSONObject("fallback")
         val authoritativeDns = trace.optJSONObject("authoritativeDns")
         val tls = trace.optJSONObject("tls")
@@ -69,7 +72,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine("Estimated target height: ${nullableTraceValue(trace, "estimatedTargetHeight")}")
             appendLine("Local chain stale: ${nullableTraceValue(trace, "localChainStale")}")
             appendLine("Delegation: ${if (trace.optBoolean("delegation", false)) "yes" else "no"}")
-            appendLine("Resolution source: ${trace.optString("resolutionSource", "unknown")}")
+            appendLine("Resolution source: ${HnsResolutionTraceFormat.resolutionSource(trace)}")
             appendLine("Resource records: ${trace.optJSONArray("resourceRecords")?.join(", ") ?: "unknown"}")
             appendLine("Nameserver candidates: ${trace.optJSONArray("nameserverCandidates")?.join(", ") ?: "unknown"}")
             appendLine("Authoritative UDP 53: ${authoritativeDns?.optString("udp53") ?: "unknown"}")
@@ -79,9 +82,35 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine("Origin address: ${trace.optString("originAddress", "unknown")}")
             appendLine("TLSA owner: ${tls?.optString("tlsaOwner")?.takeIf { it.isNotBlank() } ?: "none"}")
             appendLine("TLSA status: ${HnsTlsaTraceFormat.tlsaStatus(tls)}")
+            appendLine("TLSA source: ${HnsTlsaTraceFormat.tlsaSource(tls)}")
             appendLine("DANE: ${HnsTlsaTraceFormat.daneDecision(tls)}")
             appendLine("DoH fallback: ${if (fallback?.optBoolean("used", false) == true) "yes" else "no"}")
             appendLine("Fallback reason: ${fallback?.optString("reason")?.takeIf { it.isNotBlank() } ?: "none"}")
+            appendLine("Final error: ${trace.optString("finalError", "none").takeIf { it != "null" } ?: "none"}")
+            appendLine()
+            appendLine("Suggested fix:")
+            appendLine(suggestedFix(trace))
+        }
+    }
+
+    private fun icannSummary(trace: JSONObject): String {
+        val fallback = trace.optJSONObject("fallback")
+        val tls = trace.optJSONObject("tls")
+        return buildString {
+            appendLine("URL: ${url.ifBlank { trace.optString("url", "unknown") }}")
+            appendLine("Host: ${trace.optString("host", "unknown")}")
+            appendLine("Namespace: ${HnsResolutionTraceFormat.namespace(trace)}")
+            appendLine("Mode: ${trace.optString("mode", "unknown")}")
+            appendLine("DNSSEC: ${trace.optString("dnssec", "unknown")}")
+            appendLine("Resolution source: ${HnsResolutionTraceFormat.resolutionSource(trace)}")
+            appendLine("Resource records: ${trace.optJSONArray("resourceRecords")?.join(", ") ?: "unknown"}")
+            appendLine("Resolver attempts: ${dnsAttemptsSummary(trace)}")
+            appendLine("Origin address: ${trace.optString("originAddress", "unknown")}")
+            appendLine("TLSA owner: ${tls?.optString("tlsaOwner")?.takeIf { it.isNotBlank() } ?: "none"}")
+            appendLine("TLSA status: ${HnsTlsaTraceFormat.tlsaStatus(tls)}")
+            appendLine("TLSA source: ${HnsTlsaTraceFormat.tlsaSource(tls)}")
+            appendLine("DANE: ${HnsTlsaTraceFormat.daneDecision(tls)}")
+            appendLine("DoH fallback: ${if (fallback?.optBoolean("used", false) == true) "yes" else "no"}")
             appendLine("Final error: ${trace.optString("finalError", "none").takeIf { it != "null" } ?: "none"}")
             appendLine()
             appendLine("Suggested fix:")
@@ -116,6 +145,9 @@ class HnsResolverTraceActivity : ComponentActivity() {
     }
 
     private fun suggestedFix(trace: JSONObject): String {
+        if (HnsResolutionTraceFormat.isIcann(trace)) {
+            return suggestedIcannFix(trace)
+        }
         val hnsProof = trace.optString("hnsProof")
         val authoritativeDns = trace.optJSONObject("authoritativeDns")
         val udp53 = authoritativeDns?.optString("udp53").orEmpty()
@@ -149,8 +181,29 @@ class HnsResolverTraceActivity : ComponentActivity() {
         }
     }
 
+    private fun suggestedIcannFix(trace: JSONObject): String {
+        val tls = trace.optJSONObject("tls")
+        val tlsaBlockedBy = HnsTlsaTraceFormat.tlsaBlockedBy(tls)
+        return when {
+            trace.optString("dnssec") == "bogus" ->
+                "Fix the ICANN DNSSEC chain: DS, DNSKEY, signatures, and denial records must validate."
+            trace.optString("originAddress") == "missing" ->
+                "Publish a DNSSEC-validated A or AAAA record for this host."
+            tlsaBlockedBy in setOf("delegated_dnssec_validation_failed", "insecure_resolution") ->
+                "Fix ICANN DNSSEC first. TLSA/DANE was not evaluated because secure DNS validation failed."
+            HnsTlsaTraceFormat.daneDecision(tls) == "verified" ->
+                "The ICANN DNSSEC and DANE path is working for this page."
+            else ->
+                "No obvious fix from this trace. Check TLSA/DANE details if HTTPS validation fails."
+        }
+    }
+
     private fun markdownReport(): String =
-        "# HNS Resolution Report\n\n```\n${rawJson()}\n```\n"
+        if (HnsResolutionTraceFormat.isIcann(parsedTrace())) {
+            "# ICANN DNSSEC Resolution Report\n\n```\n${rawJson()}\n```\n"
+        } else {
+            "# HNS Resolution Report\n\n```\n${rawJson()}\n```\n"
+        }
 
     private fun rawJson(): String =
         traceJson.ifBlank { """{"error":"no_hns_resolver_trace_available"}""" }

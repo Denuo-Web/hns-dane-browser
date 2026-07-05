@@ -9,11 +9,8 @@ object BrowserSecurityPolicy {
         mainFrameHnsTlsPolicy: HnsPageTlsPolicy? = null,
         mainFrameHnsResolverPolicy: HnsPageResolverPolicy? = null,
     ): SecurityState {
-        if (targetKind != BrowserTargetKind.HnsName) {
+        if (targetKind != BrowserTargetKind.HnsName && targetKind != BrowserTargetKind.NativeGateway) {
             return SecurityState.WebPkiOnly
-        }
-        if (!proxyAvailable) {
-            return SecurityState.ProofUnavailable
         }
         if (mainFrameHnsStatusCode?.let { it in 400..599 } == true) {
             return SecurityState.ValidationFailed
@@ -26,12 +23,24 @@ object BrowserSecurityPolicy {
                 return SecurityState.DaneVerified
             }
             if (mainFrameHnsTlsPolicy == HnsPageTlsPolicy.WebPkiFallback) {
+                if (targetKind == BrowserTargetKind.NativeGateway) {
+                    return SecurityState.WebPkiOnly
+                }
                 return SecurityState.MixedPolicy
+            }
+            if (targetKind == BrowserTargetKind.NativeGateway) {
+                return SecurityState.WebPkiOnly
             }
             if (mainFrameHnsResolverPolicy == HnsPageResolverPolicy.HnsDohCompatibility) {
                 return SecurityState.HnsCompatibility
             }
             return SecurityState.HnsVerified
+        }
+        if (!proxyAvailable && targetKind == BrowserTargetKind.HnsName) {
+            return SecurityState.ProofUnavailable
+        }
+        if (targetKind == BrowserTargetKind.NativeGateway) {
+            return SecurityState.Loading
         }
         if (
             syncStatusJson.hasSyncStatus("error") ||

@@ -108,6 +108,34 @@ class BrowserSecurityPolicyTest {
     }
 
     @Test
+    fun nativeGatewayIcannDaneHostCanShowDaneVerified() {
+        assertEquals(
+            SecurityState.DaneVerified,
+            BrowserSecurityPolicy.state(
+                targetKind = BrowserTargetKind.NativeGateway,
+                proxyAvailable = false,
+                syncStatusJson = """{"status":"idle"}""",
+                mainFrameHnsStatusCode = 200,
+                mainFrameHnsTlsPolicy = HnsPageTlsPolicy.Dane,
+            ),
+        )
+    }
+
+    @Test
+    fun nativeGatewayIcannWebPkiFallbackShowsWebPkiOnly() {
+        assertEquals(
+            SecurityState.WebPkiOnly,
+            BrowserSecurityPolicy.state(
+                targetKind = BrowserTargetKind.NativeGateway,
+                proxyAvailable = false,
+                syncStatusJson = """{"status":"idle"}""",
+                mainFrameHnsStatusCode = 200,
+                mainFrameHnsTlsPolicy = HnsPageTlsPolicy.WebPkiFallback,
+            ),
+        )
+    }
+
+    @Test
     fun mainFrameHnsGatewaySuccessShowsDaneCompatibilityForDohResolvedDane() {
         assertEquals(
             SecurityState.DaneCompatibility,

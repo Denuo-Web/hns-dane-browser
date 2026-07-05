@@ -77,6 +77,15 @@ class BrowserUrlClassifierTest {
     }
 
     @Test
+    fun icannDaneTestHostUsesNativeGatewayMode() {
+        val target = classifier.classify("dane-test.denuoweb.com")
+
+        assertEquals(BrowserTargetKind.NativeGateway, target.kind)
+        assertEquals("https://dane-test.denuoweb.com/", target.url)
+        assertEquals("dane-test.denuoweb.com", target.displayHost)
+    }
+
+    @Test
     fun discordGgUsesNormalWebMode() {
         val target = classifier.classify("discord.gg")
 

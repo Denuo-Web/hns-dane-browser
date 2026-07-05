@@ -9,7 +9,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 
 internal enum class HnsDiagnosticTool(
-    val title: String,
+    private val defaultTitle: String,
 ) {
     ResolverTrace("Resolver trace"),
     ProofDetails("HNS proof"),
@@ -20,6 +20,12 @@ internal enum class HnsDiagnosticTool(
 
     fun previous(): HnsDiagnosticTool =
         entries[(ordinal + entries.size - 1) % entries.size]
+
+    fun title(traceJson: String): String =
+        when (this) {
+            ProofDetails -> HnsResolutionTraceFormat.proofTabTitle(traceJson)
+            else -> defaultTitle
+        }
 }
 
 internal fun ComponentActivity.hnsDiagnosticTabs(
@@ -32,7 +38,7 @@ internal fun ComponentActivity.hnsDiagnosticTabs(
         gravity = Gravity.CENTER_VERTICAL
         setPadding(0, uiDp(2), 0, uiDp(10))
         HnsDiagnosticTool.entries.forEach { tool ->
-            addView(hnsDiagnosticTab(tool, selected = tool == current) {
+            addView(hnsDiagnosticTab(tool, traceJson, selected = tool == current) {
                 if (tool != current) {
                     openHnsDiagnosticTool(tool, url, traceJson)
                 }
@@ -61,11 +67,12 @@ internal fun ComponentActivity.openAdjacentHnsDiagnostic(
 
 private fun ComponentActivity.hnsDiagnosticTab(
     tool: HnsDiagnosticTool,
+    traceJson: String,
     selected: Boolean,
     action: () -> Unit,
 ): TextView =
     TextView(this).apply {
-        text = tool.title
+        text = tool.title(traceJson)
         textSize = 13f
         typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         gravity = Gravity.CENTER

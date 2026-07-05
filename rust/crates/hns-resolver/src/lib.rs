@@ -151,6 +151,11 @@ pub trait HnsResourceValueProvider {
 
 pub struct FailClosedResolver;
 
+pub struct CompositeResolver<H, I> {
+    hns: H,
+    icann: I,
+}
+
 pub struct ProofBackedResolver<P> {
     proof_provider: P,
 }
@@ -410,6 +415,30 @@ impl ProvenNameRecords {
 impl Resolver for FailClosedResolver {
     fn resolve(&self, _request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
         Err(ResolverError::UnsupportedBackend)
+    }
+}
+
+impl<H, I> CompositeResolver<H, I> {
+    pub fn new(hns: H, icann: I) -> Self {
+        Self { hns, icann }
+    }
+
+    pub fn into_parts(self) -> (H, I) {
+        (self.hns, self.icann)
+    }
+}
+
+impl<H, I> Resolver for CompositeResolver<H, I>
+where
+    H: Resolver,
+    I: Resolver,
+{
+    fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+        match classify_name(&request.qname) {
+            NameClass::Hns => self.hns.resolve(request),
+            NameClass::Icann => self.icann.resolve(request),
+            NameClass::Search => Err(ResolverError::UnsupportedBackend),
+        }
     }
 }
 
@@ -3670,6 +3699,44 @@ mod tests {
                 .unwrap_or_default();
             Ok(dns_response(&query, fixture, false))
         }
+    }
+
+    #[test]
+    fn composite_resolver_routes_hns_and_icann_requests() {
+        let resolver = CompositeResolver::new(
+            CountingResolver {
+                count: AtomicUsize::new(0),
+            },
+            CountingResolver {
+                count: AtomicUsize::new(0),
+            },
+        );
+
+        resolver
+            .resolve(&ResolutionRequest {
+                qname: "name".to_owned(),
+                qtype: RecordType::A.code(),
+            })
+            .unwrap();
+        resolver
+            .resolve(&ResolutionRequest {
+                qname: "example.com".to_owned(),
+                qtype: RecordType::A.code(),
+            })
+            .unwrap();
+        assert_eq!(
+            resolver
+                .resolve(&ResolutionRequest {
+                    qname: "bad name".to_owned(),
+                    qtype: RecordType::A.code(),
+                })
+                .unwrap_err(),
+            ResolverError::UnsupportedBackend,
+        );
+
+        let (hns, icann) = resolver.into_parts();
+        assert_eq!(hns.count.load(Ordering::SeqCst), 1);
+        assert_eq!(icann.count.load(Ordering::SeqCst), 1);
     }
 
     impl DelegatedDnssecVerifier for StaticDnssecVerifier {

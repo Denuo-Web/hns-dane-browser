@@ -6,15 +6,18 @@ use hns_core::dns::{
 use hns_core::network;
 use hns_core::{BlockHeader, Height, NameHash};
 use hns_dane::{DaneDecision, TlsaMatching, TlsaRecord, TlsaSelector, TlsaUsage};
-use hns_gateway::{Gateway, GatewayConfig, GatewayError, GatewayRequest, HnsHttpsMode};
+use hns_gateway::{
+    Gateway, GatewayConfig, GatewayError, GatewayRequest, HnsHttpsMode, IcannDaneLookupMode,
+};
 use hns_p2p::{
     DnsSeedPeerSource, HeaderSyncSession, PeerConnection, SqlitePeerStore, VersionPacket,
 };
 use hns_resolver::{
-    AuthoritativeDnssecResolver, DelegatedResolver, DelegatingResolver, DnsTransport,
-    HnsDelegation, HnsProofProvider, HnsResourceValueProvider, ProvenNameRecords, ResolutionAnswer,
-    ResolutionRequest, Resolver, ResolverError, ResourceValueAnchor, SqliteResourceValueProvider,
-    SystemDnssecVerifier, UdpTcpDnsTransport,
+    AuthoritativeDnssecResolver, CompositeResolver, DelegatedResolver, DelegatingResolver,
+    DnsTransport, HnsDelegation, HnsProofProvider, HnsResourceValueProvider, NameClass,
+    ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError,
+    ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier, UdpTcpDnsTransport,
+    classify_name,
 };
 use hns_sync::{
     HeaderSyncCoordinator, HeaderSyncRunner, HeaderSyncRunnerConfig, ProofScheduler, SyncError,
@@ -22,7 +25,7 @@ use hns_sync::{
 };
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport, ReadWrite,
-    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TransportError,
+    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaRecordSource, TransportError,
 };
 use hns_urkel::UrkelProofVerifier;
 use jni::JNIEnv;
@@ -47,6 +50,8 @@ const DNS_CLASS_IN: u16 = 1;
 const DNS_OPT_RECORD_TYPE: u16 = 41;
 const DNS_RCODE_NOERROR: u8 = 0;
 const DNS_RCODE_NXDOMAIN: u8 = 3;
+const DNS_RECURSION_DESIRED_FLAG: u16 = 0x0100;
+const DNS_AUTHENTIC_DATA_FLAG: u16 = 0x0020;
 const DNSSEC_DO_FLAG: u32 = 0x8000;
 const DEFAULT_DNS_UDP_PAYLOAD: usize = 1232;
 const DEFAULT_GATEWAY_PROOF_PEERS: usize = 8;
@@ -64,6 +69,8 @@ const MAINNET_TARGET_SPACING_SECONDS: u64 = 10 * 60;
 const LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG: u32 = RESOURCE_PROOF_CACHE_CANONICAL_WINDOW;
 const HNS_DOH_HOST: &str = "hnsdoh.com";
 const HNS_DOH_PATH: &str = "/dns-query";
+const ICANN_DOH_HOST: &str = "cloudflare-dns.com";
+const ICANN_DOH_PATH: &str = "/dns-query";
 const HNS_GATEWAY_STRICT_MODE_HEADER: &str = "X-HNS-Browser-Strict-Mode";
 const HNS_GATEWAY_DOH_RESOLVER_HEADER: &str = "X-HNS-Browser-DoH-Resolver";
 const HNS_RESOLUTION_TRACE_HEADER: &str = "X-HNS-Resolution-Trace";
@@ -341,7 +348,7 @@ impl GatewayProofProvider {
             return Err(ResolverError::ProofNameMismatch);
         }
         let is_non_inclusion = verified.value.is_none();
-        if !self.anchor_is_recent_canonical(verified.anchor)? {
+        if !self.anchor_is_current_tip_canonical(verified.anchor)? {
             return Err(ResolverError::ProofUnavailable);
         }
         if is_non_inclusion && local_chain_is_stale_for_current_resolution(&self.base)? {
@@ -350,7 +357,7 @@ impl GatewayProofProvider {
         ProvenNameRecords::from_verified_resource_value(verified)
     }
 
-    fn anchor_is_recent_canonical(
+    fn anchor_is_current_tip_canonical(
         &self,
         anchor: Option<ResourceValueAnchor>,
     ) -> Result<bool, ResolverError> {
@@ -366,15 +373,7 @@ impl GatewayProofProvider {
         let Some(best) = best else {
             return Ok(false);
         };
-        if anchor.height.0 == 0 || anchor.height.0 > best.height.0 {
-            return Ok(false);
-        }
-        if best.height.0.saturating_sub(anchor.height.0) > RESOURCE_PROOF_CACHE_CANONICAL_WINDOW {
-            return Ok(false);
-        }
-        Ok(chain
-            .canonical_header(anchor.height)
-            .is_some_and(|header| header.header.tree_root == anchor.tree_root))
+        Ok(anchor.height == best.height && anchor.tree_root == best.header.tree_root)
     }
 
     fn fetch_and_store_live_proof(
@@ -487,10 +486,15 @@ type AndroidCompatibilityPrimaryResolver = DelegatingResolver<
     GatewayProofProvider,
     FallbackDelegatedResolver<AndroidDirectDelegatedResolver, AndroidDohDelegatedResolver>,
 >;
+type AndroidStrictGatewayResolver = CompositeResolver<AndroidPrimaryResolver, IcannDohResolver>;
+type AndroidCompatibilityGatewayResolver = CompositeResolver<
+    FallbackResolver<AndroidCompatibilityPrimaryResolver, HnsDohResolver>,
+    IcannDohResolver,
+>;
 
 enum AndroidGatewayResolver {
-    Strict(AndroidPrimaryResolver),
-    Compatibility(FallbackResolver<AndroidCompatibilityPrimaryResolver, HnsDohResolver>),
+    Strict(AndroidStrictGatewayResolver),
+    Compatibility(AndroidCompatibilityGatewayResolver),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -584,27 +588,28 @@ fn dns_trace_event(
 }
 
 fn doh_trace_event(
+    protocol: &'static str,
     server: String,
     elapsed_ms: u64,
     result: &Result<OriginResponse, TransportError>,
 ) -> DnsTraceEvent {
     match result {
         Ok(response) if response.status == 200 => DnsTraceEvent {
-            protocol: "hns_doh",
+            protocol,
             server,
             status: "ok".to_owned(),
             elapsed_ms,
             error: None,
         },
         Ok(response) => DnsTraceEvent {
-            protocol: "hns_doh",
+            protocol,
             server,
             status: "http_error".to_owned(),
             elapsed_ms,
             error: Some(format!("HTTP {}", response.status)),
         },
         Err(error) => DnsTraceEvent {
-            protocol: "hns_doh",
+            protocol,
             server,
             status: "transport_error".to_owned(),
             elapsed_ms,
@@ -807,6 +812,7 @@ impl HnsDohDnsTransport {
         let started = Instant::now();
         let response = fetch_doh_message(&self.endpoint, query);
         self.trace.push(doh_trace_event(
+            "hns_doh",
             self.endpoint.display(),
             elapsed_millis(started),
             &response,
@@ -862,6 +868,7 @@ impl Resolver for HnsDohResolver {
         let started = Instant::now();
         let response = fetch_doh_message(&self.endpoint, query);
         self.trace.push(doh_trace_event(
+            "hns_doh",
             self.endpoint.display(),
             elapsed_millis(started),
             &response,
@@ -877,6 +884,58 @@ impl Resolver for HnsDohResolver {
         }
 
         doh_answer_from_body(id, &qname, qtype, &response.body)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IcannDohResolver {
+    endpoint: HnsDohEndpoint,
+    trace: DnsTraceRecorder,
+}
+
+impl IcannDohResolver {
+    fn new(trace: DnsTraceRecorder) -> Self {
+        Self {
+            endpoint: default_icann_doh_endpoint(),
+            trace,
+        }
+    }
+}
+
+impl Resolver for IcannDohResolver {
+    fn resolve(&self, request: &ResolutionRequest) -> Result<ResolutionAnswer, ResolverError> {
+        let qname =
+            DnsName::from_ascii(&request.qname).map_err(|_| ResolverError::UnsupportedBackend)?;
+        let qtype = RecordType::from_code(request.qtype);
+        let id = next_doh_query_id();
+        let query = build_doh_query(id, &qname, qtype)?;
+        let started = Instant::now();
+        let response = fetch_doh_message(&self.endpoint, query);
+        self.trace.push(doh_trace_event(
+            "icann_doh",
+            self.endpoint.display(),
+            elapsed_millis(started),
+            &response,
+        ));
+        let response = response.map_err(|error| {
+            ResolverError::DnsTransport(format!("ICANN DoH resolver failed: {error}"))
+        })?;
+        if response.status != 200 {
+            return Err(ResolverError::DnsTransport(format!(
+                "ICANN DoH resolver returned HTTP {}",
+                response.status
+            )));
+        }
+
+        doh_answer_from_body(id, &qname, qtype, &response.body)
+    }
+}
+
+fn default_icann_doh_endpoint() -> HnsDohEndpoint {
+    HnsDohEndpoint {
+        host: ICANN_DOH_HOST.to_owned(),
+        port: 443,
+        path_and_query: ICANN_DOH_PATH.to_owned(),
     }
 }
 
@@ -939,7 +998,7 @@ fn build_doh_query(id: u16, qname: &DnsName, qtype: RecordType) -> Result<Vec<u8
     let message = DnsMessage {
         header: DnsHeader {
             id,
-            flags: DnsFlags::new(0x0100),
+            flags: DnsFlags::new(DNS_RECURSION_DESIRED_FLAG | DNS_AUTHENTIC_DATA_FLAG),
             question_count: 1,
             answer_count: 0,
             authority_count: 0,
@@ -1136,6 +1195,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
     let gateway = match Gateway::new(
         GatewayConfig {
             hns_https_mode: HnsHttpsMode::Compatibility,
+            icann_dane_lookup_mode: IcannDaneLookupMode::NativeTlsaWithTxtShadowFallback,
             ..GatewayConfig::default()
         },
         resolver,
@@ -1171,7 +1231,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
             origin_response_with_resolver_policy_and_trace(response.origin, resolver_policy, &trace)
         }
         Err(error) => {
-            let (status, reason, detail) = map_gateway_error(&error);
+            let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
                 mode,
@@ -1240,6 +1300,7 @@ pub fn gateway_http_response_body_to_file(
     let gateway = match Gateway::new(
         GatewayConfig {
             hns_https_mode: HnsHttpsMode::Compatibility,
+            icann_dane_lookup_mode: IcannDaneLookupMode::NativeTlsaWithTxtShadowFallback,
             ..GatewayConfig::default()
         },
         resolver,
@@ -1286,7 +1347,7 @@ pub fn gateway_http_response_body_to_file(
             ))
         }
         Err(error) => {
-            let (status, reason, detail) = map_gateway_error(&error);
+            let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
                 mode,
@@ -1359,6 +1420,7 @@ pub fn gateway_http_upgrade_tunnel(
     let gateway = match Gateway::new(
         GatewayConfig {
             hns_https_mode: HnsHttpsMode::Compatibility,
+            icann_dane_lookup_mode: IcannDaneLookupMode::NativeTlsaWithTxtShadowFallback,
             ..GatewayConfig::default()
         },
         resolver,
@@ -1417,7 +1479,7 @@ pub fn gateway_http_upgrade_tunnel(
             result.is_ok()
         }
         Err(error) => {
-            let (status, reason, detail) = map_gateway_error(&error);
+            let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
                 mode,
@@ -1537,11 +1599,14 @@ fn android_gateway_resolver(
             let primary = DelegatingResolver::new(
                 GatewayProofProvider::new(base, values),
                 AuthoritativeDnssecResolver::new(
-                    TracingDnsTransport::new(authoritative_dns_transport, dns_trace),
+                    TracingDnsTransport::new(authoritative_dns_transport, dns_trace.clone()),
                     SystemDnssecVerifier,
                 ),
             );
-            AndroidGatewayResolver::Strict(primary)
+            AndroidGatewayResolver::Strict(CompositeResolver::new(
+                primary,
+                IcannDohResolver::new(dns_trace),
+            ))
         }
         GatewayResolutionMode::Compatibility => {
             let direct = AuthoritativeDnssecResolver::new(
@@ -1555,10 +1620,14 @@ fn android_gateway_resolver(
             let delegated = FallbackDelegatedResolver::new(direct, doh, fallback_marker.clone());
             let primary =
                 DelegatingResolver::new(GatewayProofProvider::new(base, values), delegated);
-            AndroidGatewayResolver::Compatibility(FallbackResolver::with_marker(
+            let hns = FallbackResolver::with_marker(
                 primary,
-                HnsDohResolver::new(doh_endpoint, dns_trace),
+                HnsDohResolver::new(doh_endpoint, dns_trace.clone()),
                 fallback_marker,
+            );
+            AndroidGatewayResolver::Compatibility(CompositeResolver::new(
+                hns,
+                IcannDohResolver::new(dns_trace),
             ))
         }
     }
@@ -1748,6 +1817,7 @@ fn resolution_trace_json(
     dns_trace: &DnsTraceRecorder,
 ) -> String {
     let dns_events = dns_trace.snapshot();
+    let name_class = classify_name(input.host);
     let resource_types = resolution
         .map(|answer| {
             answer
@@ -1783,7 +1853,7 @@ fn resolution_trace_json(
                 .any(|record| matches!(record.record_type, RecordType::A | RecordType::Aaaa))
         })
         .unwrap_or(false);
-    let hns_proof = hns_proof_trace_status(input, resolution, error);
+    let hns_proof = hns_proof_trace_status(input, name_class, resolution, error);
     let fallback_reason = fallback_marker.reason().unwrap_or("none");
     let fallback_type = if fallback_marker.used() {
         r#""HNS_DOH""#
@@ -1800,7 +1870,8 @@ fn resolution_trace_json(
         .unwrap_or_else(|| "null".to_owned());
     let authoritative_dns = authoritative_dns_trace_json(&dns_events);
     let dns_attempts = dns_trace_attempts_json(&dns_events);
-    let resolution_source = resolution_source_name(resolution, authoritative_dns_used, error);
+    let resolution_source =
+        resolution_source_name(name_class, resolution, authoritative_dns_used, error, &dns_events);
     let local_currentness = local_chain_currentness_for_trace(input.data_dir);
     let local_best_height =
         optional_u32_json(local_currentness.and_then(|value| value.best_height));
@@ -1810,9 +1881,10 @@ fn resolution_trace_json(
     let local_chain_stale = optional_bool_json(local_currentness.and_then(|value| value.stale));
 
     format!(
-        r#"{{"host":"{}","url":"{}","root":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
+        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
         json_escape(input.host),
         json_escape(&gateway_request_address(input)),
+        name_class_trace_name(name_class),
         json_escape(&hns_trace_root(input.host)),
         mode.as_str(),
         hns_proof,
@@ -1836,11 +1908,37 @@ fn resolution_trace_json(
     )
 }
 
+fn name_class_trace_name(name_class: NameClass) -> &'static str {
+    match name_class {
+        NameClass::Hns => "hns",
+        NameClass::Icann => "icann",
+        NameClass::Search => "search",
+    }
+}
+
 fn resolution_source_name(
+    name_class: NameClass,
     resolution: Option<&ResolutionAnswer>,
     authoritative_dns_used: bool,
     error: Option<&GatewayError>,
+    dns_events: &[DnsTraceEvent],
 ) -> &'static str {
+    if name_class == NameClass::Icann {
+        if dns_events.iter().any(|event| event.protocol == "icann_doh")
+            || matches!(
+                error,
+                Some(GatewayError::Resolver(ResolverError::DnsTransport(message)))
+                    if message.contains("ICANN DoH")
+            )
+        {
+            return "trusted_icann_doh";
+        }
+        if resolution.is_some() {
+            return "icann_dns";
+        }
+        return "unknown";
+    }
+
     if authoritative_dns_used {
         return "authoritative_dns";
     }
@@ -1880,9 +1978,14 @@ fn is_capsule_synthesized_record(record: &ResourceRecord) -> bool {
 
 fn hns_proof_trace_status(
     input: &GatewayHttpRequestInput<'_>,
+    name_class: NameClass,
     resolution: Option<&ResolutionAnswer>,
     error: Option<&GatewayError>,
 ) -> &'static str {
+    if name_class != NameClass::Hns {
+        return "not_applicable";
+    }
+
     match (resolution, error) {
         (Some(answer), _) if answer.secure => "verified",
         (_, Some(GatewayError::Resolver(ResolverError::ProofUnavailable))) => "unavailable",
@@ -1973,6 +2076,10 @@ fn tls_trace_json(
     let dnssec_secure = tls_validation
         .map(|tls| if tls.dnssec_secure { "true" } else { "false" })
         .unwrap_or("null");
+    let tlsa_source = tls_validation
+        .and_then(|tls| tls.tlsa_source)
+        .map(|source| format!(r#""{}""#, tlsa_record_source_name(source)))
+        .unwrap_or_else(|| "null".to_owned());
     let mode = tls_validation
         .map(|tls| format!(r#""{}""#, json_escape(tls_mode_name(tls))))
         .unwrap_or_else(|| "null".to_owned());
@@ -1987,7 +2094,7 @@ fn tls_trace_json(
     let fallback = matches!(dane_decision, Some(DaneDecision::WebPkiFallback));
 
     format!(
-        r#"{{"mode":{},"tlsaOwner":"{}","tlsaEvaluated":{},"tlsaStatus":"{}","tlsaBlockedBy":{},"tlsaFound":{},"dnssecSecure":{},"records":{},"certificate":{},"dane":{{"decision":"{}","matchedUsage":{},"certificateMatch":"{}","webPkiFallback":{}}}}}"#,
+        r#"{{"mode":{},"tlsaOwner":"{}","tlsaEvaluated":{},"tlsaStatus":"{}","tlsaBlockedBy":{},"tlsaFound":{},"dnssecSecure":{},"tlsaSource":{},"records":{},"certificate":{},"dane":{{"decision":"{}","matchedUsage":{},"certificateMatch":"{}","webPkiFallback":{}}}}}"#,
         mode,
         json_escape(&owner),
         tlsa_evaluated,
@@ -1995,6 +2102,7 @@ fn tls_trace_json(
         tlsa_blocked_by,
         records_found,
         dnssec_secure,
+        tlsa_source,
         records,
         tls_certificate_inspection_json(tls_inspection),
         decision,
@@ -2002,6 +2110,13 @@ fn tls_trace_json(
         certificate_match,
         fallback,
     )
+}
+
+fn tlsa_record_source_name(source: TlsaRecordSource) -> &'static str {
+    match source {
+        TlsaRecordSource::NativeTlsa => "native_tlsa",
+        TlsaRecordSource::DnssecTxtShadow => "dnssec_txt_shadow",
+    }
 }
 
 fn tls_certificate_inspection_json(inspection: Option<&TlsCertificateInspection>) -> String {
@@ -2114,7 +2229,8 @@ fn tlsa_blocked_by(error: Option<&GatewayError>) -> Option<&'static str> {
         Some(GatewayError::Transport(TransportError::Http3(_))) => Some("http3_failed"),
         Some(GatewayError::Transport(TransportError::Quic(_))) => Some("quic_failed"),
         Some(GatewayError::Transport(TransportError::DaneFailed))
-        | Some(GatewayError::InvalidTlsa(_)) => Some("dane_validation_failed"),
+        | Some(GatewayError::InvalidTlsa(_))
+        | Some(GatewayError::InvalidTlsaShadow) => Some("dane_validation_failed"),
         Some(GatewayError::Transport(_)) => Some("origin_transport_failed"),
         Some(GatewayError::Resolver(ResolverError::NameNotFound))
         | Some(GatewayError::Resolver(ResolverError::InvalidName(_)))
@@ -2140,6 +2256,7 @@ fn dane_trace_decision(
         (Some(DaneDecision::NoTlsa), _) => "no_tlsa",
         (Some(DaneDecision::Failed), _) => "failed",
         (_, Some(GatewayError::InvalidTlsa(_)))
+        | (_, Some(GatewayError::InvalidTlsaShadow))
         | (_, Some(GatewayError::Transport(TransportError::DaneFailed))) => "failed",
         _ => "not_evaluated",
     }
@@ -2155,6 +2272,7 @@ fn dane_certificate_match(
         (Some(DaneDecision::NoTlsa), _) => "not_checked",
         (Some(DaneDecision::Failed), _) => "failed",
         (_, Some(GatewayError::InvalidTlsa(_)))
+        | (_, Some(GatewayError::InvalidTlsaShadow))
         | (_, Some(GatewayError::Transport(TransportError::DaneFailed))) => "failed",
         _ => "unknown",
     }
@@ -2657,6 +2775,118 @@ fn hns_tls_policy_header(decision: &DaneDecision) -> Option<&'static str> {
     }
 }
 
+fn map_gateway_error_for_host(
+    host: &str,
+    error: &GatewayError,
+) -> (u16, &'static str, &'static str) {
+    if classify_name(host) == NameClass::Icann {
+        match error {
+            GatewayError::Resolver(ResolverError::DnsTransport(_)) => (
+                502,
+                "ICANN DNS Unavailable",
+                "Trusted ICANN DNS resolver transport failed closed.",
+            ),
+            GatewayError::Resolver(ResolverError::InvalidDnsResponse) => (
+                502,
+                "ICANN DNS Response Invalid",
+                "Trusted ICANN DNS resolver returned an invalid response.",
+            ),
+            GatewayError::Resolver(ResolverError::DnssecFailed)
+            | GatewayError::InsecureResolution => (
+                502,
+                "ICANN DNSSEC Validation Failed",
+                "Secure ICANN DNS resolution was required but validation failed closed.",
+            ),
+            GatewayError::NoResolvedAddress => (
+                502,
+                "ICANN Origin Address Missing",
+                "Secure ICANN DNS resolution did not produce an origin A or AAAA address.",
+            ),
+            GatewayError::InvalidTlsa(_)
+            | GatewayError::InvalidTlsaShadow
+            | GatewayError::Transport(TransportError::DaneFailed) => (
+                502,
+                "ICANN DANE Validation Failed",
+                "ICANN DANE/TLSA validation failed closed.",
+            ),
+            GatewayError::InvalidSvcb(_) | GatewayError::UnsupportedSvcb => (
+                502,
+                "ICANN HTTPS Service Unsupported",
+                "HTTPS/SVCB service binding is malformed or requires unsupported transport policy.",
+            ),
+            GatewayError::HostResolutionMismatch => (
+                400,
+                "ICANN Request Mismatch",
+                "Origin host does not match the resolved ICANN name.",
+            ),
+            GatewayError::Transport(TransportError::UnsupportedTransport) => (
+                501,
+                "ICANN Transport Unsupported",
+                "Requested ICANN origin transport is not available.",
+            ),
+            GatewayError::Transport(TransportError::UnsupportedScheme) => (
+                501,
+                "ICANN Scheme Unsupported",
+                "Requested ICANN origin scheme is not available.",
+            ),
+            GatewayError::Transport(TransportError::Tls(_)) => (
+                502,
+                "ICANN TLS Failed",
+                "Origin TLS negotiation failed closed.",
+            ),
+            GatewayError::Transport(TransportError::InvalidRequest) => (
+                400,
+                "ICANN Origin Request Invalid",
+                "Origin request could not be safely forwarded.",
+            ),
+            GatewayError::Transport(TransportError::RequestTooLarge) => (
+                413,
+                "ICANN Origin Request Too Large",
+                "Origin request body exceeds the configured gateway limit.",
+            ),
+            GatewayError::Transport(TransportError::UnsupportedTransferEncoding)
+            | GatewayError::Transport(TransportError::MalformedResponse) => (
+                502,
+                "ICANN Origin Response Invalid",
+                "Origin HTTP response framing failed closed.",
+            ),
+            GatewayError::Transport(TransportError::UnsupportedUpgrade) => (
+                501,
+                "ICANN Protocol Upgrade Unsupported",
+                "ICANN WebSocket/HTTP Upgrade must use the native tunnel path and the request failed validation.",
+            ),
+            GatewayError::Transport(TransportError::ResponseTooLarge) => (
+                502,
+                "ICANN Origin Response Too Large",
+                "Origin response exceeds the configured gateway limit.",
+            ),
+            GatewayError::Transport(TransportError::Io(_)) => (
+                502,
+                "ICANN Origin Transport Failed",
+                "Origin connection failed closed.",
+            ),
+            GatewayError::Transport(TransportError::Http2(_)) => (
+                502,
+                "ICANN HTTP/2 Transport Failed",
+                "Origin HTTP/2 exchange failed closed.",
+            ),
+            GatewayError::Transport(TransportError::Http3(_)) => (
+                502,
+                "ICANN HTTP/3 Transport Failed",
+                "Origin HTTP/3 exchange failed closed.",
+            ),
+            GatewayError::Transport(TransportError::Quic(_)) => (
+                502,
+                "ICANN QUIC Transport Failed",
+                "Origin QUIC connection failed closed.",
+            ),
+            _ => map_gateway_error(error),
+        }
+    } else {
+        map_gateway_error(error)
+    }
+}
+
 fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) {
     match error {
         GatewayError::Resolver(ResolverError::UnsupportedBackend) => (
@@ -2727,7 +2957,9 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
             "HNS Origin Address Missing",
             "Secure HNS resolution did not produce an origin A or AAAA address.",
         ),
-        GatewayError::InvalidTlsa(_) | GatewayError::Transport(TransportError::DaneFailed) => (
+        GatewayError::InvalidTlsa(_)
+        | GatewayError::InvalidTlsaShadow
+        | GatewayError::Transport(TransportError::DaneFailed) => (
             502,
             "HNS DANE Validation Failed",
             "DANE/TLSA validation failed closed.",
@@ -4694,6 +4926,46 @@ mod tests {
     }
 
     #[test]
+    fn resolution_trace_reports_icann_doh_source_without_hns_proof() {
+        let dns_trace = DnsTraceRecorder::default();
+        dns_trace.push(DnsTraceEvent {
+            protocol: "icann_doh",
+            server: "https://cloudflare-dns.com/dns-query".to_owned(),
+            status: "ok".to_owned(),
+            elapsed_ms: 42,
+            error: None,
+        });
+        let trace = resolution_trace_json(
+            &GatewayHttpRequestInput {
+                data_dir: "/tmp",
+                method: "GET",
+                scheme: "https",
+                host: "dane-test.denuoweb.com",
+                port: 443,
+                path_and_query: "/",
+                header_text: "",
+                body: &[],
+            },
+            GatewayResolutionMode::Compatibility,
+            Some(&ResolutionAnswer {
+                name: DnsName::from_ascii("dane-test.denuoweb.com").unwrap(),
+                records: vec![address_record("dane-test.denuoweb.com", [35, 212, 156, 128])],
+                secure: true,
+            }),
+            TlsTraceInput::default(),
+            None,
+            &FallbackMarker::default(),
+            &dns_trace,
+        );
+
+        assert!(trace.contains(r#""nameClass":"icann""#));
+        assert!(trace.contains(r#""hnsProof":"not_applicable""#));
+        assert!(trace.contains(r#""resolutionSource":"trusted_icann_doh""#));
+        assert!(trace.contains(r#""protocol":"icann_doh""#));
+        assert!(!trace.contains(r#""resolutionSource":"hns_resource_capsule""#));
+    }
+
+    #[test]
     fn resolution_trace_reports_cached_hns_proof_when_later_resolution_fails() {
         let path = temp_dir_path("trace-cached-proof-after-resolution-failure");
         let base = path.join("hns");
@@ -5227,6 +5499,25 @@ mod tests {
     }
 
     #[test]
+    fn doh_query_requests_authentic_data_and_dnssec_records() {
+        let qname = DnsName::from_ascii("dane-test.denuoweb.com").unwrap();
+        let query = build_doh_query(0x1234, &qname, RecordType::A).unwrap();
+        let message = DnsMessage::parse(&query).unwrap();
+
+        assert_eq!(message.header.id, 0x1234);
+        assert!(message.header.flags.recursion_desired());
+        assert_ne!(message.header.flags.bits() & DNS_AUTHENTIC_DATA_FLAG, 0);
+        assert_eq!(message.questions[0].name, qname);
+        assert_eq!(message.questions[0].record_type, RecordType::A);
+        assert_eq!(message.additionals.len(), 1);
+        assert_eq!(
+            message.additionals[0].record_type,
+            RecordType::Unknown(DNS_OPT_RECORD_TYPE)
+        );
+        assert_ne!(message.additionals[0].ttl & DNSSEC_DO_FLAG, 0);
+    }
+
+    #[test]
     fn gateway_response_fails_closed_without_resolver_backend() {
         let path = temp_dir_path("gateway-empty");
         let response = gateway_http_response(GatewayHttpRequestInput {
@@ -5345,6 +5636,14 @@ mod tests {
             ),
         );
         assert_eq!(
+            map_gateway_error_for_host("dane-test.denuoweb.com", &GatewayError::NoResolvedAddress),
+            (
+                502,
+                "ICANN Origin Address Missing",
+                "Secure ICANN DNS resolution did not produce an origin A or AAAA address.",
+            ),
+        );
+        assert_eq!(
             map_gateway_error(&GatewayError::Transport(TransportError::DaneFailed)),
             (
                 502,
@@ -5459,7 +5758,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_response_accepts_recent_canonical_cached_proof() {
+    fn gateway_response_rejects_non_tip_cached_resource_proof() {
         let path = temp_dir_path("gateway-http-recent-proof");
         let base = path.join("hns");
         std::fs::create_dir_all(&base).unwrap();
@@ -5480,39 +5779,19 @@ mod tests {
             )
             .unwrap();
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut request = [0_u8; 512];
-            let count = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..count]);
-            assert!(request.starts_with("GET /recent HTTP/1.1\r\n"));
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nrecent",
-                )
-                .unwrap();
-        });
-
         let response = gateway_http_response(GatewayHttpRequestInput {
             data_dir: path.to_str().unwrap(),
             method: "GET",
             scheme: "http",
             host: &root_name,
-            port,
+            port: 80,
             path_and_query: "/recent",
-            header_text: "",
+            header_text: "X-HNS-Browser-Strict-Mode: 1\r\n",
             body: &[],
         });
         let text = String::from_utf8(response).unwrap();
 
-        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(text.ends_with("\r\n\r\nrecent"));
-        server.join().unwrap();
+        assert!(text.starts_with("HTTP/1.1 503 HNS Proof Unavailable\r\n"));
         cleanup_dir(&path);
     }
 

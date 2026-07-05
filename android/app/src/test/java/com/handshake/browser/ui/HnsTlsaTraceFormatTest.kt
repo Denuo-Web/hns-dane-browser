@@ -25,7 +25,28 @@ class HnsTlsaTraceFormatTest {
 
         assertEquals("absent", HnsTlsaTraceFormat.tlsaStatus(tls))
         assertEquals("no", HnsTlsaTraceFormat.tlsaFound(tls))
+        assertEquals("none", HnsTlsaTraceFormat.tlsaSource(tls))
         assertEquals("no_tlsa", HnsTlsaTraceFormat.daneDecision(tls))
+    }
+
+    @Test
+    fun reportsTxtShadowTlsaSource() {
+        val tls = JSONObject(
+            """{"tlsaEvaluated":true,"tlsaStatus":"present","tlsaSource":"dnssec_txt_shadow","tlsaFound":true}""",
+        )
+
+        assertEquals("DANE TXT shadow", HnsTlsaTraceFormat.tlsaSource(tls))
+    }
+
+    @Test
+    fun reportsIcannResolutionTraceLabels() {
+        val trace = JSONObject(
+            """{"nameClass":"icann","host":"dane-test.denuoweb.com","resolutionSource":"trusted_icann_doh"}""",
+        )
+
+        assertEquals(true, HnsResolutionTraceFormat.isIcann(trace))
+        assertEquals("ICANN DNS", HnsResolutionTraceFormat.namespace(trace))
+        assertEquals("trusted ICANN DoH", HnsResolutionTraceFormat.resolutionSource(trace))
     }
 
     @Test

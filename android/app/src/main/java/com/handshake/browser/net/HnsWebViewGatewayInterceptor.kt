@@ -64,7 +64,7 @@ class HnsWebViewGatewayInterceptor(
         redirectsRemaining: Int,
     ): HnsInterceptedResponse? {
         val target = HnsWebViewTarget.parse(url) ?: return null
-        if (!HnsHostPolicy.requiresHnsResolution(target.host)) {
+        if (!HnsHostPolicy.requiresNativeGatewayResolution(target.host)) {
             return null
         }
 
@@ -184,7 +184,7 @@ class HnsWebViewGatewayInterceptor(
             GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Invalid")
         }
         val redirectTarget = HnsWebViewTarget.parse(redirectUrl)
-        if (redirectTarget == null || !HnsHostPolicy.requiresHnsResolution(redirectTarget.host)) {
+        if (redirectTarget == null || !HnsHostPolicy.requiresNativeGatewayResolution(redirectTarget.host)) {
             GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Unsupported")
             return plainInterceptResponse(
                 statusCode = 502,

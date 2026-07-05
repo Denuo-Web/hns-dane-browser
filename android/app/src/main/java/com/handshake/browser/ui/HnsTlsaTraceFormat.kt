@@ -1,6 +1,56 @@
 package com.handshake.browser.ui
 
+import com.handshake.browser.core.HnsHostPolicy
 import org.json.JSONObject
+
+internal object HnsResolutionTraceFormat {
+    fun isIcann(trace: JSONObject?): Boolean {
+        if (trace == null) {
+            return false
+        }
+        if (fieldText(trace, "nameClass", "") == "icann") {
+            return true
+        }
+        return HnsHostPolicy.isIcannDaneTestHost(fieldText(trace, "host", ""))
+    }
+
+    fun namespace(trace: JSONObject?): String =
+        when (fieldText(trace, "nameClass", "")) {
+            "icann" -> "ICANN DNS"
+            "hns" -> "Handshake"
+            "search" -> "search"
+            else -> "unknown"
+        }
+
+    fun resolutionSource(trace: JSONObject?): String =
+        when (val source = fieldText(trace, "resolutionSource", "")) {
+            "trusted_icann_doh" -> "trusted ICANN DoH"
+            "icann_dns" -> "ICANN DNS"
+            "authoritative_dns" -> "authoritative DNS"
+            "hns_resource_capsule" -> "HNS resource capsule"
+            "hns_resource" -> "HNS resource"
+            "" -> "unknown"
+            else -> source.replace('_', ' ')
+        }
+
+    fun proofTabTitle(traceJson: String): String =
+        if (isIcann(parse(traceJson))) {
+            "DNSSEC"
+        } else {
+            "HNS proof"
+        }
+
+    fun parse(traceJson: String): JSONObject? =
+        runCatching { JSONObject(traceJson) }.getOrNull()
+
+    private fun fieldText(json: JSONObject?, key: String, fallback: String): String {
+        if (json == null || !json.has(key) || json.isNull(key)) {
+            return fallback
+        }
+        val value = json.opt(key) ?: return fallback
+        return value.toString().takeIf { it.isNotBlank() && it != "null" } ?: fallback
+    }
+}
 
 internal object HnsTlsaTraceFormat {
     fun tlsMode(tls: JSONObject?): String =
@@ -34,6 +84,14 @@ internal object HnsTlsaTraceFormat {
             "absent" -> "absent"
             "not_evaluated" -> blockedText(tls)
             else -> "unknown"
+        }
+
+    fun tlsaSource(tls: JSONObject?): String =
+        when (val source = fieldText(tls, "tlsaSource", "")) {
+            "native_tlsa" -> "native TLSA"
+            "dnssec_txt_shadow" -> "DANE TXT shadow"
+            "" -> "none"
+            else -> source.replace('_', ' ')
         }
 
     fun tlsaBlockedBy(tls: JSONObject?): String? =

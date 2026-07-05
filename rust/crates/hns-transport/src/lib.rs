@@ -50,6 +50,13 @@ pub struct TlsValidation {
     pub mode: DomainTrustMode,
     pub dnssec_secure: bool,
     pub tlsa_records: Vec<TlsaRecord>,
+    pub tlsa_source: Option<TlsaRecordSource>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsaRecordSource {
+    NativeTlsa,
+    DnssecTxtShadow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -226,6 +233,7 @@ impl Default for TlsValidation {
             mode: DomainTrustMode::IcannWebPki,
             dnssec_secure: false,
             tlsa_records: Vec::new(),
+            tlsa_source: None,
         }
     }
 }
@@ -236,6 +244,7 @@ impl TlsValidation {
             mode: DomainTrustMode::HnsStrict,
             dnssec_secure,
             tlsa_records,
+            tlsa_source: None,
         }
     }
 
@@ -244,6 +253,7 @@ impl TlsValidation {
             mode: DomainTrustMode::HnsCompatibility,
             dnssec_secure,
             tlsa_records,
+            tlsa_source: None,
         }
     }
 }

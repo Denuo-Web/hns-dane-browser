@@ -8,6 +8,7 @@ import java.util.Locale
 enum class BrowserTargetKind {
     ExactUrl,
     HnsName,
+    NativeGateway,
     Search,
 }
 
@@ -53,11 +54,7 @@ class BrowserUrlClassifier(
 
         val suffix = trimmed.removePrefix(hostCandidate)
         val normalizedSuffix = if (suffix.isEmpty()) "/" else suffix
-        val kind = if (HnsHostPolicy.requiresHnsResolution(asciiHost)) {
-            BrowserTargetKind.HnsName
-        } else {
-            BrowserTargetKind.ExactUrl
-        }
+        val kind = targetKindForHost(asciiHost)
         val scheme = "https"
         val url = "$scheme://$asciiHost$normalizedSuffix"
         return BrowserTarget(kind, url, asciiHost)
@@ -73,13 +70,16 @@ class BrowserUrlClassifier(
             ?: return search(url)
         val host = authority.host.takeIf(::isValidHttpHost)
             ?: return search(url)
-        val kind = if (HnsHostPolicy.requiresHnsResolution(host)) {
-            BrowserTargetKind.HnsName
-        } else {
-            BrowserTargetKind.ExactUrl
-        }
+        val kind = targetKindForHost(host)
         return BrowserTarget(kind, uri.withAuthority(authority) ?: return search(url), host)
     }
+
+    private fun targetKindForHost(host: String): BrowserTargetKind =
+        when {
+            HnsHostPolicy.isIcannDaneTestHost(host) -> BrowserTargetKind.NativeGateway
+            HnsHostPolicy.requiresHnsResolution(host) -> BrowserTargetKind.HnsName
+            else -> BrowserTargetKind.ExactUrl
+        }
 
     private fun search(query: String): BrowserTarget {
         val encoded = URLEncoder.encode(query, StandardCharsets.UTF_8)
