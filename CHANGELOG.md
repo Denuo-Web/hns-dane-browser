@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.1 - 2026-07-06
+
+### Changed
+
+- Set the default Android homepage to `https://denuoweb/homepage` and removed the bundled static homepage asset.
+- Bumped the Android app, Rust core, network user-agent strings, Play upload defaults, and Play metadata package for the 0.3.1 release.
+
 ## 0.3.0 - 2026-07-06
 
 ### Changed

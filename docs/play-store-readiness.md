@@ -9,7 +9,7 @@ This checklist maps HNS DANE Browser to current Google Play release requirements
 | Area | Status | Evidence / Action |
 | --- | --- | --- |
 | Target API level | Ready | `targetSdk = 37`, above the current Google Play requirement of Android 15 / API 35 for new apps and updates. |
-| Android App Bundle | Rebuild required | Package identity changed to `com.denuoweb.hnsdane`; create a new upload AAB such as `dist/play-store/hns-dane-browser-v0.3.0-play-upload-signed.aab`. |
+| Android App Bundle | Rebuild required | Package identity changed to `com.denuoweb.hnsdane`; create a new upload AAB such as `dist/play-store/hns-dane-browser-v0.3.1-play-upload-signed.aab`. |
 | 64-bit native code | Ready | Release bundle includes `arm64-v8a` and `x86_64` `libhns_dane_browser_ffi.so`; no 32-bit ABI is shipped. |
 | Restricted permissions | Ready | Manifest does not request location, contacts, SMS, call logs, camera, microphone, all-files, package visibility, or account permissions. |
 | Foreground service | Play Console declaration required | App uses `dataSync` foreground service for visible HNS header/proof sync. Complete the Foreground service declaration and provide a short demo video. |
@@ -20,7 +20,7 @@ This checklist maps HNS DANE Browser to current Google Play release requirements
 | App category | Recommended: Tools or Communication | Avoid Finance classification; the app is not a wallet, exchange, lender, or financial service. |
 | Target audience | Recommended: 13+ or 18+ | General-purpose browser can access arbitrary third-party web content; not designed for children. |
 | Testing track | Console/API action | New personal Play accounts may need a closed test with at least 12 opted-in testers for 14 continuous days before production access. Use the closed testing track, not internal testing, when satisfying this requirement. |
-| Store assets | Partially ready | Play icon and feature graphic are in `dist/play-store/`; screenshots and content rating questionnaire still need Console work. |
+| Store assets | Partially ready | Play icon, feature graphic, phone screenshots, and listing text are in `dist/play-store/`; content rating questionnaire still needs Console work. |
 
 ## Release Signing
 
@@ -62,10 +62,10 @@ Closed testing upload helper:
 ```sh
 PLAY_TRACK=alpha \
   scripts/play-upload-closed-testing.sh \
-  dist/play-store/hns-dane-browser-v0.3.0-play-upload-signed.aab
+  dist/play-store/hns-dane-browser-v0.3.1-play-upload-signed.aab
 ```
 
-`alpha` is the default Play API track used for the standard closed testing track. If the Play Console app uses a custom closed testing track, set `PLAY_TRACK` to that track ID from Play Console. On 2026-06-29, the local `gcloud` user token could not upload because it lacked the `https://www.googleapis.com/auth/androidpublisher` OAuth scope. Fix that by using a Play-linked service account, setting `PLAY_ACCESS_TOKEN` from a correctly scoped token, or re-authenticating gcloud with the Android Publisher scope.
+`alpha` is the default Play API track used for the standard closed testing track. If the Play Console app uses a custom closed testing track, set `PLAY_TRACK` to that track ID from Play Console. On 2026-07-06, the local `gcloud` user token could not upload because it lacked the `https://www.googleapis.com/auth/androidpublisher` OAuth scope. Fix that by using a Play-linked service account, setting `PLAY_ACCESS_TOKEN` from a correctly scoped token, or re-authenticating gcloud with the Android Publisher scope.
 
 ## Play Console Declarations
 
@@ -112,6 +112,8 @@ This route should be deployed from the Denuo Web site checkout at `web/public/wo
 
 ## Store Listing Draft
 
+The Play Console-ready copy lives under `dist/play-store/metadata/en-US/`.
+
 Short description, 80 characters max:
 
 > Browse HNS names with local proofs, RFC 8484 DoH, DNSSEC, and DANE.
@@ -134,7 +136,7 @@ Full description draft:
 
 - App icon: 512×512 PNG for Play Console: `dist/play-store/hns-dane-browser-play-icon-512.png`.
 - Feature graphic: 1024×500 PNG24, no alpha: `dist/play-store/hns-dane-browser-feature-graphic-1024x500.png`.
-- Phone screenshots: capture first run sync, HNS directory, a successful HNS page, resolver trace, Settings privacy controls.
+- Phone screenshots: capture first run sync, the Denuo Web HNS homepage, a successful HNS page, resolver trace, Settings privacy controls.
 - Tablet screenshots: recommended if tablet distribution remains enabled.
 - Privacy policy URL: required.
 - Content rating questionnaire: answer as a general-purpose browser, not child-directed.

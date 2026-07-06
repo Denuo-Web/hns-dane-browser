@@ -1,0 +1,1 @@
+0.3.1 opens https://denuoweb/homepage by default and removes the bundled static homepage asset. This release keeps local HNS proof verification, RFC 8484 authoritative DoH, DNSSEC, and DANE diagnostics for closed testing.
