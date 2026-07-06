@@ -1,11 +1,12 @@
 use hns_core::dns::{DnsName, RecordType, ResourceRecord, SvcbRecord};
+use num_bigint::BigUint;
+use num_traits::Zero;
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
-use ring::digest::{SHA1_FOR_LEGACY_USE_ONLY, digest as ring_digest};
 use ring::signature::{
-    ECDSA_P384_SHA384_FIXED, ED25519, RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY,
-    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA512, RsaPublicKeyComponents,
-    UnparsedPublicKey,
+    ECDSA_P384_SHA384_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA512,
+    RsaPublicKeyComponents, UnparsedPublicKey,
 };
+use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384};
 use thiserror::Error;
 
@@ -508,9 +509,7 @@ pub fn ds_digest(
     canonical.extend(dnskey.rdata());
 
     match digest_type {
-        DS_DIGEST_SHA1 => Ok(ring_digest(&SHA1_FOR_LEGACY_USE_ONLY, &canonical)
-            .as_ref()
-            .to_vec()),
+        DS_DIGEST_SHA1 => Ok(Sha1::digest(&canonical).to_vec()),
         DS_DIGEST_SHA256 => Ok(Sha256::digest(&canonical).to_vec()),
         DS_DIGEST_SHA384 => Ok(Sha384::digest(&canonical).to_vec()),
         _ => Err(DnssecError::UnsupportedDigest),
@@ -1090,17 +1089,13 @@ pub fn nsec3_hash(
     let mut digest_input = Vec::with_capacity(canonical_name.len() + salt.len());
     digest_input.extend(&canonical_name);
     digest_input.extend(salt);
-    let mut hash = ring_digest(&SHA1_FOR_LEGACY_USE_ONLY, &digest_input)
-        .as_ref()
-        .to_vec();
+    let mut hash = Sha1::digest(&digest_input).to_vec();
 
     for _ in 0..iterations {
         let mut iteration_input = Vec::with_capacity(hash.len() + salt.len());
         iteration_input.extend(&hash);
         iteration_input.extend(salt);
-        hash = ring_digest(&SHA1_FOR_LEGACY_USE_ONLY, &iteration_input)
-            .as_ref()
-            .to_vec();
+        hash = Sha1::digest(&iteration_input).to_vec();
     }
 
     Ok(hash)
@@ -1171,13 +1166,21 @@ fn verify_rsa(
     hash: RsaHash,
 ) -> Result<bool, DnssecError> {
     let (exponent, modulus) = parse_rsa_public_key(&dnskey.public_key)?;
+    let data = signed_data(rrset, rrsig, now)?;
+    if hash == RsaHash::Sha1 {
+        return Ok(verify_rsa_sha1_pkcs1_v15(
+            &exponent,
+            &modulus,
+            &data,
+            &rrsig.signature,
+        ));
+    }
     let public_key = RsaPublicKeyComponents {
         n: &modulus,
         e: &exponent,
     };
-    let data = signed_data(rrset, rrsig, now)?;
     let algorithm = match hash {
-        RsaHash::Sha1 => &RSA_PKCS1_1024_8192_SHA1_FOR_LEGACY_USE_ONLY,
+        RsaHash::Sha1 => unreachable!("RSA/SHA-1 is handled before ring verification"),
         RsaHash::Sha256 => &RSA_PKCS1_2048_8192_SHA256,
         RsaHash::Sha512 => &RSA_PKCS1_2048_8192_SHA512,
     };
@@ -1185,6 +1188,46 @@ fn verify_rsa(
     Ok(public_key
         .verify(algorithm, &data, &rrsig.signature)
         .is_ok())
+}
+
+fn verify_rsa_sha1_pkcs1_v15(
+    exponent: &[u8],
+    modulus: &[u8],
+    data: &[u8],
+    signature: &[u8],
+) -> bool {
+    if exponent.is_empty() || modulus.is_empty() || signature.len() > modulus.len() {
+        return false;
+    }
+    let n = BigUint::from_bytes_be(modulus);
+    let e = BigUint::from_bytes_be(exponent);
+    let s = BigUint::from_bytes_be(signature);
+    if n.is_zero() || e.is_zero() || s >= n {
+        return false;
+    }
+    let recovered = s.modpow(&e, &n);
+    let mut encoded = vec![0u8; modulus.len()];
+    let recovered_bytes = recovered.to_bytes_be();
+    if recovered_bytes.len() > encoded.len() {
+        return false;
+    }
+    let offset = encoded.len() - recovered_bytes.len();
+    encoded[offset..].copy_from_slice(&recovered_bytes);
+
+    let digest = Sha1::digest(data);
+    let mut expected_suffix = Vec::with_capacity(15 + digest.len());
+    expected_suffix.extend([
+        0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14,
+    ]);
+    expected_suffix.extend_from_slice(&digest);
+
+    if encoded.len() < 3 + 8 + 1 + expected_suffix.len() || encoded[0] != 0 || encoded[1] != 1 {
+        return false;
+    }
+    let separator = encoded.len() - expected_suffix.len() - 1;
+    encoded[2..separator].iter().all(|byte| *byte == 0xff)
+        && encoded[separator] == 0
+        && encoded[(separator + 1)..] == expected_suffix[..]
 }
 
 fn parse_rsa_public_key(public_key: &[u8]) -> Result<(Vec<u8>, Vec<u8>), DnssecError> {
@@ -1875,7 +1918,7 @@ mod tests {
     }
 
     #[test]
-    fn verifies_sha1_ds_digest_for_legacy_validation() {
+    fn verifies_sha1_ds_digest_for_compatibility_validation() {
         let owner = DnsName::from_ascii("example").unwrap();
         let dnskey = DnskeyRecord::parse_rdata(&[0x01, 0x00, DNSSEC_PROTOCOL, 0x08, 0xaa]).unwrap();
         let digest = ds_digest(&owner, &dnskey, DS_DIGEST_SHA1).unwrap();
@@ -3408,7 +3451,7 @@ mod tests {
     }
 
     #[test]
-    fn verifies_legacy_rsa_sha1_rrsig_algorithms() {
+    fn verifies_rsa_sha1_rrsig_compatibility_algorithms() {
         for (algorithm, expected_key_tag, signature) in [
             (DNSSEC_ALGORITHM_RSASHA1, 1216, rsa_sha1_signature()),
             (

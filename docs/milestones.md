@@ -43,7 +43,7 @@
 - DNSSEC canonical RDATA name handling for CNAME, NS, SOA, SRV, SVCB/HTTPS, and RRSIG signer names.
 - DNSSEC ECDSA P-256/SHA-256 RRset signature validation.
 - DNSSEC ECDSA P-384/SHA-384 RRset signature validation.
-- DNSSEC legacy RSA/SHA-1, RSA/SHA-256, and RSA/SHA-512 RRset signature validation.
+- DNSSEC RSA/SHA-1 compatibility, RSA/SHA-256, and RSA/SHA-512 RRset signature validation.
 - DNSSEC Ed25519 RRset signature validation.
 - DNSSEC signed-RRset validator composed from DS, DNSKEY, and RRSIG checks.
 - DNSSEC delegated-chain validator composed from authenticated DS and DNSKEY RRsets.

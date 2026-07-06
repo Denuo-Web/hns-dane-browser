@@ -766,7 +766,7 @@ The first serious production release is done when:
 
 ## Android 16 Items To Consider
 
-- Predictive back: implement AndroidX back handling correctly; do not rely on legacy onBackPressed.
+- Predictive back: implement AndroidX back handling correctly; avoid `onBackPressed`.
 - Adaptive layouts: no locked phone-only assumptions; support tablets/foldables.
 - Local network protection: keep the gateway loopback-only, bind to 127.0.0.1, and test future local-network permission behavior.
 - Native build: use AGP 8.5.1+, preferably NDK r28+, and verify .so alignment.

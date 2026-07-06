@@ -29,7 +29,7 @@ The Android WebView shell follows a hardened browser profile derived from Androi
 
 Applied WebView controls:
 
-- JavaScript is enabled for the main browser WebView because general web compatibility requires it, but no JavaScript/native bridge is exposed to untrusted content and legacy default bridge names are removed.
+- JavaScript is enabled for the main browser WebView because general web compatibility requires it, but no JavaScript/native bridge is exposed to untrusted content and default bridge names are removed.
 - Local file access, file-origin cross-access, universal file-origin access, and content-provider access are disabled.
 - Mixed active/passive content is blocked with `WebSettings.MIXED_CONTENT_NEVER_ALLOW`.
 - Safe Browsing is explicitly enabled where supported by the platform WebView.

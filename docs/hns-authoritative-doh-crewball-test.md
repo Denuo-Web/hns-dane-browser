@@ -105,4 +105,4 @@ Test in Strict HNS mode after the update confirms and the tree interval has pass
 - DNSSEC: `secure`
 - TLS/DANE state: SPKI or certificate match from `_443._tcp.crewball. TLSA`
 
-Do not publish legacy `hnsb=1` or `hnsdns=1` TXT data. The browser ignores those removed experiments and resolves only through delegated DNS plus optional RFC 9461-discovered authoritative DoH.
+Omit `hnsb=1` and `hnsdns=1` TXT data. The browser resolves through delegated DNS plus optional RFC 9461-discovered authoritative DoH.

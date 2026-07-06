@@ -4138,7 +4138,7 @@ mod tests {
     }
 
     #[test]
-    fn delegating_resolver_does_not_synthesize_from_legacy_hns_dane_capsule() {
+    fn delegating_resolver_does_not_synthesize_from_hns_dane_capsule_experiment() {
         let root_name = "welcome".to_owned();
         let resolver = DelegatingResolver::new(
             StaticProofProvider {
@@ -5977,7 +5977,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_resource_value_provider_migrates_legacy_anchor_columns() {
+    fn sqlite_resource_value_provider_migrates_previous_anchor_columns() {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(

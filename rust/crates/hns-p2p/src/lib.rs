@@ -1930,8 +1930,8 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_peer_store_clears_legacy_permanent_ban_on_load() {
-        let path = temp_db_path("legacy-permanent-ban");
+    fn sqlite_peer_store_clears_previous_permanent_ban_on_load() {
+        let path = temp_db_path("previous-permanent-ban");
         let address: SocketAddr = "127.0.0.1:12038".parse().unwrap();
 
         {
