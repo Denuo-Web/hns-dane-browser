@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var mainFrameHnsTlsPolicy: HnsPageTlsPolicy? = null
     private var mainFrameHnsResolverPolicy: HnsPageResolverPolicy? = null
     private var mainFrameHnsTraceJson: String? = null
+    private var mainFrameHnsStatusUrl: String? = null
     private var lastSyncSnapshot: HnsSyncSnapshot? = null
     private var syncReceiverRegistered: Boolean = false
     private var activityStarted: Boolean = false
@@ -719,10 +720,7 @@ class MainActivity : ComponentActivity() {
     private fun loadTarget(target: com.handshake.browser.core.BrowserTarget) {
         omnibox.setText(target.url)
         currentTargetKind = target.kind
-        mainFrameHnsStatusCode = null
-        mainFrameHnsTlsPolicy = null
-        mainFrameHnsResolverPolicy = null
-        mainFrameHnsTraceJson = null
+        clearMainFrameHnsStatus()
         activeMainFrameUrl = target.url
         pageIsLoading = true
         pageLoadProgress = 0
@@ -764,7 +762,24 @@ class MainActivity : ComponentActivity() {
         mainFrameHnsTlsPolicy = tlsPolicy
         mainFrameHnsResolverPolicy = resolverPolicy
         mainFrameHnsTraceJson = traceJson
+        mainFrameHnsStatusUrl = activeMainFrameUrl
         refreshSecurityState()
+    }
+
+    private fun clearMainFrameHnsStatus() {
+        mainFrameHnsStatusCode = null
+        mainFrameHnsTlsPolicy = null
+        mainFrameHnsResolverPolicy = null
+        mainFrameHnsTraceJson = null
+        mainFrameHnsStatusUrl = null
+    }
+
+    private fun clearMainFrameHnsStatusUnlessFor(url: String) {
+        val statusUrl = mainFrameHnsStatusUrl
+        if (statusUrl != null && statusUrl.mainFrameMatchKey() == url.mainFrameMatchKey()) {
+            return
+        }
+        clearMainFrameHnsStatus()
     }
 
     private fun refreshSyncProgress() {
@@ -818,10 +833,7 @@ class MainActivity : ComponentActivity() {
             omnibox.setText(url)
             activeMainFrameUrl = url
             currentTargetKind = classifier.classify(url).kind
-            mainFrameHnsStatusCode = null
-            mainFrameHnsTlsPolicy = null
-            mainFrameHnsResolverPolicy = null
-            mainFrameHnsTraceJson = null
+            clearMainFrameHnsStatusUnlessFor(url)
             refreshLoopbackProxyScope()
             refreshSecurityState()
             refreshPageProgress()
@@ -840,10 +852,7 @@ class MainActivity : ComponentActivity() {
             activeMainFrameUrl = requestUrl
             val target = classifier.classify(requestUrl)
             currentTargetKind = target.kind
-            mainFrameHnsStatusCode = null
-            mainFrameHnsTlsPolicy = null
-            mainFrameHnsResolverPolicy = null
-            mainFrameHnsTraceJson = null
+            clearMainFrameHnsStatus()
             refreshLoopbackProxyScope()
             refreshSecurityState()
             return false
