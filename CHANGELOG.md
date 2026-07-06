@@ -6,8 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added an experimental HNS browser TXT capsule path that synthesizes verified A/AAAA, HTTPS, and TLSA answers from explicit `hnsb=1` HNS resource TXT data before delegated DNS.
-- Added resolver trace and Android diagnostics labels for `hns_resource_capsule` answers and malformed capsule failures.
+- Added `hnsdns=1` HNS TXT discovery for RFC 8484 authoritative DoH endpoints on delegated nameservers, used after direct UDP/TCP 53 and validated against the HNS-proven DS chain.
+- Added resolver trace and Android diagnostics labels for authoritative DoH attempts and malformed HNS DoH declarations.
 
 ## 0.2.8 - 2026-07-04
 

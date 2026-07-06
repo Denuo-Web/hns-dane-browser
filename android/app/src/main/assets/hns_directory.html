@@ -250,7 +250,7 @@
           <p class="note">
             Open a native site, then use <strong>☰ → Settings → View diagnostics</strong>,
             <strong>Resolver trace</strong>, or <strong>TLSA / DANE Inspector</strong> to confirm
-            HNS proof, delegated nameserver attempts, DNSSEC, DANE, and DoH fallback behavior.
+            HNS proof, delegated nameserver attempts, authoritative DoH, DNSSEC, DANE, and compatibility fallback behavior.
           </p>
 
           <h3>Verified Direct / DANE Checks</h3>
@@ -258,7 +258,7 @@
             <div class="entry-title">
               <span class="entry-name">Confirm the actual resolution path</span>
             </div>
-            <div class="meta">After opening a site, inspect Resolver trace for HNS proof status, resource records, nameserver address source, A/AAAA answers, TLSA records, DANE decision, and whether WebPKI or DoH compatibility was used.</div>
+            <div class="meta">After opening a site, inspect Resolver trace for HNS proof status, resource records, nameserver address source, A/AAAA answers, TLSA records, DANE decision, and whether WebPKI, authoritative DoH, or compatibility DoH was used.</div>
           </div>
 
           <h3>Delegated HNS Nameserver Checks</h3>
@@ -266,7 +266,7 @@
             <div class="entry-title">
               <span class="entry-name">Check delegated authoritative DNS</span>
             </div>
-            <div class="meta">For names with NS/DS records, confirm the app found usable GLUE/SYNTH or hydrated nameserver addresses, attempted authoritative UDP/TCP 53, and accepted only DNSSEC-secure answers.</div>
+            <div class="meta">For names with NS/DS records, confirm the app found usable GLUE/SYNTH or hydrated nameserver addresses, attempted authoritative UDP/TCP 53, tried any HNS-declared RFC 8484 DoH endpoint, and accepted only DNSSEC-secure answers.</div>
           </div>
 
           <h3>Compatibility / Strict Mode Checks</h3>
@@ -287,8 +287,8 @@
           <div class="entry">
             Common fixes:
             <ul>
-              <li>Direct site: add <code>SYNTH4</code> or <code>GLUE4</code> with a reachable address.</li>
               <li>Delegated site: add <code>NS</code> plus usable <code>GLUE4/GLUE6</code>, then serve authoritative DNS on UDP/TCP 53.</li>
+              <li>Blocked port 53: add <code>TXT "hnsdns=1;ns=ns1.name.;doh=https://ns1.name/dns-query"</code> and serve RFC 8484 DoH from that nameserver host.</li>
               <li>Strict DANE: add HNS <code>DS</code>, DNSSEC-signed zone data, and <code>TLSA</code> for <code>_443._tcp.name.</code></li>
             </ul>
           </div>

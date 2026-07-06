@@ -77,6 +77,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine("Nameserver candidates: ${trace.optJSONArray("nameserverCandidates")?.join(", ") ?: "unknown"}")
             appendLine("Authoritative UDP 53: ${authoritativeDns?.optString("udp53") ?: "unknown"}")
             appendLine("Authoritative TCP 53: ${authoritativeDns?.optString("tcp53") ?: "unknown"}")
+            appendLine("Authoritative DoH: ${authoritativeDns?.optString("doh") ?: "unknown"}")
             appendLine("Resolver attempts: ${dnsAttemptsSummary(trace)}")
             appendLine("DNSSEC: ${trace.optString("dnssec", "unknown")}")
             appendLine("Origin address: ${trace.optString("originAddress", "unknown")}")
@@ -152,6 +153,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
         val authoritativeDns = trace.optJSONObject("authoritativeDns")
         val udp53 = authoritativeDns?.optString("udp53").orEmpty()
         val tcp53 = authoritativeDns?.optString("tcp53").orEmpty()
+        val doh = authoritativeDns?.optString("doh").orEmpty()
         val dnssec = trace.optString("dnssec")
         val fallback = trace.optJSONObject("fallback")
         val nameserverCandidates = trace.optJSONArray("nameserverCandidates")
@@ -162,10 +164,14 @@ class HnsResolverTraceActivity : ComponentActivity() {
                 "Let HNS sync catch up, then retry. The local proof is valid for its historical block, but not current enough to decide whether the name exists now."
             hnsProof == "unavailable" || hnsProof == "unknown" ->
                 "Sync headers/proofs first, then retry. No verified HNS proof was available."
-            trace.optString("resolutionSource") == "hns_resource_capsule" ->
-                "This page used the experimental HNS browser capsule path. Keep the TXT capsule compact and update the TLSA value before rotating the HTTPS key."
             nameserverCandidates == null || nameserverCandidates.length() == 0 ->
-                "Add usable HNS address data: either an HNS browser capsule for a direct site, SYNTH4/SYNTH6 for nameserver referral, or NS plus GLUE4/GLUE6 for a delegated nameserver."
+                "Add usable HNS delegation data: NS plus GLUE4/GLUE6 or SYNTH4/SYNTH6, with an optional hnsdns=1 authoritative DoH endpoint for networks that block port 53."
+            udp53 in setOf("timeout", "transport_error") &&
+                tcp53 in setOf("timeout", "transport_error", "not_attempted") &&
+                doh == "ok" ->
+                "Direct authoritative DNS on port 53 failed, but the HNS-declared authoritative DoH endpoint answered and validated. Keep UDP/TCP 53 reachable where possible."
+            udp53 in setOf("timeout", "transport_error") && tcp53 in setOf("timeout", "transport_error", "not_attempted") && doh.isBlank() ->
+                "Your delegated nameserver candidate did not answer reliably. Ensure authoritative DNS is reachable on UDP/TCP 53 or publish an hnsdns=1 RFC 8484 DoH endpoint in the HNS resource."
             udp53 in setOf("timeout", "transport_error") && tcp53 in setOf("timeout", "transport_error", "not_attempted") ->
                 "Your delegated nameserver candidate did not answer reliably. Ensure authoritative DNS is reachable on UDP 53 and TCP 53."
             dnssec == "bogus" ->
@@ -175,7 +181,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
             originCertificateExpired(trace, tls) ->
                 "Renew the origin HTTPS certificate. The gateway reached an HTTPS origin, but TLS failed because the certificate is past its validity window."
             trace.optString("originAddress") == "missing" ->
-                "Serve A/AAAA for the requested host from delegated DNS, or add an explicit HNS browser capsule for a direct site."
+                "Serve A/AAAA for the requested host from delegated DNS. HNS GLUE/SYNTH data is only used to reach nameservers, not as the origin address."
             fallback?.optBoolean("used", false) == true ->
                 "Compatibility DoH fallback was used. Enable Strict HNS mode to verify whether the site works fully without third-party DoH."
             else ->

@@ -27,7 +27,7 @@ internal object HnsResolutionTraceFormat {
             "trusted_icann_doh" -> "trusted ICANN DoH"
             "icann_dns" -> "ICANN DNS"
             "authoritative_dns" -> "authoritative DNS"
-            "hns_resource_capsule" -> "HNS resource capsule"
+            "authoritative_doh" -> "authoritative DoH"
             "hns_resource" -> "HNS resource"
             "" -> "unknown"
             else -> source.replace('_', ' ')
@@ -125,7 +125,7 @@ internal object HnsTlsaTraceFormat {
             "authoritative_nameserver_invalid_response" -> "authoritative nameserver invalid response"
             "delegated_dnssec_validation_failed" -> "delegated DNSSEC validation failed"
             "hns_resource_invalid" -> "HNS resource invalid"
-            "hns_resource_capsule_invalid" -> "HNS browser capsule invalid"
+            "hns_authoritative_doh_invalid" -> "HNS authoritative DoH invalid"
             "hns_proof_validation_failed" -> "HNS proof validation failed"
             "insecure_resolution" -> "insecure resolver result"
             "origin_address_missing" -> "origin address missing"
