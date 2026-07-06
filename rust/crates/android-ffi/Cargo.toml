@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "hns_browser_ffi"
+name = "hns_dane_browser_ffi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

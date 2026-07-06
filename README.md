@@ -1,6 +1,6 @@
-# Handshake Browser
+# HNS DANE Browser
 
-Android HNS-native browser with a Rust resolver core.
+Handshake-first Android browser with local HNS proofs, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics.
 
 ## Layout
 
@@ -52,14 +52,14 @@ GRADLE="$APK_WORKBENCH/scripts/dev/apkw-gradle.sh"
 "$GRADLE" \
   --project-dir "$PWD/android" \
   connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.class=com.handshake.browser.net.HnsConnectInstrumentationTest
+  -Pandroid.testInstrumentationRunnerArguments.class=com.denuoweb.hnsdane.net.HnsConnectInstrumentationTest
 ```
 
 The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 Debug/demo builds are unsigned beyond the default Android debug key and are intended for testing only. The diagnostics screen identifies Denuo Web, LLC as publisher, shows the build channel and license, and states that donations are optional and unlock no app features.
 
-The APK build runs `scripts/build-rust-android.sh` through Gradle, builds `android-ffi` with `cargo-ndk`, strips the generated `.so` files with the APK Workbench NDK `llvm-objcopy`, and packages them under `lib/<abi>/libhns_browser_ffi.so`.
+The APK build runs `scripts/build-rust-android.sh` through Gradle, builds `android-ffi` with `cargo-ndk`, strips the generated `.so` files with the APK Workbench NDK `llvm-objcopy`, and packages them under `lib/<abi>/libhns_dane_browser_ffi.so`.
 
 ## Support
 
@@ -71,4 +71,4 @@ Donations are optional and do not unlock any app features.
 
 This repository is source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use, study, modification, and redistribution are allowed under the license. Commercial use requires separate written permission from Denuo Web, LLC.
 
-Source code: https://github.com/denuoweb/handshake-browser-android
+Source code: https://github.com/Denuo-Web/hns-dane-browser-android

@@ -1,6 +1,6 @@
 # Production Readiness Audit
 
-Last audited: 2026-06-30
+Last audited: 2026-07-06
 
 This audit treats the app as a Play Store closed-testing candidate and checks the shipped Android surface from the outside in: manifest, WebView behavior, release build configuration, network/privacy declarations, diagnostic UI, and release automation.
 
@@ -31,7 +31,7 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 
 ## Remaining Non-Code Work
 
-- Upload `dist/play-store/hns-browser-v0.2.8-play-upload-signed.aab` to the closed testing track in Play Console.
+- Build and upload a fresh `dist/play-store/hns-dane-browser-v0.2.8-play-upload-signed.aab` to the closed testing track in Play Console for package `com.denuoweb.hnsdane`.
 - Complete the Foreground service declaration with the short sync demo video.
 - Complete Data safety, App access, Content rating, Target audience, Ads, and Privacy policy declarations using `docs/play-store-readiness.md`.
 - Add at least 12 opted-in testers and keep closed testing active for the required period if Google applies the new personal-account production-access rule.

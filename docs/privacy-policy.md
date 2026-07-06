@@ -1,12 +1,12 @@
-# HNS Browser Privacy Policy
+# HNS DANE Browser Privacy Policy
 
-Last updated: 2026-06-29
+Last updated: 2026-07-06
 
-HNS Browser is published by Denuo Web, LLC. For privacy questions or deletion requests, use the project issue tracker at <https://github.com/denuoweb/handshake-browser-android/issues> or the contact method listed by the developer in Google Play Console.
+HNS DANE Browser is published by Denuo Web, LLC. For privacy questions or deletion requests, use the project issue tracker at <https://github.com/Denuo-Web/hns-dane-browser-android/issues> or the contact method listed by the developer in Google Play Console.
 
 ## Summary
 
-HNS Browser is a browser for Handshake (HNS), DNSSEC, and DANE testing. The app does not include advertising SDKs, analytics SDKs, developer-operated accounts, or paid feature unlocks. Donations are optional and do not unlock app functionality.
+HNS DANE Browser is a Handshake-first browser for local HNS proofs, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics. The app does not include advertising SDKs, analytics SDKs, developer-operated accounts, or paid feature unlocks. Donations are optional and do not unlock app functionality.
 
 The app stores browser data locally on the device and sends network requests needed to load sites and keep HNS resolution data current.
 
@@ -24,11 +24,12 @@ This local data is used only to provide browser functionality, diagnostics, and 
 
 ## Network Requests
 
-To provide browser functionality, HNS Browser may connect to:
+To provide browser functionality, HNS DANE Browser may connect to:
 
 - Websites and web services that you choose to open.
 - Handshake peers and DNS seed hosts for header sync, peer discovery, and proof retrieval.
 - Authoritative DNS nameservers for delegated HNS names.
+- HNS-declared RFC 8484 authoritative DoH endpoints for delegated HNS names when direct DNS transport is unavailable or invalid.
 - The configured HNS DNS-over-HTTPS compatibility resolver when compatibility mode is enabled and local or direct delegated resolution fails.
 - Android DownloadManager destinations when you choose to download a file.
 
@@ -38,21 +39,21 @@ HTTPS, DNSSEC, and DANE are used where applicable. If you intentionally open a c
 
 ## Cookies and Website Data
 
-Websites may set cookies or use WebView storage. HNS Browser provides Settings controls to block third-party cookies and delete cookies. Websites are responsible for their own privacy practices.
+Websites may set cookies or use WebView storage. HNS DANE Browser provides Settings controls to block third-party cookies and delete cookies. Websites are responsible for their own privacy practices.
 
 ## Data Sharing
 
-Denuo Web does not sell personal or sensitive user data. HNS Browser shares data only as necessary for user-requested browser functionality, such as loading a website, syncing HNS data, resolving a name, or downloading a file.
+Denuo Web does not sell personal or sensitive user data. HNS DANE Browser shares data only as necessary for user-requested browser functionality, such as loading a website, syncing HNS data, resolving a name, or downloading a file.
 
 ## Retention and Deletion
 
 Local browser data remains on the device until you clear it or uninstall the app. The app provides Settings controls for clearing cookies, browsing history, download records, and the HNS resolver cache. Android system settings can also clear all app storage.
 
-HNS Browser does not create developer-operated user accounts, so there is no app account deletion flow.
+HNS DANE Browser does not create developer-operated user accounts, so there is no app account deletion flow.
 
 ## Children
 
-HNS Browser is not directed to children. Because it is a general-purpose browser, websites opened by users may contain third-party content outside Denuo Web's control.
+HNS DANE Browser is not directed to children. Because it is a general-purpose browser, websites opened by users may contain third-party content outside Denuo Web's control.
 
 ## Changes
 

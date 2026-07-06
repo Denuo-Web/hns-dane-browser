@@ -1949,7 +1949,11 @@ fn parse_doh_uri_template(value: &str) -> Result<(String, u16, String), Resolver
         .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
         .and_then(|_| trimmed.get(8..))
         .ok_or(ResolverError::InvalidAuthoritativeDoh)?;
-    if rest.contains('#') || rest.bytes().any(|byte| byte.is_ascii_control() || byte == b' ') {
+    if rest.contains('#')
+        || rest
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ')
+    {
         return Err(ResolverError::InvalidAuthoritativeDoh);
     }
     let (authority, raw_path) = rest
@@ -2209,7 +2213,8 @@ where
         });
     }
 
-    let dnskey_response = dns_query_doh(transport, endpoint, &delegation.owner, RecordType::Dnskey)?;
+    let dnskey_response =
+        dns_query_doh(transport, endpoint, &delegation.owner, RecordType::Dnskey)?;
     let dnskey_rrset = records_for(
         &dnskey_response.answers,
         &delegation.owner,
@@ -2256,8 +2261,7 @@ where
         &target_rrset,
         &target_rrsig_rrset,
         qtype,
-    )
-    {
+    ) {
         return resolve_secure_inline_child_answer(
             transport,
             verifier,
@@ -4275,7 +4279,7 @@ mod tests {
     }
 
     #[test]
-    fn delegating_resolver_does_not_synthesize_from_legacy_hns_browser_capsule() {
+    fn delegating_resolver_does_not_synthesize_from_legacy_hns_dane_capsule() {
         let root_name = "welcome".to_owned();
         let resolver = DelegatingResolver::new(
             StaticProofProvider {

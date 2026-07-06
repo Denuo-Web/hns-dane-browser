@@ -1,6 +1,6 @@
-# Android HNS Browser Reference Index
+# Android HNS DANE Browser Reference Index
 
-Paste-ready research and implementation checklist for an Android WebView-based Handshake browser with HNS resolution, DNSSEC, DANE/TLSA, and optional local proxy/VPN modes.
+Paste-ready research and implementation checklist for an Android WebView-based Handshake-first browser with HNS resolution, DNSSEC, DANE/TLSA, RFC 8484 DoH transport, and optional local proxy/VPN modes.
 
 > **Version note:** before coding, re-check every moving package/API version listed below.
 
@@ -182,7 +182,7 @@ Required for the local gateway between WebView and origin transports.
 
 ## Encrypted DNS / Resolver Transports
 
-Optional, but relevant for ICANN fallback, private DNS, and future resolver modes.
+Optional, but relevant for ICANN fallback, Android Private DNS behavior, and future resolver modes.
 
 - [RFC 7858, DNS over TLS](https://www.rfc-editor.org/info/rfc7858)
 - [RFC 8484, DNS over HTTPS](https://www.rfc-editor.org/info/rfc8484)

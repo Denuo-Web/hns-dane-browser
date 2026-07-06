@@ -163,17 +163,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hns-browser-fuzz"
-version = "0.0.0"
-dependencies = [
- "hns-core",
- "hns-dane",
- "hns-p2p",
- "hns-urkel",
- "libfuzzer-sys",
-]
-
-[[package]]
 name = "hns-core"
 version = "0.2.8"
 dependencies = [
@@ -192,6 +181,17 @@ version = "0.2.8"
 dependencies = [
  "sha2",
  "thiserror",
+]
+
+[[package]]
+name = "hns-dane-browser-fuzz"
+version = "0.0.0"
+dependencies = [
+ "hns-core",
+ "hns-dane",
+ "hns-p2p",
+ "hns-urkel",
+ "libfuzzer-sys",
 ]
 
 [[package]]

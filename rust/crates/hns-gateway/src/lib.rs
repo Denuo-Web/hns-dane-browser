@@ -295,7 +295,7 @@ where
         &self,
         request: &ResolutionRequest,
     ) -> Result<ResolvedTlsaRecords, GatewayError> {
-        let answer = self.resolver.resolve(&request)?;
+        let answer = self.resolver.resolve(request)?;
         let records = tlsa_records(&answer.records, &request.qname)?;
         if self.config.require_secure_resolution && !answer.secure && !records.is_empty() {
             return Err(GatewayError::InsecureResolution);
@@ -602,7 +602,7 @@ fn txt_rdata_to_string(rdata: &[u8]) -> Result<String, GatewayError> {
 }
 
 fn hex_decode(input: &str) -> Result<Vec<u8>, GatewayError> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err(GatewayError::InvalidTlsaShadow);
     }
 

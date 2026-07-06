@@ -1161,11 +1161,11 @@ fn doh_answer_from_body(
 }
 
 pub fn core_version() -> &'static str {
-    "hns-browser-rust-core/0.2.8"
+    "hns-dane-browser-rust-core/0.2.8"
 }
 
 pub fn diagnostics_json() -> String {
-    r#"{"core":"hns-browser-rust-core","version":"0.1.5","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-authoritative-doh-rfc8484","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","android-hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-parallel-peer-probing","sync-ranged-peer-rotation","sync-proof-scheduler","android-native-sync-once","android-sync-status","android-sync-outcome-status","android-sync-progress-heights","android-sync-high-batch-catchup","android-clear-resolver-cache","android-persistent-gateway-resolver","android-gateway-live-proof-fetch","android-gateway-header-forwarding","android-gateway-range-forwarding","android-gateway-body-forwarding","android-gateway-file-body-stream","android-webview-hns-intercept","android-service-worker-hns-intercept","android-hns-redirect-follow","android-actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","android-proxy-gateway-hook","android-random-loopback-proxy-port","android-local-hns-connect-certs","hns-websocket-native-tunnel","http-origin-transport","http-origin-connection-pooling","http2-origin-transport","http3-origin-transport","http-origin-response-framing","https-rustls-transport","https-tls-session-resumption","https-alt-svc-promotion","dane-tls-policy"],"securityDefault":"fail-closed"}"#
+    r#"{"core":"hns-dane-browser-rust-core","version":"0.1.5","features":["header-hash","header-pow-validation","header-mainnet-difficulty-retarget","header-canonical-height-index","hns-name-hash","hns-dotted-root-label","urkel-proof-verification","urkel-proof-value-handoff","hns-name-state-resource-extraction","hns-resource-decoder","hns-authoritative-doh-rfc8484","hns-resource-provider-adapter","hns-memory-resource-provider","hns-sqlite-resource-provider","hns-negative-cache","hns-ttl-cache-lru","hns-resource-cache-stats","hns-resource-cache-eviction","hns-resource-cache-cap-enforcement","hns-resource-cache-chain-anchors","hns-resource-cache-reorg-invalidation","hns-resource-cache-current-tip","hns-proof-backed-resolver-boundary","hns-delegating-resolver-boundary","hns-proof-backed-ns-address-hydration","hns-authoritative-dnssec-delegated-resolver","android-hns-doh-compat-resolver","dns-wire","dns-svcb-https","dnssec-ds-dnskey-link","dnssec-ds-sha1","dnssec-ds-sha384","dnssec-rrsig-signed-data","dnssec-canonical-name-rdata","dnssec-ecdsa-p256-verify","dnssec-ecdsa-p384-verify","dnssec-rsa-sha1-verify","dnssec-rsa-sha256-sha512-verify","dnssec-ed25519-verify","dnssec-signed-rrset-validation","dnssec-delegated-chain-validation","dnssec-delegated-no-data-validation","dnssec-delegated-name-error-validation","dnssec-delegated-cname-chain","dnssec-child-referral-validation","dnssec-child-cname-chain","dnssec-child-no-data-validation","dnssec-child-name-error-validation","dnssec-nsec-denial-validation","dnssec-nsec3-denial-validation","dnssec-nxdomain-name-error-validation","dane-policy","dane-certificate-chain-policy","x509-spki-extraction","p2p-codec","p2p-tcp-peer-connection","p2p-static-peer-source","p2p-dns-seed-source","p2p-getaddr-peer-discovery","p2p-discovery-rotation","p2p-peer-diversity","p2p-sqlite-peer-store","sync-coordinator","sync-header-runner","sync-multi-batch-header-runner","sync-parallel-peer-probing","sync-ranged-peer-rotation","sync-proof-scheduler","android-native-sync-once","android-sync-status","android-sync-outcome-status","android-sync-progress-heights","android-sync-high-batch-catchup","android-clear-resolver-cache","android-persistent-gateway-resolver","android-gateway-live-proof-fetch","android-gateway-header-forwarding","android-gateway-range-forwarding","android-gateway-body-forwarding","android-gateway-file-body-stream","android-webview-hns-intercept","android-service-worker-hns-intercept","android-hns-redirect-follow","android-actionable-hns-errors","hns-name-not-found-error","gateway-policy","gateway-hns-address-required","gateway-tlsa-service-scope","gateway-delegated-origin-address-lookup","gateway-origin-address-query","gateway-https-service-query","gateway-svcb-alpn-policy","gateway-actionable-nameserver-errors","gateway-cname-address-routing","android-proxy-gateway-hook","android-random-loopback-proxy-port","android-local-hns-connect-certs","hns-websocket-native-tunnel","http-origin-transport","http-origin-connection-pooling","http2-origin-transport","http3-origin-transport","http-origin-response-framing","https-rustls-transport","https-tls-session-resumption","https-alt-svc-promotion","dane-tls-policy"],"securityDefault":"fail-closed"}"#
     .replace("\"version\":\"0.1.5\"", "\"version\":\"0.2.8\"")
 }
 
@@ -1704,10 +1704,7 @@ fn android_gateway_resolver(
         GatewayResolutionMode::Strict => {
             let primary = DelegatingResolver::new(
                 GatewayProofProvider::new(base, values),
-                AuthoritativeDnssecResolver::new(
-                    authoritative_dns_transport,
-                    SystemDnssecVerifier,
-                ),
+                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier),
             );
             AndroidGatewayResolver::Strict(CompositeResolver::new(
                 primary,
@@ -1715,10 +1712,8 @@ fn android_gateway_resolver(
             ))
         }
         GatewayResolutionMode::Compatibility => {
-            let direct = AuthoritativeDnssecResolver::new(
-                authoritative_dns_transport,
-                SystemDnssecVerifier,
-            );
+            let direct =
+                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier);
             let doh = AuthoritativeDnssecResolver::new(
                 HnsDohDnsTransport::new(doh_endpoint.clone(), dns_trace.clone()),
                 SystemDnssecVerifier,
@@ -2053,7 +2048,9 @@ fn resolution_source_name(
         return "unknown";
     }
 
-    if dns_events.iter().any(|event| event.protocol == "authoritative_doh" && event.status == "ok")
+    if dns_events
+        .iter()
+        .any(|event| event.protocol == "authoritative_doh" && event.status == "ok")
     {
         return "authoritative_doh";
     }
@@ -3993,7 +3990,7 @@ fn json_escape(value: &str) -> String {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeVersion(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeVersion(
     env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jstring {
@@ -4003,7 +4000,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeVersion
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeGatewayHttpResponse(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeGatewayHttpResponse(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4035,7 +4032,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeGateway
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeGatewayHttpResponseBodyToFile(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeGatewayHttpResponseBodyToFile(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4069,7 +4066,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeGateway
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeGatewayHttpUpgradeTunnel(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeGatewayHttpUpgradeTunnel(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4277,7 +4274,7 @@ fn jni_gateway_http_upgrade_tunnel(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeDiagnostics(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeDiagnostics(
     env: JNIEnv<'_>,
     _class: JClass<'_>,
 ) -> jstring {
@@ -4287,7 +4284,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeDiagnos
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeSyncOnce(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeSyncOnce(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4304,7 +4301,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeSyncOnc
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeSyncStatus(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeSyncStatus(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4321,7 +4318,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeSyncSta
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeClearResolverCache(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeClearResolverCache(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4338,7 +4335,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeClearRe
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeHnsProofDetails(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeHnsProofDetails(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
@@ -4357,7 +4354,7 @@ pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeHnsProo
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_handshake_browser_net_NativeBridge_nativeLocalTlsCertificate(
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeLocalTlsCertificate(
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     host: JString<'_>,
@@ -4390,7 +4387,7 @@ mod tests {
 
     #[test]
     fn version_is_stable() {
-        assert_eq!(core_version(), "hns-browser-rust-core/0.2.8");
+        assert_eq!(core_version(), "hns-dane-browser-rust-core/0.2.8");
     }
 
     #[test]
@@ -5123,7 +5120,9 @@ mod tests {
         );
 
         assert!(trace.contains(r#""resolutionSource":"authoritative_doh""#));
-        assert!(trace.contains(r#""authoritativeDns":{"udp53":"not_attempted","tcp53":"not_attempted","doh":"ok"}"#));
+        assert!(trace.contains(
+            r#""authoritativeDns":{"udp53":"not_attempted","tcp53":"not_attempted","doh":"ok"}"#
+        ));
     }
 
     #[test]

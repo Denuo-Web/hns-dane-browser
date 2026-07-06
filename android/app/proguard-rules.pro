@@ -1,1 +1,1 @@
--keep class com.handshake.browser.net.NativeBridge { *; }
+-keep class com.denuoweb.hnsdane.net.NativeBridge { *; }

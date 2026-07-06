@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">HNS Browser</string>
+    <string name="app_name">HNS DANE</string>
     <string name="omnibox_hint">Search or enter HNS name</string>
     <string name="security_syncing">Syncing</string>
     <string name="security_loading">Loading</string>
@@ -32,8 +32,8 @@
     <string name="toast_webview_renderer_restarted">WebView renderer was restarted</string>
     <string name="toast_download_queued">Download queued: %1$s</string>
     <string name="toast_download_not_supported">Download not supported: %1$s</string>
-    <string name="sync_notification_channel">Handshake sync</string>
-    <string name="sync_notification_title">Handshake sync active</string>
+    <string name="sync_notification_channel">HNS sync</string>
+    <string name="sync_notification_title">HNS sync active</string>
     <string name="sync_notification_starting">Starting header and proof sync</string>
     <string name="sync_notification_running">Keeping HNS proofs current</string>
     <string name="sync_notification_error">Sync needs network or peer recovery</string>

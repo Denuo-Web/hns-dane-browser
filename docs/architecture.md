@@ -33,7 +33,7 @@ Android UI / Browser Shell
 ## Android Modules
 
 - `MainActivity`: WebView browser shell with custom omnibox, left-side security status, shared HNS host policy, live-polled first-page sync progress bar and target stats, a separate WebView loading bar, hamburger-menu back/forward/refresh/settings actions, Service Worker HNS interception setup, security state, and navigation controls.
-- `HnsBrowserApplication`: process-level WebView startup initializer using AndroidX WebKit async startup so WebView work begins before the browser shell constructs its first `WebView`.
+- `HnsDaneApplication`: process-level WebView startup initializer using AndroidX WebKit async startup so WebView work begins before the browser shell constructs its first `WebView`.
 - `BrowserWebViewHardening`: shared WebView settings profile for the browser shell, including local-file isolation, mixed-content blocking, Safe Browsing, WebAuthn browser support when the installed WebView supports it, speculative-loading disablement, and removal of legacy JavaScript bridge names.
 - `SettingsActivity`: settings dashboard linking to diagnostics, cookie options, legal/user-agreement content, native resolver-cache clearing, and donation links.
 - `CookieSettingsActivity`: cookie preferences with persisted third-party cookie blocking and delete-cookies action.
@@ -49,7 +49,7 @@ Android UI / Browser Shell
 - `LoopbackProxyServer`: app-owned randomized-port loopback HTTP/CONNECT proxy for WebView traffic. It forwards normal ICANN HTTP, preserves normal ICANN HTTP Upgrade tunnels, shares the omnibox reserved-name HNS host policy, rejects unsupported transfer-encoded or ambiguous-length requests before origin/native routing, routes HNS HTTP requests with bounded headers and bodies through the native persistent-cache gateway path, routes HNS WebSocket/HTTP Upgrade requests through the native stream tunnel, tunnels normal ICANN CONNECT traffic, and terminates HNS CONNECT locally with per-host native self-signed certificates whose fingerprints must be pinned before WebView may proceed past the expected local certificate error.
 - `NativeBridge`: JNI/FFI load boundary for the Rust shared library.
 
-Android builds are compiled through APK Workbench on this ARM64 host so Gradle receives the managed SDK/NDK, page-size profile, and ARM64 `aapt2` override. Gradle also invokes `scripts/build-rust-android.sh` to cross-compile and package `libhns_browser_ffi.so` for `arm64-v8a` and `x86_64`.
+Android builds are compiled through APK Workbench on this ARM64 host so Gradle receives the managed SDK/NDK, page-size profile, and ARM64 `aapt2` override. Gradle also invokes `scripts/build-rust-android.sh` to cross-compile and package `libhns_dane_browser_ffi.so` for `arm64-v8a` and `x86_64`.
 
 ## HNS Resolution Currentness
 

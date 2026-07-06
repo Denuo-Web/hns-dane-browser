@@ -17,6 +17,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+find "$OUT_DIR" -type f -name '*.so' -delete
 
 ARGS=(
   ndk

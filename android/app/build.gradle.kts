@@ -4,10 +4,10 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-val playUploadStoreFile = providers.environmentVariable("HNS_BROWSER_UPLOAD_STORE_FILE").orNull
-val playUploadStorePassword = providers.environmentVariable("HNS_BROWSER_UPLOAD_STORE_PASSWORD").orNull
-val playUploadKeyAlias = providers.environmentVariable("HNS_BROWSER_UPLOAD_KEY_ALIAS").orNull
-val playUploadKeyPassword = providers.environmentVariable("HNS_BROWSER_UPLOAD_KEY_PASSWORD").orNull
+val playUploadStoreFile = providers.environmentVariable("HNS_DANE_BROWSER_UPLOAD_STORE_FILE").orNull
+val playUploadStorePassword = providers.environmentVariable("HNS_DANE_BROWSER_UPLOAD_STORE_PASSWORD").orNull
+val playUploadKeyAlias = providers.environmentVariable("HNS_DANE_BROWSER_UPLOAD_KEY_ALIAS").orNull
+val playUploadKeyPassword = providers.environmentVariable("HNS_DANE_BROWSER_UPLOAD_KEY_PASSWORD").orNull
 val playSigningConfigured = listOf(
     playUploadStoreFile,
     playUploadStorePassword,
@@ -28,6 +28,7 @@ val buildRustAndroid = tasks.register<Exec>("buildRustAndroid") {
     environment("ANDROID_NDK_ROOT", System.getenv("ANDROID_NDK_ROOT") ?: System.getenv("ANDROID_NDK_HOME") ?: "")
 
     inputs.files(
+        script,
         fileTree(rootDir.resolve("rust/crates")) {
             include("**/*.rs")
             include("**/*.toml")
@@ -39,11 +40,11 @@ val buildRustAndroid = tasks.register<Exec>("buildRustAndroid") {
 }
 
 android {
-    namespace = "com.handshake.browser"
+    namespace = "com.denuoweb.hnsdane"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.handshake.browser"
+        applicationId = "com.denuoweb.hnsdane"
         minSdk = 34
         targetSdk = 37
         versionCode = 19
@@ -111,9 +112,9 @@ tasks.register("verifyPlayReleaseBundle") {
 
     doLast {
         check(playSigningConfigured) {
-            "Play upload signing is not configured. Set HNS_BROWSER_UPLOAD_STORE_FILE, " +
-                "HNS_BROWSER_UPLOAD_STORE_PASSWORD, HNS_BROWSER_UPLOAD_KEY_ALIAS, and " +
-                "HNS_BROWSER_UPLOAD_KEY_PASSWORD before uploading to Play Console."
+            "Play upload signing is not configured. Set HNS_DANE_BROWSER_UPLOAD_STORE_FILE, " +
+                "HNS_DANE_BROWSER_UPLOAD_STORE_PASSWORD, HNS_DANE_BROWSER_UPLOAD_KEY_ALIAS, and " +
+                "HNS_DANE_BROWSER_UPLOAD_KEY_PASSWORD before uploading to Play Console."
         }
 
         val bundle = layout.buildDirectory.file("outputs/bundle/release/app-release.aab").get().asFile
@@ -134,8 +135,8 @@ tasks.register("verifyPlayReleaseBundle") {
                 .toList()
         }
         val requiredLibraries = setOf(
-            "base/lib/arm64-v8a/libhns_browser_ffi.so",
-            "base/lib/x86_64/libhns_browser_ffi.so",
+            "base/lib/arm64-v8a/libhns_dane_browser_ffi.so",
+            "base/lib/x86_64/libhns_dane_browser_ffi.so",
         )
         check(nativeLibraries.containsAll(requiredLibraries)) {
             "Release app bundle is missing required 64-bit native libraries. Found: $nativeLibraries"
