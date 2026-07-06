@@ -4,10 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.2.9 - 2026-07-06
+
 ### Added
 
 - Added `hnsdns=1` HNS TXT discovery for RFC 8484 authoritative DoH endpoints on delegated nameservers, used after direct UDP/TCP 53 and validated against the HNS-proven DS chain.
 - Added resolver trace and Android diagnostics labels for authoritative DoH attempts and malformed HNS DoH declarations.
+
+### Changed
+
+- Rebranded the unreleased Android app to HNS DANE Browser with launcher label HNS DANE, package ID `com.denuoweb.hnsdane`, and GitHub package references under `Denuo-Web/hns-dane-browser-android`.
+- Replaced the launcher, Play icon, feature graphic, and in-app brand assets with the centered HNS DANE mark.
 
 ## 0.2.8 - 2026-07-04
 

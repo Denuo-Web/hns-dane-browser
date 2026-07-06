@@ -38,6 +38,7 @@ credentials*.json
 *.aab
 *.apks
 *.idsig
+dist/play-store/*-mapping.zip
 captures/
 .externalNativeBuild/
 .cxx/
