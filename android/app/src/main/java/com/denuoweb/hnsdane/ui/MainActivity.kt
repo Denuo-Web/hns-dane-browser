@@ -153,7 +153,6 @@ class MainActivity : ComponentActivity() {
             allowProxyFallbackForBodyRequests = { proxyAvailable },
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
-            reportAllHnsStatuses = true,
             onMainFrameHnsStatus = { statusCode, tlsPolicy, resolverPolicy, traceJson ->
                 runOnUiThread {
                     if (mainFrameHnsStatusCode == null) {
@@ -188,9 +187,8 @@ class MainActivity : ComponentActivity() {
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             textSize = 13f
-            minWidth = dp(88)
-            maxWidth = dp(132)
-            setPadding(18, 0, 18, 0)
+            minHeight = dp(TOOLBAR_CONTROL_HEIGHT_DP)
+            setPadding(dp(8), 0, dp(8), 0)
             setTextColor(Color.rgb(28, 71, 75))
             text = getString(R.string.security_syncing)
             contentDescription = getString(R.string.security_status_content_description)
@@ -236,8 +234,8 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(8, 0, 8, 0)
             addView(securityLabel, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(SECURITY_LABEL_WIDTH_DP),
+                dp(TOOLBAR_CONTROL_HEIGHT_DP),
             ))
             addView(omnibox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(menuButton())
@@ -1141,6 +1139,8 @@ class MainActivity : ComponentActivity() {
         private const val SYNC_PROGRESS_MAX = 1000
         private const val PAGE_PROGRESS_MAX = 100
         private const val SYNC_STATUS_POLL_MS = 2_000L
+        private const val SECURITY_LABEL_WIDTH_DP = 136
+        private const val TOOLBAR_CONTROL_HEIGHT_DP = 48
         private const val REQUEST_NOTIFICATIONS = 1002
         private const val PRIVACY_PROMPTS_PREFS = "privacy_prompts"
         private const val KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN = "notification_permission_prompt_shown"

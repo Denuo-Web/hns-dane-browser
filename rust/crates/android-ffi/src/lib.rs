@@ -526,15 +526,20 @@ struct DnsTraceEvent {
     error: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct AndroidAuthoritativeDnsTransport {
     direct: UdpTcpDnsTransport,
+    doh_http: Arc<TcpHttpTransport>,
     trace: DnsTraceRecorder,
 }
 
 impl AndroidAuthoritativeDnsTransport {
     fn new(direct: UdpTcpDnsTransport, trace: DnsTraceRecorder) -> Self {
-        Self { direct, trace }
+        Self {
+            direct,
+            doh_http: Arc::new(TcpHttpTransport::default()),
+            trace,
+        }
     }
 }
 
@@ -569,7 +574,7 @@ impl DnsTransport for AndroidAuthoritativeDnsTransport {
         query: &[u8],
     ) -> Result<Vec<u8>, ResolverError> {
         let started = Instant::now();
-        let response = fetch_authoritative_doh_message(endpoint, query.to_vec());
+        let response = fetch_authoritative_doh_message(&self.doh_http, endpoint, query.to_vec());
         self.trace.push(doh_trace_event(
             "authoritative_doh",
             authoritative_doh_endpoint_display(endpoint),
@@ -1022,10 +1027,11 @@ fn fetch_doh_message(
 }
 
 fn fetch_authoritative_doh_message(
+    http: &TcpHttpTransport,
     endpoint: &AuthoritativeDohEndpoint,
     body: Vec<u8>,
 ) -> Result<OriginResponse, TransportError> {
-    TcpHttpTransport::default().fetch(&OriginRequest {
+    http.fetch(&OriginRequest {
         method: "POST".to_owned(),
         scheme: "https".to_owned(),
         host: endpoint.host.clone(),

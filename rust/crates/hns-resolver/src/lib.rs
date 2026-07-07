@@ -196,6 +196,7 @@ pub struct AuthoritativeDnssecResolver<T = UdpTcpDnsTransport, V = SystemDnssecV
     transport: T,
     verifier: V,
     prefer_authoritative_doh: bool,
+    authoritative_doh_endpoint_cache: Mutex<HashMap<String, Vec<AuthoritativeDohEndpoint>>>,
 }
 
 pub trait DnsTransport {
@@ -893,6 +894,7 @@ impl<T, V> AuthoritativeDnssecResolver<T, V> {
             transport,
             verifier,
             prefer_authoritative_doh: false,
+            authoritative_doh_endpoint_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -903,6 +905,30 @@ impl<T, V> AuthoritativeDnssecResolver<T, V> {
 
     pub fn into_parts(self) -> (T, V) {
         (self.transport, self.verifier)
+    }
+
+    fn authoritative_doh_endpoints(
+        &self,
+        delegation: &HnsDelegation,
+    ) -> Result<Vec<AuthoritativeDohEndpoint>, ResolverError>
+    where
+        T: DnsTransport,
+    {
+        let cache_key = authoritative_doh_cache_key(delegation);
+        if let Some(cached) = self
+            .authoritative_doh_endpoint_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&cache_key).cloned())
+        {
+            return Ok(cached);
+        }
+
+        let endpoints = authoritative_doh_endpoints(&self.transport, delegation)?;
+        if let Ok(mut cache) = self.authoritative_doh_endpoint_cache.lock() {
+            cache.insert(cache_key, endpoints.clone());
+        }
+        Ok(endpoints)
     }
 }
 
@@ -937,7 +963,7 @@ where
         let ds_rrset = records_for(&delegation.records, &delegation.owner, RecordType::Ds);
         let mut last_error = None;
         if self.prefer_authoritative_doh {
-            match authoritative_doh_endpoints(&self.transport, delegation) {
+            match self.authoritative_doh_endpoints(delegation) {
                 Ok(endpoints) => {
                     for endpoint in endpoints {
                         match resolve_delegated_from_doh_endpoint(
@@ -974,7 +1000,7 @@ where
         }
 
         if !self.prefer_authoritative_doh {
-            for endpoint in authoritative_doh_endpoints(&self.transport, delegation)? {
+            for endpoint in self.authoritative_doh_endpoints(delegation)? {
                 match resolve_delegated_from_doh_endpoint(
                     &self.transport,
                     &self.verifier,
@@ -1853,6 +1879,17 @@ fn authoritative_doh_endpoints<T: DnsTransport>(
     }
 
     Ok(endpoints)
+}
+
+fn authoritative_doh_cache_key(delegation: &HnsDelegation) -> String {
+    let servers = nameserver_ip_addresses(delegation)
+        .into_iter()
+        .map(|(ns, address)| format!("{ns}@{address}"))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}|{}", delegation.owner, servers)
 }
 
 fn dns_service_binding_name(ns: &DnsName) -> Result<DnsName, ResolverError> {
@@ -4382,8 +4419,18 @@ mod tests {
                 &delegation,
             )
             .unwrap();
+        let second_answer = resolver
+            .resolve_delegated(
+                &ResolutionRequest {
+                    qname: "welcome".to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                &delegation,
+            )
+            .unwrap();
 
         assert!(answer.secure);
+        assert!(second_answer.secure);
         assert_eq!(
             *requests.lock().unwrap(),
             vec![
@@ -4392,6 +4439,18 @@ mod tests {
                     "_dns.ns1.welcome".to_owned(),
                     RecordType::Svcb.code(),
                     false,
+                ),
+                (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 443),
+                    "welcome".to_owned(),
+                    RecordType::A.code(),
+                    true,
+                ),
+                (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 443),
+                    "welcome".to_owned(),
+                    RecordType::Dnskey.code(),
+                    true,
                 ),
                 (
                     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 443),
