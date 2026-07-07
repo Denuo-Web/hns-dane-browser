@@ -42,6 +42,8 @@ interface HnsGatewayBridge {
 
 interface HnsSyncBridge {
     fun syncOnce(dataDir: String): String
+
+    fun syncOnce(dataDir: String, network: String): String = syncOnce(dataDir)
 }
 
 interface LocalTlsCertificateProvider {
@@ -93,41 +95,56 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
 
     @Synchronized
     override fun syncOnce(dataDir: String): String = if (isLoaded) {
-        nativeSyncOnce(dataDir)
+        nativeSyncOnce(dataDir, DEFAULT_NETWORK)
     } else {
         unavailableSyncJson()
     }
 
-    fun syncStatus(dataDir: String): String = if (isLoaded) {
-        nativeSyncStatus(dataDir)
+    @Synchronized
+    override fun syncOnce(dataDir: String, network: String): String = if (isLoaded) {
+        nativeSyncOnce(dataDir, network)
     } else {
-        unavailableSyncJson()
+        unavailableSyncJson(network = network)
     }
 
-    fun clearResolverCache(dataDir: String): String = if (isLoaded) {
-        nativeClearResolverCache(dataDir)
+    fun syncStatus(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
+        nativeSyncStatus(dataDir, network)
     } else {
-        unavailableSyncJson("rust-core-unavailable")
+        unavailableSyncJson(network = network)
+    }
+
+    fun clearResolverCache(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
+        nativeClearResolverCache(dataDir, network)
+    } else {
+        unavailableSyncJson("rust-core-unavailable", network)
     }
 
     @Synchronized
-    fun installHeaderSnapshot(dataDir: String, snapshotPath: String): String = if (isLoaded) {
-        nativeInstallHeaderSnapshot(dataDir, snapshotPath)
+    fun installHeaderSnapshot(
+        dataDir: String,
+        snapshotPath: String,
+        network: String = DEFAULT_NETWORK,
+    ): String = if (isLoaded) {
+        nativeInstallHeaderSnapshot(dataDir, snapshotPath, network)
     } else {
-        unavailableSyncJson("rust-core-unavailable")
+        unavailableSyncJson("rust-core-unavailable", network)
     }
 
     @Synchronized
-    fun resetHeadersFromPeers(dataDir: String): String = if (isLoaded) {
-        nativeResetHeadersFromPeers(dataDir)
+    fun resetHeadersFromPeers(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
+        nativeResetHeadersFromPeers(dataDir, network)
     } else {
-        unavailableSyncJson("rust-core-unavailable")
+        unavailableSyncJson("rust-core-unavailable", network)
     }
 
-    fun hnsProofDetails(dataDir: String, host: String): String = if (isLoaded) {
-        nativeHnsProofDetails(dataDir, host)
+    fun hnsProofDetails(
+        dataDir: String,
+        host: String,
+        network: String = DEFAULT_NETWORK,
+    ): String = if (isLoaded) {
+        nativeHnsProofDetails(dataDir, host, network)
     } else {
-        """{"host":"${jsonEscape(host)}","name":null,"nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"rust_core_unavailable","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"rust-core-unavailable"}"""
+        """{"host":"${jsonEscape(host)}","name":null,"network":"${jsonEscape(network)}","nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"rust_core_unavailable","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"rust-core-unavailable"}"""
     }
 
     override fun localTlsCertificate(host: String): LocalTlsCertificate? = if (isLoaded) {
@@ -224,17 +241,21 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
 
     private external fun nativeDiagnostics(): String
 
-    private external fun nativeSyncOnce(dataDir: String): String
+    private external fun nativeSyncOnce(dataDir: String, network: String): String
 
-    private external fun nativeSyncStatus(dataDir: String): String
+    private external fun nativeSyncStatus(dataDir: String, network: String): String
 
-    private external fun nativeClearResolverCache(dataDir: String): String
+    private external fun nativeClearResolverCache(dataDir: String, network: String): String
 
-    private external fun nativeInstallHeaderSnapshot(dataDir: String, snapshotPath: String): String
+    private external fun nativeInstallHeaderSnapshot(
+        dataDir: String,
+        snapshotPath: String,
+        network: String,
+    ): String
 
-    private external fun nativeResetHeadersFromPeers(dataDir: String): String
+    private external fun nativeResetHeadersFromPeers(dataDir: String, network: String): String
 
-    private external fun nativeHnsProofDetails(dataDir: String, host: String): String
+    private external fun nativeHnsProofDetails(dataDir: String, host: String, network: String): String
 
     private external fun nativeLocalTlsCertificate(host: String): ByteArray?
 
@@ -313,8 +334,11 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         return LocalTlsCertificate(certificateDer, keyDer, fingerprint)
     }
 
-    private fun unavailableSyncJson(error: String = "rust-core-unavailable"): String =
-        """{"status":"error","attempted":0,"successful":0,"accepted":0,"failed":0,"peerCount":0,"peerGroups":0,"bestHeight":null,"bestPeerHeight":null,"estimatedTipHeight":null,"resourceCacheEntries":0,"resourceCacheBytes":0,"resourceCacheEvicted":0,"error":"$error","failures":[]}"""
+    private fun unavailableSyncJson(
+        error: String = "rust-core-unavailable",
+        network: String = DEFAULT_NETWORK,
+    ): String =
+        """{"network":"${jsonEscape(network)}","status":"error","attempted":0,"successful":0,"accepted":0,"failed":0,"peerCount":0,"peerGroups":0,"bestHeight":null,"bestPeerHeight":null,"estimatedTipHeight":null,"resourceCacheEntries":0,"resourceCacheBytes":0,"resourceCacheEvicted":0,"error":"$error","failures":[]}"""
 
     private fun jsonEscape(value: String): String =
         value
@@ -325,4 +349,5 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
             .replace("\t", "\\t")
 
     private const val LOCAL_TLS_FINGERPRINT_BYTES = 32
+    private const val DEFAULT_NETWORK = "mainnet"
 }

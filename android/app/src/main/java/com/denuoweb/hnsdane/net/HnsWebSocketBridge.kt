@@ -29,6 +29,7 @@ class HnsWebSocketBridge(
     private val strictHnsMode: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
+    private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
     private val hnsGatewayBridge: HnsGatewayBridge = NativeBridge,
     private val callbackHandler: Handler = Handler(Looper.getMainLooper()),
     private val executor: ExecutorService = Executors.newCachedThreadPool(),
@@ -105,6 +106,7 @@ class HnsWebSocketBridge(
             strictHnsMode = strictHnsMode,
             dohResolverUrl = dohResolverUrl,
             statelessDaneCertificates = statelessDaneCertificates,
+            handshakeNetwork = handshakeNetwork,
             hnsGatewayBridge = hnsGatewayBridge,
             executor = executor,
             emit = { event -> emit(webView, event) },
@@ -202,6 +204,7 @@ private class NativeHnsWebSocketSession(
     private val strictHnsMode: () -> Boolean,
     private val dohResolverUrl: () -> String,
     private val statelessDaneCertificates: () -> Boolean,
+    private val handshakeNetwork: () -> String,
     private val hnsGatewayBridge: HnsGatewayBridge,
     private val executor: ExecutorService,
     private val emit: (JSONObject) -> Unit,
@@ -441,6 +444,9 @@ private class NativeHnsWebSocketSession(
         if (statelessDaneCertificates()) {
             headers += HNS_GATEWAY_STATELESS_DANE_HEADER to "1"
         }
+        handshakeNetwork()
+            .takeUnless { it.equals(DEFAULT_NETWORK, ignoreCase = true) }
+            ?.let { headers += HNS_GATEWAY_NETWORK_HEADER to it }
         return headers
     }
 
@@ -567,5 +573,7 @@ private fun isWebSocketProtocolToken(value: String): Boolean {
         char.code in 0x21..0x7e && char !in HTTP_TOKEN_SEPARATORS
     }
 }
+
+private const val DEFAULT_NETWORK = "mainnet"
 
 private val HTTP_TOKEN_SEPARATORS = setOf('(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}', ' ', '\t')

@@ -70,7 +70,11 @@ class HnsDomainWizardActivity : ComponentActivity() {
             output.text = "Enter a valid HNS name first."
             return
         }
-        val proofJson = NativeBridge.hnsProofDetails(filesDir.absolutePath, host)
+        val proofJson = NativeBridge.hnsProofDetails(
+            filesDir.absolutePath,
+            host,
+            HnsResolutionPreferences.handshakeNetworkId(this),
+        )
         lastReport = reportFor(host, proofJson)
         output.text = lastReport
     }

@@ -6,6 +6,19 @@ import org.junit.Test
 
 class HnsResolutionPreferencesTest {
     @Test
+    fun handshakeNetworkFromIdSupportsKnownNetworks() {
+        assertEquals(HandshakeNetwork.Mainnet, HandshakeNetwork.fromId("mainnet"))
+        assertEquals(HandshakeNetwork.Testnet, HandshakeNetwork.fromId("testnet"))
+        assertEquals(HandshakeNetwork.Regtest, HandshakeNetwork.fromId("regtest"))
+    }
+
+    @Test
+    fun handshakeNetworkFromIdDefaultsToMainnet() {
+        assertEquals(HandshakeNetwork.Mainnet, HandshakeNetwork.fromId(null))
+        assertEquals(HandshakeNetwork.Mainnet, HandshakeNetwork.fromId("unknown"))
+    }
+
+    @Test
     fun normalizeDohResolverUrlAcceptsHttpsEndpoint() {
         assertEquals(
             "https://resolver.example/dns-query",

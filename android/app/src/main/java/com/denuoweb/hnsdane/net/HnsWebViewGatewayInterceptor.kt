@@ -20,6 +20,7 @@ class HnsWebViewGatewayInterceptor(
     private val strictHnsMode: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
+    private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
     private val reportAllHnsStatuses: Boolean = false,
     private val onMainFrameHnsStatus: (Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, String?) -> Unit = { _, _, _, _ -> },
 ) {
@@ -142,6 +143,7 @@ class HnsWebViewGatewayInterceptor(
             .filterNot { it.first.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) }
+            .filterNot { it.first.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) }
             .toMutableList()
         if (strictHnsMode()) {
             headers += HNS_GATEWAY_STRICT_MODE_HEADER to "1"
@@ -152,6 +154,9 @@ class HnsWebViewGatewayInterceptor(
         if (statelessDaneCertificates()) {
             headers += HNS_GATEWAY_STATELESS_DANE_HEADER to "1"
         }
+        handshakeNetwork()
+            .takeUnless { it.equals(DEFAULT_NETWORK, ignoreCase = true) }
+            ?.let { headers += HNS_GATEWAY_NETWORK_HEADER to it }
         return headers
     }
 
@@ -478,8 +483,11 @@ private fun isHopByHopOrSyntheticHeader(name: String): Boolean {
         name.equals("Content-Length", ignoreCase = true) ||
         name.equals("Host", ignoreCase = true) ||
         name.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) ||
-        name.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true)
+        name.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) ||
+        name.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true)
 }
+
+private const val DEFAULT_NETWORK = "mainnet"
 
 private val HEADER_END = byteArrayOf(
     '\r'.code.toByte(),

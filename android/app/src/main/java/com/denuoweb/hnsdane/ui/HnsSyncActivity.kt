@@ -18,7 +18,10 @@ class HnsSyncActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         syncStatus = preferenceSummary(
-            text = NativeBridge.syncStatus(filesDir.absolutePath),
+            text = NativeBridge.syncStatus(
+                filesDir.absolutePath,
+                HnsResolutionPreferences.handshakeNetworkId(this),
+            ),
             selectable = true,
             maxLines = Int.MAX_VALUE,
             bold = true,
@@ -58,10 +61,11 @@ class HnsSyncActivity : ComponentActivity() {
 
         val running = AtomicBoolean(true)
         activePoller = running
+        val network = HnsResolutionPreferences.handshakeNetworkId(this)
         thread(name = "hns-sync-status-poll") {
             while (running.get()) {
                 Thread.sleep(SYNC_STATUS_POLL_MS)
-                val status = NativeBridge.syncStatus(filesDir.absolutePath)
+                val status = NativeBridge.syncStatus(filesDir.absolutePath, network)
                 runOnUiThread {
                     if (running.get()) {
                         syncStatus.text = "running $status"
@@ -70,7 +74,7 @@ class HnsSyncActivity : ComponentActivity() {
             }
         }
         thread(name = "hns-sync-now") {
-            val status = NativeBridge.syncOnce(filesDir.absolutePath)
+            val status = NativeBridge.syncOnce(filesDir.absolutePath, network)
             running.set(false)
             runOnUiThread {
                 syncStatus.text = status

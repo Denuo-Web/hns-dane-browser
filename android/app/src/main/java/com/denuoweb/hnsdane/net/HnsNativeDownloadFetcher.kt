@@ -13,6 +13,7 @@ internal class HnsNativeDownloadFetcher(
     private val strictHnsMode: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
+    private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
 ) {
     @Throws(IOException::class)
     fun fetch(
@@ -129,6 +130,9 @@ internal class HnsNativeDownloadFetcher(
         if (statelessDaneCertificates()) {
             headers += HNS_GATEWAY_STATELESS_DANE_HEADER to "1"
         }
+        handshakeNetwork()
+            .takeUnless { it.equals(DEFAULT_NETWORK, ignoreCase = true) }
+            ?.let { headers += HNS_GATEWAY_NETWORK_HEADER to it }
         return headers
     }
 
@@ -142,6 +146,7 @@ internal class HnsNativeDownloadFetcher(
 
     private companion object {
         const val MAX_HNS_DOWNLOAD_REDIRECTS = 5
+        const val DEFAULT_NETWORK = "mainnet"
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
     }
 }

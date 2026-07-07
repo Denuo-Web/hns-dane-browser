@@ -83,6 +83,30 @@ impl BlockHeader {
         }
     }
 
+    pub fn testnet_genesis() -> Self {
+        Self {
+            time: 1_580_745_079,
+            bits: 0x1d00ffff,
+            ..Self::genesis_template()
+        }
+    }
+
+    pub fn regtest_genesis() -> Self {
+        Self {
+            time: 1_580_745_080,
+            bits: 0x207fffff,
+            ..Self::genesis_template()
+        }
+    }
+
+    pub fn genesis_for_network(network: crate::network::NetworkKind) -> Self {
+        match network {
+            crate::network::NetworkKind::Mainnet => Self::mainnet_genesis(),
+            crate::network::NetworkKind::Testnet => Self::testnet_genesis(),
+            crate::network::NetworkKind::Regtest => Self::regtest_genesis(),
+        }
+    }
+
     pub fn hash(&self) -> Hash {
         self.pow_hash()
     }
@@ -152,6 +176,28 @@ impl BlockHeader {
         }
         out
     }
+
+    fn genesis_template() -> Self {
+        Self {
+            nonce: 0,
+            time: 1_580_745_078,
+            prev_block: Hash::ZERO,
+            tree_root: Hash::ZERO,
+            extra_nonce: [0u8; EXTRA_NONCE_SIZE],
+            reserved_root: Hash::ZERO,
+            witness_root: Hash::from_hex(
+                "1a2c60b9439206938f8d7823782abdb8b211a57431e9c9b6a6365d8d42893351",
+            )
+            .expect("valid genesis witness root"),
+            merkle_root: Hash::from_hex(
+                "8e4c9756fef2ad10375f360e0560fcc7587eb5223ddf8cd7c7e06e60a1140b15",
+            )
+            .expect("valid genesis merkle root"),
+            version: 0,
+            bits: 0x1c00ffff,
+            mask: Hash::ZERO,
+        }
+    }
 }
 
 fn write_bytes<const N: usize>(out: &mut [u8; N], offset: &mut usize, bytes: &[u8]) {
@@ -180,6 +226,22 @@ mod tests {
         assert_eq!(
             genesis.hash().to_string(),
             "5b6ef2d3c1f3cdcadfd9a030ba1811efdd17740f14e166489760741d075992e0",
+        );
+    }
+
+    #[test]
+    fn testnet_genesis_hash_matches_hsd() {
+        assert_eq!(
+            BlockHeader::testnet_genesis().hash().to_string(),
+            "b1520dd24372f82ec94ebf8cf9d9b037d419c4aa3575d05dec70aedd1b427901",
+        );
+    }
+
+    #[test]
+    fn regtest_genesis_hash_matches_hsd() {
+        assert_eq!(
+            BlockHeader::regtest_genesis().hash().to_string(),
+            "ae3895cf597eff05b19e02a70ceeeecb9dc72dbfe6504a50e9343a72f06a87c5",
         );
     }
 

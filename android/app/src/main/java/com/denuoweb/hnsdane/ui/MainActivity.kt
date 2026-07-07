@@ -153,6 +153,7 @@ class MainActivity : ComponentActivity() {
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
+            handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
             callbackHandler = mainHandler,
         )
         webViewGatewayInterceptor = HnsWebViewGatewayInterceptor(
@@ -161,6 +162,7 @@ class MainActivity : ComponentActivity() {
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
+            handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
             onMainFrameHnsStatus = { statusCode, tlsPolicy, resolverPolicy, traceJson ->
                 runOnUiThread {
                     if (mainFrameHnsStatusCode == null) {
@@ -311,7 +313,10 @@ class MainActivity : ComponentActivity() {
         registerSyncSnapshotReceiver()
         HnsSyncForegroundService.start(this)
         lastSyncSnapshot = HnsSyncSnapshot(
-            statusJson = NativeBridge.syncStatus(filesDir.absolutePath),
+            statusJson = NativeBridge.syncStatus(
+                filesDir.absolutePath,
+                HnsResolutionPreferences.handshakeNetworkId(this),
+            ),
             updatedAtMillis = System.currentTimeMillis(),
         )
         refreshSecurityState()
@@ -343,6 +348,7 @@ class MainActivity : ComponentActivity() {
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
+            handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
             enforceHnsHostScope = true,
             scopedHnsHost = { currentHnsProxyHost() },
             onHnsStatus = { host, statusCode, tlsPolicy, resolverPolicy, traceJson ->
@@ -577,7 +583,10 @@ class MainActivity : ComponentActivity() {
 
         syncStatusExecutor.execute {
             val snapshot = HnsSyncSnapshot(
-                statusJson = NativeBridge.syncStatus(filesDir.absolutePath),
+                statusJson = NativeBridge.syncStatus(
+                    filesDir.absolutePath,
+                    HnsResolutionPreferences.handshakeNetworkId(this),
+                ),
                 updatedAtMillis = System.currentTimeMillis(),
             )
             runOnUiThread {
@@ -1089,6 +1098,7 @@ class MainActivity : ComponentActivity() {
         val strictMode = HnsResolutionPreferences.strictHnsMode(this)
         val dohResolver = HnsResolutionPreferences.dohResolverUrl(this)
         val statelessDane = HnsResolutionPreferences.statelessDaneCertificates(this)
+        val handshakeNetwork = HnsResolutionPreferences.handshakeNetworkId(this)
         Toast.makeText(this, getString(R.string.toast_download_started), Toast.LENGTH_SHORT).show()
         downloadExecutor.execute {
             val result = runCatching {
@@ -1097,6 +1107,7 @@ class MainActivity : ComponentActivity() {
                     strictHnsMode = { strictMode },
                     dohResolverUrl = { dohResolver },
                     statelessDaneCertificates = { statelessDane },
+                    handshakeNetwork = { handshakeNetwork },
                 )
                 val response = fetcher.fetch(downloadUrl, userAgent)
                 try {

@@ -30,6 +30,7 @@ class LoopbackProxyServer(
     private val strictHnsMode: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
+    private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
     private val enforceHnsHostScope: Boolean = false,
     private val scopedHnsHost: () -> String? = { null },
     private val onHnsStatus: (String, Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, String?) -> Unit = { _, _, _, _, _ -> },
@@ -183,6 +184,7 @@ class LoopbackProxyServer(
                 strictHnsMode(),
                 dohResolverUrl(),
                 statelessDaneCertificates(),
+                handshakeNetwork(),
             )
             val fileResponse = hnsGatewayBridge.httpResponseBodyFile(
                 dataDir = dataDir.absolutePath,
@@ -240,6 +242,7 @@ class LoopbackProxyServer(
                 strictHnsMode(),
                 dohResolverUrl(),
                 statelessDaneCertificates(),
+                handshakeNetwork(),
             ),
             clientInput = client.getInputStream(),
             clientOutput = client.getOutputStream(),
@@ -662,6 +665,7 @@ internal data class ProxyRequest(
         strictHnsMode: Boolean = false,
         dohResolverUrl: String = "",
         statelessDaneCertificates: Boolean = false,
+        handshakeNetwork: String = DEFAULT_NETWORK,
     ): List<Pair<String, String>> {
         val sanitized = headers
             .filterNot { it.first.equals("Transfer-Encoding", ignoreCase = true) }
@@ -670,6 +674,7 @@ internal data class ProxyRequest(
             .filterNot { it.first.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) }
+            .filterNot { it.first.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) }
             .toMutableList()
         if (strictHnsMode) {
             sanitized += HNS_GATEWAY_STRICT_MODE_HEADER to "1"
@@ -680,6 +685,9 @@ internal data class ProxyRequest(
         if (statelessDaneCertificates) {
             sanitized += HNS_GATEWAY_STATELESS_DANE_HEADER to "1"
         }
+        handshakeNetwork
+            .takeUnless { it.equals(DEFAULT_NETWORK, ignoreCase = true) }
+            ?.let { sanitized += HNS_GATEWAY_NETWORK_HEADER to it }
         return sanitized
     }
 
@@ -917,6 +925,8 @@ data class ConnectTarget(
 internal fun requiresHnsResolution(host: String): Boolean {
     return HnsHostPolicy.requiresHnsResolution(host)
 }
+
+private const val DEFAULT_NETWORK = "mainnet"
 
 private fun sameHost(left: String, right: String): Boolean =
     left.normalizeHost() == right.normalizeHost()

@@ -248,6 +248,32 @@ class HnsWebViewGatewayInterceptorTest {
     }
 
     @Test
+    fun handshakeNetworkAddsInternalGatewayHeaderAndStripsSpoofedValue() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-webview-network-test").toFile()
+        val interceptor = HnsWebViewGatewayInterceptor(
+            dataDir = dataDir,
+            hnsGatewayBridge = bridge,
+            handshakeNetwork = { "regtest" },
+        )
+
+        interceptor.intercept(
+            method = "GET",
+            url = "https://welcome/",
+            requestHeaders = mapOf(HNS_GATEWAY_NETWORK_HEADER to "mainnet"),
+        )
+
+        assertEquals(
+            listOf(HNS_GATEWAY_NETWORK_HEADER to "regtest"),
+            bridge.calls.single().headers,
+        )
+        dataDir.deleteRecursively()
+    }
+
+    @Test
     fun dottedHnsFetchUsesNativeGatewayWhenTldIsNotCommonIcann() {
         val bridge = RecordingGatewayBridge(
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"

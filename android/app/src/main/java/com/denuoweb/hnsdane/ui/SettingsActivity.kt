@@ -30,6 +30,7 @@ import org.json.JSONObject
 class SettingsActivity : ComponentActivity() {
     private lateinit var homepageStatus: TextView
     private lateinit var cookieStatus: TextView
+    private lateinit var hnsNetworkStatus: TextView
     private lateinit var hnsModeStatus: TextView
     private lateinit var statelessDaneStatus: TextView
     private lateinit var dohResolverStatus: TextView
@@ -43,6 +44,7 @@ class SettingsActivity : ComponentActivity() {
 
         homepageStatus = preferenceSummary(BrowserPreferences.homepage(this))
         cookieStatus = preferenceSummary(cookieSummary())
+        hnsNetworkStatus = preferenceSummary(hnsNetworkText())
         hnsModeStatus = preferenceSummary(hnsModeText())
         statelessDaneStatus = preferenceSummary(statelessDaneText())
         dohResolverStatus = preferenceSummary(HnsResolutionPreferences.dohResolverUrl(this))
@@ -110,6 +112,13 @@ class SettingsActivity : ComponentActivity() {
             })
 
             addView(section("HNS resolution") {
+                addPreference(preferenceRow(
+                    title = "Handshake network",
+                    summaryView = hnsNetworkStatus,
+                    actionLabel = "Change",
+                ) {
+                    showNetworkDialog()
+                })
                 addPreference(strictHnsModeOption())
                 addPreference(statelessDaneCertificateOption())
                 addPreference(preferenceRow(
@@ -252,6 +261,7 @@ class SettingsActivity : ComponentActivity() {
         if (::homepageStatus.isInitialized) {
             refreshHomepageStatus()
             refreshCookieStatus()
+            refreshHnsNetworkStatus()
             refreshHnsModeStatus()
             refreshStatelessDaneStatus()
             refreshHistoryStatus()
@@ -511,6 +521,32 @@ class SettingsActivity : ComponentActivity() {
         dialog.show()
     }
 
+    private fun showNetworkDialog() {
+        val networks = HandshakeNetwork.entries.toTypedArray()
+        val labels = networks
+            .map { "${it.displayName} - ${it.summary}" }
+            .toTypedArray()
+        val current = HnsResolutionPreferences.handshakeNetwork(this)
+        val selectedIndex = networks.indexOf(current).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle("Handshake network")
+            .setSingleChoiceItems(labels, selectedIndex) { dialog, index ->
+                val selected = networks[index]
+                if (selected != current) {
+                    HnsSyncForegroundService.stop(this)
+                    HnsResolutionPreferences.setHandshakeNetwork(this, selected)
+                    refreshHnsNetworkStatus()
+                    resolverCacheStatus.text = "Ready to clear cached resolver values for ${selected.displayName}."
+                    headerResyncStatus.text = "Reset ${selected.displayName} headers and sync again from peers."
+                    Toast.makeText(this, "Network set to ${selected.displayName}", Toast.LENGTH_SHORT).show()
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun useCurrentPageAsHomepage(currentUrl: String) {
         val saved = BrowserPreferences.setHomepage(this, currentUrl)
         if (saved == null) {
@@ -535,9 +571,10 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun confirmClearResolverCache() {
+        val network = HnsResolutionPreferences.handshakeNetwork(this)
         AlertDialog.Builder(this)
             .setTitle("Clear resolver cache?")
-            .setMessage("The app will keep synced headers and peers, but cached HNS resource values will be removed.")
+            .setMessage("The app will keep synced ${network.displayName} headers and peers, but cached HNS resource values for this network will be removed.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear") { _, _ ->
                 clearResolverCache()
@@ -546,15 +583,16 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun clearResolverCache() {
-        val result = NativeBridge.clearResolverCache(filesDir.absolutePath)
+        val network = HnsResolutionPreferences.handshakeNetwork(this)
+        val result = NativeBridge.clearResolverCache(filesDir.absolutePath, network.id)
         val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
         val message = if (status == "cleared") {
-            "Resolver cache cleared"
+            "${network.displayName} resolver cache cleared"
         } else {
             "Resolver cache did not report a successful clear"
         }
         resolverCacheStatus.text = if (status == "cleared") {
-            "Cleared just now."
+            "${network.displayName} cache cleared just now."
         } else {
             "Clear did not complete. Open diagnostics for details."
         }
@@ -562,9 +600,10 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun confirmHeaderPeerResync() {
+        val network = HnsResolutionPreferences.handshakeNetwork(this)
         AlertDialog.Builder(this)
             .setTitle("Resync headers from peers?")
-            .setMessage("This removes local HNS headers and cached resolver values, disables the bundled header bootstrap for this install, then starts syncing from peers at block 0.")
+            .setMessage("This removes local ${network.displayName} headers and cached resolver values, then starts syncing from peers at block 0.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Reset") { _, _ ->
                 resetHeadersFromPeers()
@@ -573,12 +612,15 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun resetHeadersFromPeers() {
+        val network = HnsResolutionPreferences.handshakeNetwork(this)
         HnsSyncForegroundService.stop(this)
-        HeaderSnapshotInstaller.disableBundledSnapshot(this)
-        val result = NativeBridge.resetHeadersFromPeers(filesDir.absolutePath)
+        if (network == HandshakeNetwork.Mainnet) {
+            HeaderSnapshotInstaller.disableBundledSnapshot(this, network.id)
+        }
+        val result = NativeBridge.resetHeadersFromPeers(filesDir.absolutePath, network.id)
         val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
         if (status == "headers_reset") {
-            headerResyncStatus.text = "Headers reset to genesis. Peer sync has been started."
+            headerResyncStatus.text = "${network.displayName} headers reset to genesis. Peer sync has been started."
             HnsSyncForegroundService.start(this)
             Toast.makeText(this, "Header resync started", Toast.LENGTH_SHORT).show()
         } else {
@@ -593,6 +635,10 @@ class SettingsActivity : ComponentActivity() {
 
     private fun refreshCookieStatus() {
         cookieStatus.text = cookieSummary()
+    }
+
+    private fun refreshHnsNetworkStatus() {
+        hnsNetworkStatus.text = hnsNetworkText()
     }
 
     private fun refreshHnsModeStatus() {
@@ -621,6 +667,11 @@ class SettingsActivity : ComponentActivity() {
         } else {
             "Off. Compatibility fallback may be used after local or direct resolution fails."
         }
+
+    private fun hnsNetworkText(): String {
+        val network = HnsResolutionPreferences.handshakeNetwork(this)
+        return "${network.displayName}. ${network.summary}"
+    }
 
     private fun statelessDaneText(): String =
         if (HnsResolutionPreferences.statelessDaneCertificates(this)) {

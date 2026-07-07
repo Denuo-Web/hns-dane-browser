@@ -3,12 +3,12 @@
     deny(clippy::expect_used, clippy::panic, clippy::unwrap_used)
 )]
 
-use hns_chain::{HeaderChain, SqliteHeaderStore, mainnet_sync_checkpoints};
+use hns_chain::{DifficultyPolicy, HeaderChain, SqliteHeaderStore, mainnet_sync_checkpoints};
 use hns_core::dns::{
     DnsEncodeConfig, DnsFlags, DnsHeader, DnsMessage, DnsName, DnsQuestion, RecordType,
     ResourceRecord,
 };
-use hns_core::network;
+use hns_core::network::NetworkKind;
 use hns_core::{BlockHeader, HEADER_SIZE, Height, NameHash};
 use hns_dane::{
     DaneDecision, MAX_STATELESS_DANE_ROOTS, StatelessDaneConfig, TlsaMatching, TlsaRecord,
@@ -16,7 +16,8 @@ use hns_dane::{
 };
 use hns_gateway::{Gateway, GatewayConfig, GatewayError, GatewayRequest, HnsHttpsMode};
 use hns_p2p::{
-    DnsSeedPeerSource, HeaderSyncSession, PeerConnection, SqlitePeerStore, VersionPacket,
+    DnsSeedPeerSource, HeaderSyncSession, PeerConnection, SqlitePeerStore, StaticPeerSource,
+    VersionPacket,
 };
 use hns_resolver::{
     AuthoritativeDnssecResolver, AuthoritativeDohEndpoint, CompositeResolver, DelegatedResolver,
@@ -42,7 +43,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -83,6 +84,7 @@ const ICANN_DOH_PATH: &str = "/dns-query";
 const HNS_GATEWAY_STRICT_MODE_HEADER: &str = "X-HNS-Browser-Strict-Mode";
 const HNS_GATEWAY_DOH_RESOLVER_HEADER: &str = "X-HNS-Browser-DoH-Resolver";
 const HNS_GATEWAY_STATELESS_DANE_HEADER: &str = "X-HNS-Browser-Stateless-DANE";
+const HNS_GATEWAY_NETWORK_HEADER: &str = "X-HNS-Browser-Network";
 const HNS_RESOLUTION_TRACE_HEADER: &str = "X-HNS-Resolution-Trace";
 const HNS_RESOLVER_MODE_HEADER: &str = "X-HNS-Resolver-Mode";
 const HNS_DOH_FALLBACK_HEADER: &str = "X-HNS-DoH-Fallback";
@@ -105,6 +107,7 @@ struct ParsedGatewayHeaders {
     strict_hns_mode: bool,
     doh_endpoint: HnsDohEndpoint,
     stateless_dane_certificates: bool,
+    network: NetworkKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +130,65 @@ impl GatewayResolutionMode {
             Self::Strict => "strict",
             Self::Compatibility => "compatibility",
         }
+    }
+}
+
+fn parse_network_kind(value: &str) -> Result<NetworkKind, String> {
+    NetworkKind::from_str(value).ok_or_else(|| format!("unsupported Handshake network: {value}"))
+}
+
+fn network_base_path(data_dir: &str, network: NetworkKind) -> PathBuf {
+    match network {
+        NetworkKind::Mainnet => Path::new(data_dir).join("hns"),
+        NetworkKind::Testnet => Path::new(data_dir).join("hns-testnet"),
+        NetworkKind::Regtest => Path::new(data_dir).join("hns-regtest"),
+    }
+}
+
+fn chain_for_network(
+    store: SqliteHeaderStore,
+    network: NetworkKind,
+) -> HeaderChain<SqliteHeaderStore> {
+    match network {
+        NetworkKind::Mainnet => HeaderChain::new(store),
+        NetworkKind::Testnet | NetworkKind::Regtest => {
+            HeaderChain::with_difficulty_policy(store, DifficultyPolicy::Permissive)
+        }
+    }
+}
+
+fn seed_peers_for_network(
+    peers: &mut hns_p2p::PeerManager,
+    network: &hns_core::network::Network,
+    network_kind: NetworkKind,
+) -> Result<usize, hns_p2p::P2pError> {
+    if !network.dns_seeds.is_empty() {
+        let source = DnsSeedPeerSource::from_network(network);
+        return peers.seed_from(&source);
+    }
+
+    if network_kind == NetworkKind::Regtest {
+        let source = StaticPeerSource::new([
+            SocketAddr::from((Ipv4Addr::LOCALHOST, network.port)),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, network.port)),
+        ]);
+        return peers.seed_from(&source);
+    }
+
+    Ok(0)
+}
+
+fn sync_checkpoints_for_network(network: NetworkKind) -> Vec<hns_chain::HeaderCheckpoint> {
+    match network {
+        NetworkKind::Mainnet => mainnet_sync_checkpoints(),
+        NetworkKind::Testnet | NetworkKind::Regtest => Vec::new(),
+    }
+}
+
+fn estimated_tip_height_for_network(network: NetworkKind, now: u64) -> Option<u32> {
+    match network {
+        NetworkKind::Mainnet => estimated_mainnet_tip_height(now),
+        NetworkKind::Testnet | NetworkKind::Regtest => None,
     }
 }
 
@@ -333,16 +395,18 @@ impl Write for JavaOutputStream {
 struct GatewayProofProvider {
     base: PathBuf,
     values: SqliteResourceValueProvider,
+    network: NetworkKind,
     preferred_peers: usize,
     timeout: Duration,
     seed_on_empty: bool,
 }
 
 impl GatewayProofProvider {
-    fn new(base: PathBuf, values: SqliteResourceValueProvider) -> Self {
+    fn new(base: PathBuf, values: SqliteResourceValueProvider, network: NetworkKind) -> Self {
         Self {
             base,
             values,
+            network,
             preferred_peers: DEFAULT_GATEWAY_PROOF_PEERS,
             timeout: DEFAULT_GATEWAY_PROOF_TIMEOUT,
             seed_on_empty: true,
@@ -362,7 +426,9 @@ impl GatewayProofProvider {
         if !self.anchor_is_current_tip_canonical(verified.anchor)? {
             return Err(ResolverError::ProofUnavailable);
         }
-        if is_non_inclusion && local_chain_is_stale_for_current_resolution(&self.base)? {
+        if is_non_inclusion
+            && local_chain_is_stale_for_current_resolution(&self.base, self.network)?
+        {
             return Err(ResolverError::LocalChainNotCurrent);
         }
         ProvenNameRecords::from_verified_resource_value(verified)
@@ -377,7 +443,7 @@ impl GatewayProofProvider {
         };
         let header_store = SqliteHeaderStore::open(self.base.join("headers.sqlite"))
             .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
-        let chain = HeaderChain::new(header_store);
+        let chain = chain_for_network(header_store, self.network);
         let best = chain
             .best_header()
             .map_err(|error| ResolverError::Storage(format!("read best header: {error}")))?;
@@ -392,16 +458,15 @@ impl GatewayProofProvider {
         root_name: &str,
         name_hash: NameHash,
     ) -> Result<(), ResolverError> {
-        let best = best_synced_header(&self.base)?;
-        let network = network::mainnet();
+        let best = best_synced_header(&self.base, self.network)?;
+        let network = self.network.network();
         let peer_store = SqlitePeerStore::open(self.base.join("peers.sqlite"))
             .map_err(|error| ResolverError::Storage(format!("open peer store: {error}")))?;
         let mut peers = peer_store
             .load_manager()
             .map_err(|error| ResolverError::Storage(format!("load peer store: {error}")))?;
         if self.seed_on_empty && peers.is_empty() {
-            let source = DnsSeedPeerSource::from_network(&network);
-            let _ = peers.seed_from(&source);
+            let _ = seed_peers_for_network(&mut peers, &network, self.network);
         }
 
         let now = now_unix_seconds();
@@ -448,7 +513,7 @@ impl GatewayProofProvider {
         proof_root: hns_core::Hash,
         proof_height: Height,
     ) -> Result<Height, SyncError> {
-        let network = network::mainnet();
+        let network = self.network.network();
         let mut peer = PeerConnection::connect(address, network, self.timeout)?;
         let mut session = HeaderSyncSession::new(VersionPacket::default());
         let remote = peer.handshake(&mut session)?;
@@ -1188,8 +1253,13 @@ pub fn diagnostics_json() -> String {
 }
 
 pub fn sync_once(data_dir: &str) -> String {
+    sync_once_for_network(data_dir, NetworkKind::Mainnet)
+}
+
+pub fn sync_once_for_network(data_dir: &str, network: NetworkKind) -> String {
     sync_once_with_options(
         data_dir,
+        network,
         true,
         Duration::from_secs(3),
         DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
@@ -1198,25 +1268,45 @@ pub fn sync_once(data_dir: &str) -> String {
 }
 
 pub fn sync_status(data_dir: &str) -> String {
-    read_sync_status(data_dir)
+    sync_status_for_network(data_dir, NetworkKind::Mainnet)
+}
+
+pub fn sync_status_for_network(data_dir: &str, network: NetworkKind) -> String {
+    read_sync_status(data_dir, network)
         .unwrap_or_else(NativeSyncStatus::error)
         .to_json()
 }
 
 pub fn clear_resolver_cache(data_dir: &str) -> String {
-    clear_resolver_cache_inner(data_dir)
+    clear_resolver_cache_for_network(data_dir, NetworkKind::Mainnet)
+}
+
+pub fn clear_resolver_cache_for_network(data_dir: &str, network: NetworkKind) -> String {
+    clear_resolver_cache_inner(data_dir, network)
         .unwrap_or_else(NativeSyncStatus::error)
         .to_json()
 }
 
 pub fn install_header_snapshot(data_dir: &str, snapshot_path: &str) -> String {
-    install_header_snapshot_inner(data_dir, snapshot_path)
+    install_header_snapshot_for_network(data_dir, snapshot_path, NetworkKind::Mainnet)
+}
+
+pub fn install_header_snapshot_for_network(
+    data_dir: &str,
+    snapshot_path: &str,
+    network: NetworkKind,
+) -> String {
+    install_header_snapshot_inner(data_dir, snapshot_path, network)
         .unwrap_or_else(NativeSyncStatus::error)
         .to_json()
 }
 
 pub fn reset_headers_from_peers(data_dir: &str) -> String {
-    reset_headers_from_peers_inner(data_dir)
+    reset_headers_from_peers_for_network(data_dir, NetworkKind::Mainnet)
+}
+
+pub fn reset_headers_from_peers_for_network(data_dir: &str, network: NetworkKind) -> String {
+    reset_headers_from_peers_inner(data_dir, network)
         .unwrap_or_else(NativeSyncStatus::error)
         .to_json()
 }
@@ -1280,11 +1370,18 @@ fn valid_local_tls_label(label: &str) -> bool {
 
 fn sync_once_with_options(
     data_dir: &str,
+    network: NetworkKind,
     seed_on_empty: bool,
     timeout: Duration,
     resource_cache_limit_bytes: usize,
 ) -> NativeSyncStatus {
-    match run_sync_once(data_dir, seed_on_empty, timeout, resource_cache_limit_bytes) {
+    match run_sync_once(
+        data_dir,
+        network,
+        seed_on_empty,
+        timeout,
+        resource_cache_limit_bytes,
+    ) {
         Ok(status) => status,
         Err(error) => NativeSyncStatus::error(error),
     }
@@ -1295,11 +1392,12 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
         Ok(headers) => headers,
         Err(error) => return plain_response_for_request(&input, 400, "Bad Request", error),
     };
+    let network = parsed_headers.network;
     let mode = GatewayResolutionMode::from_strict_hns_mode(parsed_headers.strict_hns_mode);
     let request = gateway_request(&input, parsed_headers.headers);
     let dns_trace = DnsTraceRecorder::default();
 
-    let base = Path::new(input.data_dir).join("hns");
+    let base = network_base_path(input.data_dir, network);
     if let Err(error) = fs::create_dir_all(&base) {
         return plain_response_for_request(
             &input,
@@ -1323,6 +1421,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
+        network,
         mode,
         parsed_headers.doh_endpoint,
         fallback_marker.clone(),
@@ -1354,6 +1453,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
             let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 Some(&response.resolution),
                 TlsTraceInput {
@@ -1371,6 +1471,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
             let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 None,
                 TlsTraceInput::default(),
@@ -1399,11 +1500,12 @@ pub fn gateway_http_response_body_to_file(
             );
         }
     };
+    let network = parsed_headers.network;
     let mode = GatewayResolutionMode::from_strict_hns_mode(parsed_headers.strict_hns_mode);
     let request = gateway_request(&input, parsed_headers.headers);
     let dns_trace = DnsTraceRecorder::default();
 
-    let base = Path::new(input.data_dir).join("hns");
+    let base = network_base_path(input.data_dir, network);
     if let Err(error) = fs::create_dir_all(&base) {
         return plain_response_to_file_for_request(
             &input,
@@ -1429,6 +1531,7 @@ pub fn gateway_http_response_body_to_file(
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
+        network,
         mode,
         parsed_headers.doh_endpoint,
         fallback_marker.clone(),
@@ -1467,6 +1570,7 @@ pub fn gateway_http_response_body_to_file(
             let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 Some(&response.resolution),
                 TlsTraceInput {
@@ -1488,6 +1592,7 @@ pub fn gateway_http_response_body_to_file(
             let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 None,
                 TlsTraceInput::default(),
@@ -1516,11 +1621,12 @@ pub fn gateway_http_upgrade_tunnel(
             );
         }
     };
+    let network = parsed_headers.network;
     let mode = GatewayResolutionMode::from_strict_hns_mode(parsed_headers.strict_hns_mode);
     let request = gateway_request(&input, parsed_headers.headers);
     let dns_trace = DnsTraceRecorder::default();
 
-    let base = Path::new(input.data_dir).join("hns");
+    let base = network_base_path(input.data_dir, network);
     if let Err(error) = fs::create_dir_all(&base) {
         return write_tunnel_response(
             &mut client_output,
@@ -1550,6 +1656,7 @@ pub fn gateway_http_upgrade_tunnel(
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
+        network,
         mode,
         parsed_headers.doh_endpoint,
         fallback_marker.clone(),
@@ -1584,6 +1691,7 @@ pub fn gateway_http_upgrade_tunnel(
             let resolver_policy = fallback_marker.used().then_some("hns-doh-compat");
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 Some(&response.resolution),
                 TlsTraceInput {
@@ -1621,6 +1729,7 @@ pub fn gateway_http_upgrade_tunnel(
             let (status, reason, detail) = map_gateway_error_for_host(input.host, &error);
             let trace = resolution_trace_json(
                 &input,
+                network,
                 mode,
                 None,
                 TlsTraceInput::default(),
@@ -1767,6 +1876,7 @@ fn recent_stateless_dane_tree_roots(base: &Path) -> Result<Vec<[u8; 32]>, Resolv
 fn android_gateway_resolver(
     base: PathBuf,
     values: SqliteResourceValueProvider,
+    network: NetworkKind,
     mode: GatewayResolutionMode,
     doh_endpoint: HnsDohEndpoint,
     fallback_marker: FallbackMarker,
@@ -1776,7 +1886,7 @@ fn android_gateway_resolver(
     match mode {
         GatewayResolutionMode::Strict => {
             let primary = DelegatingResolver::new(
-                GatewayProofProvider::new(base, values),
+                GatewayProofProvider::new(base, values, network),
                 AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
                     .with_authoritative_doh_preferred(),
             );
@@ -1794,8 +1904,10 @@ fn android_gateway_resolver(
                 SystemDnssecVerifier,
             );
             let delegated = FallbackDelegatedResolver::new(direct, doh, fallback_marker.clone());
-            let primary =
-                DelegatingResolver::new(GatewayProofProvider::new(base, values), delegated);
+            let primary = DelegatingResolver::new(
+                GatewayProofProvider::new(base, values, network),
+                delegated,
+            );
             let hns = FallbackResolver::with_marker(
                 primary,
                 HnsDohResolver::new(doh_endpoint, dns_trace.clone()),
@@ -1829,6 +1941,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
     let mut strict_hns_mode = false;
     let mut doh_endpoint = HnsDohEndpoint::default();
     let mut stateless_dane_certificates = false;
+    let mut network = NetworkKind::Mainnet;
     for line in header_text.split("\r\n").filter(|line| !line.is_empty()) {
         let Some(separator) = line.find(':') else {
             return Err("request header is malformed");
@@ -1859,6 +1972,10 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             }
             continue;
         }
+        if name.eq_ignore_ascii_case(HNS_GATEWAY_NETWORK_HEADER) {
+            network = NetworkKind::from_str(value).ok_or("Handshake network is invalid")?;
+            continue;
+        }
         headers.push((name.to_owned(), value.to_owned()));
     }
 
@@ -1867,6 +1984,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
         strict_hns_mode,
         doh_endpoint,
         stateless_dane_certificates,
+        network,
     })
 }
 
@@ -1996,6 +2114,7 @@ struct TlsTraceInput<'a> {
 
 fn resolution_trace_json(
     input: &GatewayHttpRequestInput<'_>,
+    network: NetworkKind,
     mode: GatewayResolutionMode,
     resolution: Option<&ResolutionAnswer>,
     tls: TlsTraceInput<'_>,
@@ -2040,7 +2159,7 @@ fn resolution_trace_json(
                 .any(|record| matches!(record.record_type, RecordType::A | RecordType::Aaaa))
         })
         .unwrap_or(false);
-    let hns_proof = hns_proof_trace_status(input, name_class, resolution, error);
+    let hns_proof = hns_proof_trace_status(input, network, name_class, resolution, error);
     let fallback_reason = fallback_marker.reason().unwrap_or("none");
     let fallback_type = if fallback_marker.used() {
         r#""HNS_DOH""#
@@ -2064,7 +2183,7 @@ fn resolution_trace_json(
         error,
         &dns_events,
     );
-    let local_currentness = local_chain_currentness_for_trace(input.data_dir);
+    let local_currentness = local_chain_currentness_for_trace(input.data_dir, network);
     let local_best_height =
         optional_u32_json(local_currentness.and_then(|value| value.best_height));
     let target_height = optional_u32_json(local_currentness.and_then(|value| value.target_height));
@@ -2073,11 +2192,12 @@ fn resolution_trace_json(
     let local_chain_stale = optional_bool_json(local_currentness.and_then(|value| value.stale));
 
     format!(
-        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
+        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","network":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
         json_escape(input.host),
         json_escape(&gateway_request_address(input)),
         name_class_trace_name(name_class),
         json_escape(&hns_trace_root(input.host)),
+        network.as_str(),
         mode.as_str(),
         hns_proof,
         local_best_height,
@@ -2158,6 +2278,7 @@ fn resolution_source_name(
 
 fn hns_proof_trace_status(
     input: &GatewayHttpRequestInput<'_>,
+    network: NetworkKind,
     name_class: NameClass,
     resolution: Option<&ResolutionAnswer>,
     error: Option<&GatewayError>,
@@ -2172,14 +2293,20 @@ fn hns_proof_trace_status(
         (_, Some(GatewayError::Resolver(ResolverError::NameNotFound))) => "not_found",
         (_, Some(GatewayError::Resolver(ResolverError::LocalChainNotCurrent))) => "stale",
         (_, Some(GatewayError::Resolver(ResolverError::ProofNameMismatch))) => "failed",
-        _ => hns_cached_proof_trace_status(input.data_dir, input.host).unwrap_or("unknown"),
+        _ => {
+            hns_cached_proof_trace_status(input.data_dir, network, input.host).unwrap_or("unknown")
+        }
     }
 }
 
-fn hns_cached_proof_trace_status(data_dir: &str, host: &str) -> Option<&'static str> {
+fn hns_cached_proof_trace_status(
+    data_dir: &str,
+    network: NetworkKind,
+    host: &str,
+) -> Option<&'static str> {
     let (_, root_name) = hns_proof_host_and_root(host).ok()?;
     let name_hash = NameHash::from_name(&root_name).ok()?;
-    let resources_path = Path::new(data_dir).join("hns").join("resources.sqlite");
+    let resources_path = network_base_path(data_dir, network).join("resources.sqlite");
     if !resources_path.exists() {
         return Some("unavailable");
     }
@@ -2188,7 +2315,7 @@ fn hns_cached_proof_trace_status(data_dir: &str, host: &str) -> Option<&'static 
         Ok(verified) if !verified.secure => Some("failed"),
         Ok(verified) if verified.value.is_some() => Some("verified"),
         Ok(_)
-            if local_chain_currentness_for_trace(data_dir)
+            if local_chain_currentness_for_trace(data_dir, network)
                 .and_then(|currentness| currentness.stale)
                 .unwrap_or(false) =>
         {
@@ -2201,8 +2328,11 @@ fn hns_cached_proof_trace_status(data_dir: &str, host: &str) -> Option<&'static 
     }
 }
 
-fn local_chain_currentness_for_trace(data_dir: &str) -> Option<LocalChainCurrentness> {
-    local_chain_currentness(&Path::new(data_dir).join("hns")).ok()
+fn local_chain_currentness_for_trace(
+    data_dir: &str,
+    network: NetworkKind,
+) -> Option<LocalChainCurrentness> {
+    local_chain_currentness(&network_base_path(data_dir, network), network).ok()
 }
 
 fn optional_u32_json(value: Option<u32>) -> String {
@@ -2628,7 +2758,16 @@ fn hns_trace_root(host: &str) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
 fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
+    hns_proof_details_for_network(data_dir, host_or_url, NetworkKind::Mainnet)
+}
+
+fn hns_proof_details_for_network(
+    data_dir: &str,
+    host_or_url: &str,
+    network: NetworkKind,
+) -> String {
     let (host, root_name) = match hns_proof_host_and_root(host_or_url) {
         Ok(value) => value,
         Err(error) => return hns_proof_details_error_json(host_or_url, &error),
@@ -2648,12 +2787,13 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
                 records: Vec::new(),
                 raw_resource: None,
                 current_tip_base: None,
+                network,
                 error: &format!("invalid HNS name: {error}"),
             });
         }
     };
 
-    let base = Path::new(data_dir).join("hns");
+    let base = network_base_path(data_dir, network);
     let resources_path = base.join("resources.sqlite");
     if !resources_path.exists() {
         return hns_proof_details_base_json(HnsProofDetailsJson {
@@ -2668,6 +2808,7 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
             records: Vec::new(),
             raw_resource: None,
             current_tip_base: Some(&base),
+            network,
             error: "resource cache is not initialized",
         });
     }
@@ -2687,6 +2828,7 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
                 records: Vec::new(),
                 raw_resource: None,
                 current_tip_base: Some(&base),
+                network,
                 error: &format!("open resource cache: {error}"),
             });
         }
@@ -2707,6 +2849,7 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
                 records: Vec::new(),
                 raw_resource: None,
                 current_tip_base: Some(&base),
+                network,
                 error: "no cached proof is available for this HNS root",
             });
         }
@@ -2723,6 +2866,7 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
                 records: Vec::new(),
                 raw_resource: None,
                 current_tip_base: Some(&base),
+                network,
                 error: &error.to_string(),
             });
         }
@@ -2737,13 +2881,14 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
                 root_name: &root_name,
                 name_hash: Some(name_hash),
                 proof_status: "invalid_resource",
-                cache_status: &proof_cache_status(&base, verified.anchor),
+                cache_status: &proof_cache_status(&base, network, verified.anchor),
                 anchor: verified.anchor,
                 secure: Some(verified.secure),
                 exists: Some(verified.value.is_some()),
                 records: Vec::new(),
                 raw_resource,
                 current_tip_base: Some(&base),
+                network,
                 error: &format!("decode resource records: {error}"),
             });
         }
@@ -2759,13 +2904,14 @@ fn hns_proof_details(data_dir: &str, host_or_url: &str) -> String {
         root_name: &root_name,
         name_hash: Some(name_hash),
         proof_status: status,
-        cache_status: &proof_cache_status(&base, verified.anchor),
+        cache_status: &proof_cache_status(&base, network, verified.anchor),
         anchor: verified.anchor,
         secure: Some(verified.secure),
         exists: Some(verified.value.is_some()),
         records,
         raw_resource,
         current_tip_base: Some(&base),
+        network,
         error: "",
     })
 }
@@ -2818,6 +2964,7 @@ struct HnsProofDetailsJson<'a> {
     records: Vec<ResourceRecord>,
     raw_resource: Option<&'a [u8]>,
     current_tip_base: Option<&'a Path>,
+    network: NetworkKind,
     error: &'a str,
 }
 
@@ -2844,7 +2991,7 @@ fn hns_proof_details_base_json(details: HnsProofDetailsJson<'_>) -> String {
     let records_json = resource_records_json(&details.records);
     let current_tip = details
         .current_tip_base
-        .map(current_tip_json)
+        .map(|base| current_tip_json(base, details.network))
         .unwrap_or_else(|| "null".to_owned());
     let error = if details.error.is_empty() {
         "null".to_owned()
@@ -2853,9 +3000,10 @@ fn hns_proof_details_base_json(details: HnsProofDetailsJson<'_>) -> String {
     };
 
     format!(
-        r#"{{"host":"{}","name":"{}","nameHash":{},"hnsProof":"{}","proofStatus":"{}","secure":{},"exists":{},"treeRoot":{},"blockHeight":{},"cacheStatus":"{}","resourceValueHex":{},"recordTypes":{},"resourceRecords":{},"currentTip":{},"error":{}}}"#,
+        r#"{{"host":"{}","name":"{}","network":"{}","nameHash":{},"hnsProof":"{}","proofStatus":"{}","secure":{},"exists":{},"treeRoot":{},"blockHeight":{},"cacheStatus":"{}","resourceValueHex":{},"recordTypes":{},"resourceRecords":{},"currentTip":{},"error":{}}}"#,
         json_escape(details.host),
         json_escape(details.root_name),
+        details.network.as_str(),
         name_hash,
         json_escape(details.proof_status),
         json_escape(details.proof_status),
@@ -2872,8 +3020,12 @@ fn hns_proof_details_base_json(details: HnsProofDetailsJson<'_>) -> String {
     )
 }
 
-fn proof_cache_status(base: &Path, anchor: Option<ResourceValueAnchor>) -> String {
-    match (anchor, best_synced_header(base).ok()) {
+fn proof_cache_status(
+    base: &Path,
+    network: NetworkKind,
+    anchor: Option<ResourceValueAnchor>,
+) -> String {
+    match (anchor, best_synced_header(base, network).ok()) {
         (None, _) => "no_anchor".to_owned(),
         (Some(anchor), Some(best))
             if anchor.height == best.height && anchor.tree_root == best.header.tree_root =>
@@ -2885,8 +3037,8 @@ fn proof_cache_status(base: &Path, anchor: Option<ResourceValueAnchor>) -> Strin
     }
 }
 
-fn current_tip_json(base: &Path) -> String {
-    match best_synced_header(base) {
+fn current_tip_json(base: &Path, network: NetworkKind) -> String {
+    match best_synced_header(base, network) {
         Ok(best) => format!(
             r#"{{"height":{},"treeRoot":"{}"}}"#,
             best.height.0, best.header.tree_root,
@@ -3497,12 +3649,13 @@ fn response_head(
 
 fn run_sync_once(
     data_dir: &str,
+    network_kind: NetworkKind,
     seed_on_empty: bool,
     timeout: Duration,
     resource_cache_limit_bytes: usize,
 ) -> Result<NativeSyncStatus, String> {
-    let base = Path::new(data_dir).join("hns");
-    let chain = open_initialized_header_chain(&base)?;
+    let base = network_base_path(data_dir, network_kind);
+    let chain = open_initialized_header_chain(&base, network_kind)?;
     let mut coordinator = HeaderSyncCoordinator::new(chain);
 
     let peer_store = SqlitePeerStore::open(base.join("peers.sqlite"))
@@ -3510,12 +3663,11 @@ fn run_sync_once(
     let mut peers = peer_store
         .load_manager()
         .map_err(|error| format!("load peer store: {error}"))?;
-    let network = network::mainnet();
+    let network = network_kind.network();
     let mut seed_error = None;
     if seed_on_empty && peers.len() < ANDROID_MIN_PEER_TARGET {
         let was_empty = peers.is_empty();
-        let source = DnsSeedPeerSource::from_network(&network);
-        match peers.seed_from(&source) {
+        match seed_peers_for_network(&mut peers, &network, network_kind) {
             Ok(inserted) => {
                 if inserted > 0 {
                     peer_store
@@ -3541,7 +3693,7 @@ fn run_sync_once(
             parallel_peer_probes: ANDROID_PARALLEL_PEER_PROBES,
             parallel_header_fetch_peers: ANDROID_PARALLEL_HEADER_FETCH_PEERS,
             peer_height_refresh_interval: ANDROID_PEER_HEIGHT_REFRESH_INTERVAL_SECONDS,
-            checkpoint_header_prefetch: mainnet_sync_checkpoints(),
+            checkpoint_header_prefetch: sync_checkpoints_for_network(network_kind),
             timeout,
             ..HeaderSyncRunnerConfig::default()
         },
@@ -3563,7 +3715,7 @@ fn run_sync_once(
     let peer_groups = peers.address_group_count(now);
     let best_peer_height = best_peer_height(&peers);
     let best_height = best.as_ref().map(|header| header.height.0);
-    let estimated_tip_height = estimated_mainnet_tip_height(now);
+    let estimated_tip_height = estimated_tip_height_for_network(network_kind, now);
     let resource_cache_evicted =
         prune_resource_cache_to_best_chain(&base, coordinator.chain())?.saturating_add(
             enforce_resource_cache_limit(&base, resource_cache_limit_bytes)?,
@@ -3589,6 +3741,7 @@ fn run_sync_once(
     };
 
     Ok(NativeSyncStatus {
+        network: network_kind,
         status,
         attempted: result.attempted,
         successful: result.successful,
@@ -3665,18 +3818,21 @@ fn best_peer_height(peers: &hns_p2p::PeerManager) -> Option<u32> {
         .max()
 }
 
-fn open_initialized_header_chain(base: &Path) -> Result<HeaderChain<SqliteHeaderStore>, String> {
+fn open_initialized_header_chain(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<HeaderChain<SqliteHeaderStore>, String> {
     fs::create_dir_all(base).map_err(|error| format!("create sync directory: {error}"))?;
     let header_store = SqliteHeaderStore::open(base.join("headers.sqlite"))
         .map_err(|error| format!("open header store: {error}"))?;
-    let mut chain = HeaderChain::new(header_store);
+    let mut chain = chain_for_network(header_store, network);
     if chain
         .best_header()
         .map_err(|error| format!("read best header: {error}"))?
         .is_none()
     {
         chain
-            .insert_genesis(BlockHeader::mainnet_genesis())
+            .insert_genesis(BlockHeader::genesis_for_network(network))
             .map_err(|error| format!("insert genesis header: {error}"))?;
     }
     Ok(chain)
@@ -3685,18 +3841,22 @@ fn open_initialized_header_chain(base: &Path) -> Result<HeaderChain<SqliteHeader
 fn install_header_snapshot_inner(
     data_dir: &str,
     snapshot_path: &str,
+    network: NetworkKind,
 ) -> Result<NativeSyncStatus, String> {
-    let base = Path::new(data_dir).join("hns");
+    if network != NetworkKind::Mainnet {
+        return Err("bundled header snapshot is only available for mainnet".to_owned());
+    }
+    let base = network_base_path(data_dir, network);
     let mut snapshot =
         fs::File::open(snapshot_path).map_err(|error| format!("open header snapshot: {error}"))?;
     let metadata = read_header_snapshot_metadata(&mut snapshot)?;
-    let mut chain = open_initialized_header_chain(&base)?;
+    let mut chain = open_initialized_header_chain(&base, network)?;
     if chain
         .best_header()
         .map_err(|error| format!("read best header before snapshot import: {error}"))?
         .is_some_and(|header| header.height.0 >= metadata.target_height)
     {
-        return sync_status_with_override(data_dir, "snapshot_present", 1, 1, 0);
+        return sync_status_with_override(data_dir, network, "snapshot_present", 1, 1, 0);
     }
 
     let mut header_bytes = [0u8; HEADER_SIZE];
@@ -3745,7 +3905,7 @@ fn install_header_snapshot_inner(
         ));
     }
 
-    sync_status_with_override(data_dir, "snapshot_imported", 1, 1, accepted_total)
+    sync_status_with_override(data_dir, network, "snapshot_imported", 1, 1, accepted_total)
 }
 
 fn insert_header_snapshot_batch(
@@ -3815,13 +3975,17 @@ fn read_u32_be<R: Read>(reader: &mut R, field: &str) -> Result<u32, String> {
     Ok(u32::from_be_bytes(bytes))
 }
 
-fn reset_headers_from_peers_inner(data_dir: &str) -> Result<NativeSyncStatus, String> {
-    let base = Path::new(data_dir).join("hns");
+fn reset_headers_from_peers_inner(
+    data_dir: &str,
+    network: NetworkKind,
+) -> Result<NativeSyncStatus, String> {
+    let base = network_base_path(data_dir, network);
     fs::create_dir_all(&base).map_err(|error| format!("create sync directory: {error}"))?;
     remove_sqlite_database(&base.join("headers.sqlite"))?;
     clear_resource_cache_at_base(&base)?;
-    let _chain = open_initialized_header_chain(&base)?;
-    let mut status = read_sync_status(data_dir).unwrap_or_else(|_| NativeSyncStatus::empty());
+    let _chain = open_initialized_header_chain(&base, network)?;
+    let mut status = read_sync_status(data_dir, network)
+        .unwrap_or_else(|_| NativeSyncStatus::empty_for(network));
     status.status = "headers_reset";
     status.resource_cache_entries = 0;
     status.resource_cache_bytes = 0;
@@ -3852,12 +4016,13 @@ fn remove_sqlite_database(path: &Path) -> Result<(), String> {
 
 fn sync_status_with_override(
     data_dir: &str,
+    network: NetworkKind,
     status_label: &'static str,
     attempted: usize,
     successful: usize,
     accepted: usize,
 ) -> Result<NativeSyncStatus, String> {
-    let mut status = read_sync_status(data_dir)?;
+    let mut status = read_sync_status(data_dir, network)?;
     status.status = status_label;
     status.attempted = attempted;
     status.successful = successful;
@@ -3895,14 +4060,22 @@ impl LocalChainCurrentness {
     }
 }
 
-fn local_chain_is_stale_for_current_resolution(base: &Path) -> Result<bool, ResolverError> {
-    Ok(local_chain_currentness(base)?.stale.unwrap_or(false))
+fn local_chain_is_stale_for_current_resolution(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<bool, ResolverError> {
+    Ok(local_chain_currentness(base, network)?
+        .stale
+        .unwrap_or(false))
 }
 
-fn local_chain_currentness(base: &Path) -> Result<LocalChainCurrentness, ResolverError> {
+fn local_chain_currentness(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<LocalChainCurrentness, ResolverError> {
     let header_store = SqliteHeaderStore::open(base.join("headers.sqlite"))
         .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
-    let chain = HeaderChain::new(header_store);
+    let chain = chain_for_network(header_store, network);
     let best_height = chain
         .best_header()
         .map_err(|error| ResolverError::Storage(format!("read best header: {error}")))?
@@ -3915,7 +4088,7 @@ fn local_chain_currentness(base: &Path) -> Result<LocalChainCurrentness, Resolve
     Ok(LocalChainCurrentness::new(
         best_height,
         best_peer_height(&peers),
-        estimated_mainnet_tip_height(now_unix_seconds()),
+        estimated_tip_height_for_network(network, now_unix_seconds()),
     ))
 }
 
@@ -3948,9 +4121,9 @@ fn estimated_mainnet_tip_height(now: u64) -> Option<u32> {
         .and_then(|height| u32::try_from(height).ok())
 }
 
-fn read_sync_status(data_dir: &str) -> Result<NativeSyncStatus, String> {
-    let base = Path::new(data_dir).join("hns");
-    let chain = open_initialized_header_chain(&base)?;
+fn read_sync_status(data_dir: &str, network: NetworkKind) -> Result<NativeSyncStatus, String> {
+    let base = network_base_path(data_dir, network);
+    let chain = open_initialized_header_chain(&base, network)?;
     let peer_store = SqlitePeerStore::open(base.join("peers.sqlite"))
         .map_err(|error| format!("open peer store: {error}"))?;
     let peers = peer_store
@@ -3962,10 +4135,11 @@ fn read_sync_status(data_dir: &str) -> Result<NativeSyncStatus, String> {
     let now = now_unix_seconds();
     let best_height = best.map(|header| header.height.0);
     let best_peer_height = best_peer_height(&peers);
-    let estimated_tip_height = estimated_mainnet_tip_height(now);
+    let estimated_tip_height = estimated_tip_height_for_network(network, now);
     let (resource_cache_entries, resource_cache_bytes) = resource_cache_stats(&base)?;
 
     Ok(NativeSyncStatus {
+        network,
         status: classify_cached_sync_status(best_height, best_peer_height),
         attempted: 0,
         successful: 0,
@@ -3996,10 +4170,13 @@ fn classify_cached_sync_status(
     }
 }
 
-fn best_synced_header(base: &Path) -> Result<hns_chain::StoredHeader, ResolverError> {
+fn best_synced_header(
+    base: &Path,
+    network: NetworkKind,
+) -> Result<hns_chain::StoredHeader, ResolverError> {
     let header_store = SqliteHeaderStore::open(base.join("headers.sqlite"))
         .map_err(|error| ResolverError::Storage(format!("open header store: {error}")))?;
-    let chain = HeaderChain::new(header_store);
+    let chain = chain_for_network(header_store, network);
     let best = chain
         .best_header()
         .map_err(|error| ResolverError::Storage(format!("read best header: {error}")))?
@@ -4010,12 +4187,16 @@ fn best_synced_header(base: &Path) -> Result<hns_chain::StoredHeader, ResolverEr
     Ok(best)
 }
 
-fn clear_resolver_cache_inner(data_dir: &str) -> Result<NativeSyncStatus, String> {
-    let base = Path::new(data_dir).join("hns");
+fn clear_resolver_cache_inner(
+    data_dir: &str,
+    network: NetworkKind,
+) -> Result<NativeSyncStatus, String> {
+    let base = network_base_path(data_dir, network);
     fs::create_dir_all(&base).map_err(|error| format!("create sync directory: {error}"))?;
     clear_resource_cache_at_base(&base)?;
 
-    let mut status = read_sync_status(data_dir).unwrap_or_else(|_| NativeSyncStatus::empty());
+    let mut status = read_sync_status(data_dir, network)
+        .unwrap_or_else(|_| NativeSyncStatus::empty_for(network));
     status.status = "cleared";
     status.resource_cache_entries = 0;
     status.resource_cache_bytes = 0;
@@ -4117,6 +4298,7 @@ fn now_unix_seconds() -> u64 {
 }
 
 struct NativeSyncStatus {
+    network: NetworkKind,
     status: &'static str,
     attempted: usize,
     successful: usize,
@@ -4141,8 +4323,9 @@ struct NativePeerFailure {
 }
 
 impl NativeSyncStatus {
-    fn empty() -> Self {
+    fn empty_for(network: NetworkKind) -> Self {
         Self {
+            network,
             status: "idle",
             attempted: 0,
             successful: 0,
@@ -4163,6 +4346,7 @@ impl NativeSyncStatus {
 
     fn error(error: String) -> Self {
         Self {
+            network: NetworkKind::Mainnet,
             status: "error",
             attempted: 0,
             successful: 0,
@@ -4207,7 +4391,8 @@ impl NativeSyncStatus {
             .join(",");
 
         format!(
-            r#"{{"status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
+            r#"{{"network":"{}","status":"{}","attempted":{},"successful":{},"accepted":{},"failed":{},"peerCount":{},"peerGroups":{},"bestHeight":{},"bestPeerHeight":{},"estimatedTipHeight":{},"resourceCacheEntries":{},"resourceCacheBytes":{},"resourceCacheEvicted":{},"error":{},"failures":[{}]}}"#,
+            self.network.as_str(),
             self.status,
             self.attempted,
             self.successful,
@@ -4554,12 +4739,15 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeSyncOnce
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let status = env
-        .get_string(&data_dir)
-        .ok()
-        .map(|value| sync_once(&value.to_string_lossy()))
-        .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
+    let status = match (env.get_string(&data_dir), env.get_string(&network)) {
+        (Ok(data_dir), Ok(network)) => match parse_network_kind(&network.to_string_lossy()) {
+            Ok(network) => sync_once_for_network(&data_dir.to_string_lossy(), network),
+            Err(error) => NativeSyncStatus::error(error).to_json(),
+        },
+        _ => NativeSyncStatus::error("invalid sync input".to_owned()).to_json(),
+    };
 
     env.new_string(status)
         .map(|value| value.into_raw())
@@ -4571,12 +4759,15 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeSyncStat
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let status = env
-        .get_string(&data_dir)
-        .ok()
-        .map(|value| sync_status(&value.to_string_lossy()))
-        .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
+    let status = match (env.get_string(&data_dir), env.get_string(&network)) {
+        (Ok(data_dir), Ok(network)) => match parse_network_kind(&network.to_string_lossy()) {
+            Ok(network) => sync_status_for_network(&data_dir.to_string_lossy(), network),
+            Err(error) => NativeSyncStatus::error(error).to_json(),
+        },
+        _ => NativeSyncStatus::error("invalid sync status input".to_owned()).to_json(),
+    };
 
     env.new_string(status)
         .map(|value| value.into_raw())
@@ -4588,12 +4779,15 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeClearRes
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let status = env
-        .get_string(&data_dir)
-        .ok()
-        .map(|value| clear_resolver_cache(&value.to_string_lossy()))
-        .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
+    let status = match (env.get_string(&data_dir), env.get_string(&network)) {
+        (Ok(data_dir), Ok(network)) => match parse_network_kind(&network.to_string_lossy()) {
+            Ok(network) => clear_resolver_cache_for_network(&data_dir.to_string_lossy(), network),
+            Err(error) => NativeSyncStatus::error(error).to_json(),
+        },
+        _ => NativeSyncStatus::error("invalid clear cache input".to_owned()).to_json(),
+    };
 
     env.new_string(status)
         .map(|value| value.into_raw())
@@ -4606,12 +4800,23 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeInstallH
     _class: JClass<'_>,
     data_dir: JString<'_>,
     snapshot_path: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let status = match (env.get_string(&data_dir), env.get_string(&snapshot_path)) {
-        (Ok(data_dir), Ok(snapshot_path)) => install_header_snapshot(
-            &data_dir.to_string_lossy(),
-            &snapshot_path.to_string_lossy(),
-        ),
+    let status = match (
+        env.get_string(&data_dir),
+        env.get_string(&snapshot_path),
+        env.get_string(&network),
+    ) {
+        (Ok(data_dir), Ok(snapshot_path), Ok(network)) => {
+            match parse_network_kind(&network.to_string_lossy()) {
+                Ok(network) => install_header_snapshot_for_network(
+                    &data_dir.to_string_lossy(),
+                    &snapshot_path.to_string_lossy(),
+                    network,
+                ),
+                Err(error) => NativeSyncStatus::error(error).to_json(),
+            }
+        }
         _ => NativeSyncStatus::error("invalid header snapshot input".to_owned()).to_json(),
     };
 
@@ -4625,12 +4830,17 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeResetHea
     mut env: JNIEnv<'_>,
     _class: JClass<'_>,
     data_dir: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let status = env
-        .get_string(&data_dir)
-        .ok()
-        .map(|value| reset_headers_from_peers(&value.to_string_lossy()))
-        .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
+    let status = match (env.get_string(&data_dir), env.get_string(&network)) {
+        (Ok(data_dir), Ok(network)) => match parse_network_kind(&network.to_string_lossy()) {
+            Ok(network) => {
+                reset_headers_from_peers_for_network(&data_dir.to_string_lossy(), network)
+            }
+            Err(error) => NativeSyncStatus::error(error).to_json(),
+        },
+        _ => NativeSyncStatus::error("invalid reset headers input".to_owned()).to_json(),
+    };
 
     env.new_string(status)
         .map(|value| value.into_raw())
@@ -4643,10 +4853,22 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeHnsProof
     _class: JClass<'_>,
     data_dir: JString<'_>,
     host: JString<'_>,
+    network: JString<'_>,
 ) -> jstring {
-    let details = match (env.get_string(&data_dir), env.get_string(&host)) {
-        (Ok(data_dir), Ok(host)) => {
-            hns_proof_details(&data_dir.to_string_lossy(), &host.to_string_lossy())
+    let details = match (
+        env.get_string(&data_dir),
+        env.get_string(&host),
+        env.get_string(&network),
+    ) {
+        (Ok(data_dir), Ok(host), Ok(network)) => {
+            match parse_network_kind(&network.to_string_lossy()) {
+                Ok(network) => hns_proof_details_for_network(
+                    &data_dir.to_string_lossy(),
+                    &host.to_string_lossy(),
+                    network,
+                ),
+                Err(error) => hns_proof_details_error_json(&host.to_string_lossy(), &error),
+            }
         }
         _ => hns_proof_details_error_json("", "invalid proof detail input"),
     };
@@ -4869,6 +5091,7 @@ mod tests {
 
         let status = sync_once_with_options(
             path.to_str().unwrap(),
+            NetworkKind::Mainnet,
             false,
             Duration::from_millis(1),
             DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
@@ -4921,6 +5144,41 @@ mod tests {
     }
 
     #[test]
+    fn testnet_sync_status_uses_isolated_storage_and_genesis() {
+        let path = temp_dir_path("sync-status-testnet");
+
+        let json = sync_status_for_network(path.to_str().unwrap(), NetworkKind::Testnet);
+
+        assert!(json.contains(r#""network":"testnet""#));
+        assert!(json.contains(r#""bestHeight":0"#));
+        assert!(path.join("hns-testnet/headers.sqlite").exists());
+        assert!(path.join("hns-testnet/peers.sqlite").exists());
+        assert!(!path.join("hns/headers.sqlite").exists());
+
+        cleanup_dir(&path);
+    }
+
+    #[test]
+    fn regtest_sync_seeds_loopback_peers() {
+        let path = temp_dir_path("sync-once-regtest");
+
+        let status = sync_once_with_options(
+            path.to_str().unwrap(),
+            NetworkKind::Regtest,
+            true,
+            Duration::from_millis(1),
+            DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
+        );
+
+        assert_eq!(status.network, NetworkKind::Regtest);
+        assert_eq!(status.best_height, Some(0));
+        assert!(status.peer_count >= 1);
+        assert!(path.join("hns-regtest/headers.sqlite").exists());
+
+        cleanup_dir(&path);
+    }
+
+    #[test]
     fn cached_sync_status_classifier_reports_up_to_date_without_network() {
         assert_eq!(
             classify_cached_sync_status(Some(335_591), Some(335_591)),
@@ -4956,6 +5214,7 @@ mod tests {
     #[test]
     fn sync_status_json_reports_peer_failures() {
         let status = NativeSyncStatus {
+            network: NetworkKind::Mainnet,
             status: "peer_failed",
             attempted: 1,
             successful: 0,
@@ -5052,8 +5311,13 @@ mod tests {
             )
             .unwrap();
 
-        let status =
-            sync_once_with_options(path.to_str().unwrap(), false, Duration::from_millis(1), 2);
+        let status = sync_once_with_options(
+            path.to_str().unwrap(),
+            NetworkKind::Mainnet,
+            false,
+            Duration::from_millis(1),
+            2,
+        );
 
         assert_eq!(status.resource_cache_evicted, 1);
         assert_eq!(status.resource_cache_entries, 1);
@@ -5083,6 +5347,7 @@ mod tests {
 
         let status = sync_once_with_options(
             path.to_str().unwrap(),
+            NetworkKind::Mainnet,
             false,
             Duration::from_millis(1),
             DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
@@ -5121,6 +5386,7 @@ mod tests {
 
         let status = sync_once_with_options(
             path.to_str().unwrap(),
+            NetworkKind::Mainnet,
             false,
             Duration::from_millis(1),
             DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
@@ -5158,6 +5424,7 @@ mod tests {
 
         let status = sync_once_with_options(
             path.to_str().unwrap(),
+            NetworkKind::Mainnet,
             false,
             Duration::from_millis(1),
             DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
@@ -5276,6 +5543,7 @@ mod tests {
 
         assert!(parsed.strict_hns_mode);
         assert!(parsed.stateless_dane_certificates);
+        assert_eq!(parsed.network, NetworkKind::Mainnet);
         assert_eq!(
             parsed.doh_endpoint,
             HnsDohEndpoint {
@@ -5315,6 +5583,22 @@ mod tests {
                 "X-HNS-Browser-DoH-Resolver: http://resolver.example/dns-query\r\n"
             ),
             Err("DoH resolver must be an HTTPS URL")
+        ));
+    }
+
+    #[test]
+    fn gateway_headers_parse_internal_network() {
+        let parsed = parse_gateway_headers("X-HNS-Browser-Network: regtest\r\n").unwrap();
+
+        assert_eq!(parsed.network, NetworkKind::Regtest);
+        assert!(parsed.headers.is_empty());
+    }
+
+    #[test]
+    fn gateway_headers_reject_invalid_network() {
+        assert!(matches!(
+            parse_gateway_headers("X-HNS-Browser-Network: staging\r\n"),
+            Err("Handshake network is invalid")
         ));
     }
 
@@ -5377,6 +5661,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Strict,
             None,
             TlsTraceInput::default(),
@@ -5410,6 +5695,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Strict,
             Some(&ResolutionAnswer {
                 name: DnsName::from_ascii("crewball").unwrap(),
@@ -5449,6 +5735,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Strict,
             Some(&ResolutionAnswer {
                 name: DnsName::from_ascii("crewball").unwrap(),
@@ -5488,6 +5775,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             Some(&ResolutionAnswer {
                 name: DnsName::from_ascii("dane-test.denuoweb.com").unwrap(),
@@ -5537,6 +5825,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Strict,
             None,
             TlsTraceInput::default(),
@@ -5575,6 +5864,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             None,
             TlsTraceInput::default(),
@@ -5618,6 +5908,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             Some(&ResolutionAnswer {
                 name: DnsName::from_ascii("denuoweb").unwrap(),
@@ -5661,6 +5952,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             None,
             TlsTraceInput {
@@ -5704,6 +5996,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             None,
             TlsTraceInput::default(),
@@ -5733,6 +6026,7 @@ mod tests {
                 header_text: "",
                 body: &[],
             },
+            NetworkKind::Mainnet,
             GatewayResolutionMode::Compatibility,
             None,
             TlsTraceInput::default(),
@@ -5873,7 +6167,7 @@ mod tests {
             secure: true,
         };
         let primary = DelegatingResolver::new(
-            GatewayProofProvider::new(base.clone(), resources),
+            GatewayProofProvider::new(base.clone(), resources, NetworkKind::Mainnet),
             TestResolver::error(|| ResolverError::ProofUnavailable),
         );
         let resolver = FallbackResolver::with_marker(
@@ -5918,7 +6212,7 @@ mod tests {
             secure: true,
         };
         let primary = DelegatingResolver::new(
-            GatewayProofProvider::new(base.clone(), resources),
+            GatewayProofProvider::new(base.clone(), resources, NetworkKind::Mainnet),
             TestResolver::error(|| ResolverError::ProofUnavailable),
         );
         let resolver = FallbackResolver::with_marker(
@@ -5961,7 +6255,7 @@ mod tests {
             )
             .unwrap();
         let resolver = DelegatingResolver::new(
-            GatewayProofProvider::new(base.clone(), resources),
+            GatewayProofProvider::new(base.clone(), resources, NetworkKind::Mainnet),
             TestResolver::error(|| ResolverError::ProofUnavailable),
         );
 
@@ -6569,7 +6863,7 @@ mod tests {
         let proof_address = proof_listener.local_addr().unwrap();
         let proof_server = thread::spawn(move || {
             let (stream, _) = proof_listener.accept().unwrap();
-            let mut peer = PeerConnection::new(stream, network::mainnet());
+            let mut peer = PeerConnection::new(stream, hns_core::network::mainnet());
             assert!(matches!(peer.receive_packet().unwrap(), Packet::Version(_)));
             let version = VersionPacket {
                 height: remote_height,

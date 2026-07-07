@@ -12,6 +12,7 @@ import android.graphics.drawable.Icon
 import android.os.IBinder
 import androidx.core.content.ContextCompat
 import com.denuoweb.hnsdane.R
+import com.denuoweb.hnsdane.ui.HnsResolutionPreferences
 
 class HnsSyncForegroundService : Service() {
     private var scheduler: HnsSyncScheduler? = null
@@ -60,6 +61,7 @@ class HnsSyncForegroundService : Service() {
         scheduler = HnsSyncScheduler(
             filesDir,
             bridge = BundledHeaderSyncBridge(this),
+            network = { HnsResolutionPreferences.handshakeNetworkId(this) },
         ).also { newScheduler ->
             newScheduler.start { snapshot ->
                 publishSnapshot(snapshot)
@@ -70,7 +72,10 @@ class HnsSyncForegroundService : Service() {
 
     private fun cachedSnapshot(): HnsSyncSnapshot? = runCatching {
         HnsSyncSnapshot(
-            statusJson = NativeBridge.syncStatus(filesDir.absolutePath),
+            statusJson = NativeBridge.syncStatus(
+                filesDir.absolutePath,
+                HnsResolutionPreferences.handshakeNetworkId(this),
+            ),
             updatedAtMillis = System.currentTimeMillis(),
         )
     }.getOrNull()

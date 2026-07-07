@@ -16,6 +16,7 @@ data class HnsSyncSnapshot(
 class HnsSyncScheduler(
     private val dataDir: File,
     private val bridge: HnsSyncBridge = NativeBridge,
+    private val network: () -> String = { DEFAULT_NETWORK },
     private val idleIntervalMs: Long = DEFAULT_IDLE_INTERVAL_MS,
     private val activeIntervalMs: Long = DEFAULT_ACTIVE_INTERVAL_MS,
     private val retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
@@ -50,7 +51,7 @@ class HnsSyncScheduler(
 
     internal fun runOnce(onSnapshot: (HnsSyncSnapshot) -> Unit): HnsSyncSnapshot {
         val snapshot = HnsSyncSnapshot(
-            statusJson = bridge.syncOnce(dataDir.absolutePath),
+            statusJson = bridge.syncOnce(dataDir.absolutePath, network()),
             updatedAtMillis = clock(),
         )
         lastSnapshot = snapshot
@@ -85,5 +86,6 @@ class HnsSyncScheduler(
         const val DEFAULT_ACTIVE_INTERVAL_MS: Long = 1_000
         const val DEFAULT_RETRY_INTERVAL_MS: Long = 10_000
         const val DEFAULT_IDLE_INTERVAL_MS: Long = 10 * 60 * 1_000
+        private const val DEFAULT_NETWORK = "mainnet"
     }
 }

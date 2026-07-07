@@ -29,7 +29,11 @@ class HnsProofDetailsActivity : ComponentActivity() {
         } else if (isIcann) {
             icannDetailsJson(host, trace)
         } else {
-            NativeBridge.hnsProofDetails(filesDir.absolutePath, host)
+            NativeBridge.hnsProofDetails(
+                filesDir.absolutePath,
+                host,
+                HnsResolutionPreferences.handshakeNetworkId(this),
+            )
         }
 
         setSecondaryScreen(
