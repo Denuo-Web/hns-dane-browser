@@ -6,14 +6,13 @@ import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -37,7 +36,7 @@ import android.webkit.WebViewClient
 import android.net.http.SslError
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.PopupMenu
+import android.widget.PopupWindow
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
@@ -623,83 +622,114 @@ class MainActivity : ComponentActivity() {
         }
 
     private fun showHamburgerMenu() {
-        val currentUrl = currentPageUrl()
+        val popup = PopupWindow(this)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.WHITE)
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(menuIconButton("›", getString(R.string.menu_forward), webView.canGoForward(), popup) {
+                    webView.goForward()
+                })
+                addView(menuIconButton("↻", getString(R.string.menu_refresh), true, popup) {
+                    reloadCurrentPage()
+                })
+                addView(menuIconButton("⌂", getString(R.string.menu_home), true, popup) {
+                    loadHomePage()
+                })
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(MENU_ICON_BUTTON_SIZE_DP),
+            ))
+            addView(menuDivider())
+            addView(menuRow(getString(R.string.menu_history), popup) { openHistory() })
+            addView(menuRow(getString(R.string.menu_downloads), popup) { openDownloads() })
+            addView(menuRow(getString(R.string.menu_settings), popup) { openSettings() })
+        }
 
-        PopupMenu(this, hamburgerButton).apply {
-            menu.add(0, MENU_BACK, 0, getString(R.string.menu_back)).apply {
-                setIcon(android.R.drawable.ic_media_previous)
-                isEnabled = webView.canGoBack()
-            }
-            menu.add(0, MENU_FORWARD, 1, getString(R.string.menu_forward)).apply {
-                setIcon(android.R.drawable.ic_media_next)
-                isEnabled = webView.canGoForward()
-            }
-            menu.add(0, MENU_REFRESH, 2, getString(R.string.menu_refresh))
-                .setIcon(android.R.drawable.ic_popup_sync)
-            menu.add(0, MENU_HOME, 3, getString(R.string.menu_home))
-                .setIcon(android.R.drawable.ic_menu_upload)
-            menu.add(0, MENU_HISTORY, 4, getString(R.string.menu_history))
-                .setIcon(android.R.drawable.ic_menu_recent_history)
-            menu.add(0, MENU_DOWNLOADS, 5, getString(R.string.menu_downloads))
-                .setIcon(android.R.drawable.stat_sys_download_done)
-            menu.add(0, MENU_COPY_URL, 6, getString(R.string.menu_copy_current_url)).apply {
-                setIcon(android.R.drawable.ic_menu_save)
-                isEnabled = currentUrl != null
-            }
-            menu.add(0, MENU_SHARE_URL, 7, getString(R.string.menu_share_current_url)).apply {
-                setIcon(android.R.drawable.ic_menu_share)
-                isEnabled = currentUrl != null
-            }
-            menu.add(0, MENU_SETTINGS, 8, getString(R.string.menu_settings))
-                .setIcon(android.R.drawable.ic_menu_manage)
-            setOnMenuItemClickListener { item ->
-                when (item.itemId) {
-                    MENU_BACK -> {
-                        if (webView.canGoBack()) {
-                            webView.goBack()
-                        }
-                        true
-                    }
-                    MENU_FORWARD -> {
-                        if (webView.canGoForward()) {
-                            webView.goForward()
-                        }
-                        true
-                    }
-                    MENU_REFRESH -> {
-                        reloadCurrentPage()
-                        true
-                    }
-                    MENU_HOME -> {
-                        loadHomePage()
-                        true
-                    }
-                    MENU_HISTORY -> {
-                        openHistory()
-                        true
-                    }
-                    MENU_DOWNLOADS -> {
-                        openDownloads()
-                        true
-                    }
-                    MENU_COPY_URL -> {
-                        copyCurrentUrl()
-                        true
-                    }
-                    MENU_SHARE_URL -> {
-                        shareCurrentUrl()
-                        true
-                    }
-                    MENU_SETTINGS -> {
-                        openSettings()
-                        true
-                    }
-                    else -> false
+        popup.apply {
+            contentView = content
+            width = dp(MENU_POPUP_WIDTH_DP)
+            height = LinearLayout.LayoutParams.WRAP_CONTENT
+            isFocusable = true
+            isOutsideTouchable = true
+            setBackgroundDrawable(ColorDrawable(Color.WHITE))
+            elevation = dp(8).toFloat()
+        }
+        popup.showAsDropDown(
+            hamburgerButton,
+            hamburgerButton.width - dp(MENU_POPUP_WIDTH_DP),
+            0,
+        )
+    }
+
+    private fun menuIconButton(
+        icon: String,
+        label: String,
+        enabled: Boolean,
+        popup: PopupWindow,
+        action: () -> Unit,
+    ): TextView =
+        TextView(this).apply {
+            text = icon
+            textSize = 28f
+            gravity = Gravity.CENTER
+            contentDescription = label
+            minWidth = dp(MENU_ICON_BUTTON_SIZE_DP)
+            minHeight = dp(MENU_ICON_BUTTON_SIZE_DP)
+            setTextColor(Color.rgb(36, 36, 36))
+            isEnabled = enabled
+            alpha = if (enabled) 1f else 0.35f
+            isClickable = enabled
+            isFocusable = enabled
+            if (enabled) {
+                applyScreenSelectableBackground()
+                setOnClickListener {
+                    popup.dismiss()
+                    action()
                 }
             }
-            show()
+        }.also { button ->
+            button.layoutParams = LinearLayout.LayoutParams(
+                dp(MENU_ICON_BUTTON_SIZE_DP),
+                dp(MENU_ICON_BUTTON_SIZE_DP),
+            )
         }
-    }
+
+    private fun menuRow(
+        label: String,
+        popup: PopupWindow,
+        action: () -> Unit,
+    ): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 15f
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(Color.rgb(36, 36, 36))
+            setPadding(dp(16), 0, dp(16), 0)
+            minHeight = dp(MENU_ROW_HEIGHT_DP)
+            isClickable = true
+            isFocusable = true
+            applyScreenSelectableBackground()
+            setOnClickListener {
+                popup.dismiss()
+                action()
+            }
+        }.also { row ->
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(MENU_ROW_HEIGHT_DP),
+            )
+        }
+
+    private fun menuDivider(): View =
+        View(this).apply {
+            setBackgroundColor(Color.rgb(218, 220, 224))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(1),
+            )
+        }
 
     private fun loadInitialPage(intent: Intent?) {
         val requestedUrl = intent
@@ -975,32 +1005,6 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent(this, DownloadsActivity::class.java))
     }
 
-    private fun copyCurrentUrl() {
-        val url = currentPageUrl()
-        if (url == null) {
-            Toast.makeText(this, getString(R.string.toast_no_current_url), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText(getString(R.string.clip_current_url), url))
-        Toast.makeText(this, getString(R.string.toast_current_url_copied), Toast.LENGTH_SHORT).show()
-    }
-
-    private fun shareCurrentUrl() {
-        val url = currentPageUrl()
-        if (url == null) {
-            Toast.makeText(this, getString(R.string.toast_no_current_url), Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val sendIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
-        }
-        startActivity(Intent.createChooser(sendIntent, getString(R.string.menu_share_current_url)))
-    }
-
     private fun handleExternalMainFrameNavigation(uri: Uri): Boolean {
         val scheme = uri.scheme?.lowercase(Locale.US)
         if (scheme == "about" && uri.toString() == "about:blank") {
@@ -1141,18 +1145,12 @@ class MainActivity : ComponentActivity() {
         private const val SYNC_STATUS_POLL_MS = 2_000L
         private const val SECURITY_LABEL_WIDTH_DP = 136
         private const val TOOLBAR_CONTROL_HEIGHT_DP = 48
+        private const val MENU_ICON_BUTTON_SIZE_DP = 48
+        private const val MENU_POPUP_WIDTH_DP = MENU_ICON_BUTTON_SIZE_DP * 3
+        private const val MENU_ROW_HEIGHT_DP = 48
         private const val REQUEST_NOTIFICATIONS = 1002
         private const val PRIVACY_PROMPTS_PREFS = "privacy_prompts"
         private const val KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN = "notification_permission_prompt_shown"
-        private const val MENU_BACK = 1
-        private const val MENU_FORWARD = 2
-        private const val MENU_REFRESH = 3
-        private const val MENU_HOME = 4
-        private const val MENU_HISTORY = 5
-        private const val MENU_DOWNLOADS = 6
-        private const val MENU_COPY_URL = 7
-        private const val MENU_SHARE_URL = 8
-        private const val MENU_SETTINGS = 9
         private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
         private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
         private val SUBFRAME_ALLOWED_SCHEMES = setOf("http", "https", "about", "data", "blob")
