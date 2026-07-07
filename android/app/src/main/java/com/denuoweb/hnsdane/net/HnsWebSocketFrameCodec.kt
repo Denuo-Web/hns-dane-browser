@@ -4,6 +4,17 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.security.SecureRandom
 
+internal object HnsWebSocketLimits {
+    const val MAX_ACTIVE_SESSIONS = 32
+    const val MAX_WEB_MESSAGE_CHARS = 3 * 1024 * 1024
+    const val MAX_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
+    const val MAX_MESSAGE_BYTES = 2 * 1024 * 1024
+    const val MAX_OUTBOUND_QUEUE_BYTES = 4 * 1024 * 1024
+    const val MAX_OUTBOUND_QUEUE_FRAMES = 16
+    const val MAX_HANDSHAKE_BYTES = 64 * 1024
+    const val MAX_OUTBOUND_BINARY_BASE64_CHARS = ((MAX_MESSAGE_BYTES + 2) / 3) * 4
+}
+
 internal data class HnsWebSocketFrame(
     val fin: Boolean,
     val opcode: Int,
@@ -24,7 +35,7 @@ internal data class HnsWebSocketFrame(
 }
 
 internal class HnsWebSocketFrameParser(
-    private val maxPayloadBytes: Int = MAX_PAYLOAD_BYTES,
+    private val maxPayloadBytes: Int = HnsWebSocketLimits.MAX_FRAME_PAYLOAD_BYTES,
     private val onFrame: (HnsWebSocketFrame) -> Unit,
 ) {
     private var buffer = ByteArray(0)
@@ -57,6 +68,9 @@ internal class HnsWebSocketFrameParser(
             val second = buffer[cursor + 1].toInt() and 0xff
             val fin = (first and FIN_BIT) != 0
             val opcode = first and OPCODE_MASK
+            if (opcode !in VALID_OPCODES) {
+                throw IOException("websocket frame opcode is unsupported")
+            }
             val masked = (second and MASK_BIT) != 0
             var payloadLength = (second and LENGTH_MASK).toLong()
             var headerLength = MIN_HEADER_BYTES
@@ -77,6 +91,9 @@ internal class HnsWebSocketFrameParser(
 
             if (payloadLength < 0 || payloadLength > maxPayloadBytes) {
                 throw IOException("websocket frame is too large")
+            }
+            if (opcode in CONTROL_OPCODES && (!fin || payloadLength > MAX_CONTROL_PAYLOAD_BYTES)) {
+                throw IOException("websocket control frame is malformed")
             }
             if (masked) {
                 headerLength += MASK_BYTES
@@ -129,7 +146,79 @@ internal class HnsWebSocketFrameParser(
         const val LENGTH_MASK = 0x7f
         const val LENGTH_16_MARKER = 126
         const val LENGTH_64_MARKER = 127
-        const val MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
+        const val MAX_CONTROL_PAYLOAD_BYTES = 125
+        val VALID_OPCODES = setOf(0x0, 0x1, 0x2, 0x8, 0x9, 0xA)
+        val CONTROL_OPCODES = setOf(0x8, 0x9, 0xA)
+    }
+}
+
+internal class HnsWebSocketMessageAssembler(
+    private val maxMessageBytes: Int = HnsWebSocketLimits.MAX_MESSAGE_BYTES,
+    private val onMessage: (Int, ByteArray) -> Unit,
+    private val onFailure: (String) -> Unit,
+) {
+    private var continuationOpcode: Int? = null
+    private var continuationPayload: ByteArrayOutputStream? = null
+    private var continuationBytes: Int = 0
+
+    fun accept(frame: HnsWebSocketFrame) {
+        when (frame.opcode) {
+            HnsWebSocketFrameCodec.OPCODE_TEXT,
+            HnsWebSocketFrameCodec.OPCODE_BINARY,
+            -> handleDataFrame(frame)
+            HnsWebSocketFrameCodec.OPCODE_CONTINUATION -> handleContinuation(frame)
+            else -> fail("websocket data frame opcode is unsupported")
+        }
+    }
+
+    private fun handleDataFrame(frame: HnsWebSocketFrame) {
+        if (frame.payload.size > maxMessageBytes) {
+            fail("websocket message is too large")
+            return
+        }
+        if (!frame.fin) {
+            if (continuationOpcode != null) {
+                fail("websocket continuation is already active")
+                return
+            }
+            continuationOpcode = frame.opcode
+            continuationBytes = frame.payload.size
+            continuationPayload = ByteArrayOutputStream(frame.payload.size).apply { write(frame.payload) }
+            return
+        }
+        onMessage(frame.opcode, frame.payload)
+    }
+
+    private fun handleContinuation(frame: HnsWebSocketFrame) {
+        val opcode = continuationOpcode
+        val payload = continuationPayload
+        if (opcode == null || payload == null) {
+            fail("websocket continuation frame has no active message")
+            return
+        }
+        val nextSize = continuationBytes.toLong() + frame.payload.size.toLong()
+        if (nextSize > maxMessageBytes) {
+            fail("websocket message is too large")
+            return
+        }
+        payload.write(frame.payload)
+        continuationBytes = nextSize.toInt()
+        if (frame.fin) {
+            val message = payload.toByteArray()
+            resetContinuation()
+            onMessage(opcode, message)
+        }
+    }
+
+    private fun fail(reason: String) {
+        resetContinuation()
+        onFailure(reason)
+    }
+
+    private fun resetContinuation() {
+        continuationOpcode = null
+        continuationPayload = null
+        continuationBytes = 0
     }
 }
 

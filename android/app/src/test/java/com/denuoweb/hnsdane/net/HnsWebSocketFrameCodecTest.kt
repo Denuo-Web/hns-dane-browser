@@ -3,7 +3,9 @@ package com.denuoweb.hnsdane.net
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.IOException
 
 class HnsWebSocketFrameCodecTest {
     @Test
@@ -57,5 +59,76 @@ class HnsWebSocketFrameCodecTest {
         assertEquals(1000, HnsWebSocketFrameCodec.closeCode(payload))
         assertEquals("done", HnsWebSocketFrameCodec.closeReason(payload))
         assertTrue(payload.size > 2)
+    }
+
+    @Test
+    fun parserRejectsOversizedFramePayload() {
+        val parser = HnsWebSocketFrameParser(maxPayloadBytes = 4) {}
+        val frame = serverFrame(
+            fin = true,
+            opcode = HnsWebSocketFrameCodec.OPCODE_TEXT,
+            payload = "large".toByteArray(),
+        )
+
+        assertThrows(IOException::class.java) {
+            parser.append(frame)
+        }
+    }
+
+    @Test
+    fun parserRejectsFragmentedControlFrame() {
+        val parser = HnsWebSocketFrameParser {}
+        val frame = serverFrame(
+            fin = false,
+            opcode = HnsWebSocketFrameCodec.OPCODE_PING,
+            payload = "x".toByteArray(),
+        )
+
+        assertThrows(IOException::class.java) {
+            parser.append(frame)
+        }
+    }
+
+    @Test
+    fun messageAssemblerRejectsOversizedFragmentedMessage() {
+        val messages = mutableListOf<Pair<Int, ByteArray>>()
+        val failures = mutableListOf<String>()
+        val assembler = HnsWebSocketMessageAssembler(
+            maxMessageBytes = 4,
+            onMessage = { opcode, payload -> messages += opcode to payload },
+            onFailure = { failures += it },
+        )
+
+        assembler.accept(HnsWebSocketFrame(false, HnsWebSocketFrameCodec.OPCODE_TEXT, "he".toByteArray()))
+        assembler.accept(HnsWebSocketFrame(true, HnsWebSocketFrameCodec.OPCODE_CONTINUATION, "llo".toByteArray()))
+
+        assertTrue(messages.isEmpty())
+        assertEquals(listOf("websocket message is too large"), failures)
+    }
+
+    @Test
+    fun messageAssemblerEmitsBoundedFragmentedMessage() {
+        val messages = mutableListOf<Pair<Int, ByteArray>>()
+        val failures = mutableListOf<String>()
+        val assembler = HnsWebSocketMessageAssembler(
+            maxMessageBytes = 8,
+            onMessage = { opcode, payload -> messages += opcode to payload },
+            onFailure = { failures += it },
+        )
+
+        assembler.accept(HnsWebSocketFrame(false, HnsWebSocketFrameCodec.OPCODE_TEXT, "he".toByteArray()))
+        assembler.accept(HnsWebSocketFrame(true, HnsWebSocketFrameCodec.OPCODE_CONTINUATION, "llo".toByteArray()))
+
+        assertTrue(failures.isEmpty())
+        assertEquals(HnsWebSocketFrameCodec.OPCODE_TEXT, messages.single().first)
+        assertEquals("hello", messages.single().second.toString(Charsets.UTF_8))
+    }
+
+    private fun serverFrame(fin: Boolean, opcode: Int, payload: ByteArray): ByteArray {
+        require(payload.size < 126) { "test helper only supports short payloads" }
+        return byteArrayOf(
+            ((if (fin) 0x80 else 0) or opcode).toByte(),
+            payload.size.toByte(),
+        ) + payload
     }
 }

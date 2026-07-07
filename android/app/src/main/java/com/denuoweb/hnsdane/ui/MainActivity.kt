@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.content.ContentValues
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -18,6 +19,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.KeyEvent
@@ -63,12 +65,16 @@ import com.denuoweb.hnsdane.net.HnsServiceWorkerGatewayClient
 import com.denuoweb.hnsdane.net.HnsSyncProgress
 import com.denuoweb.hnsdane.net.HnsSyncForegroundService
 import com.denuoweb.hnsdane.net.HnsSyncSnapshot
+import com.denuoweb.hnsdane.net.HnsNativeDownloadFetcher
 import com.denuoweb.hnsdane.net.HnsWebSocketBridge
 import com.denuoweb.hnsdane.net.HnsWebSocketShim
 import com.denuoweb.hnsdane.net.HnsWebViewGatewayInterceptor
 import com.denuoweb.hnsdane.net.HnsWebViewSslErrorPolicy
 import com.denuoweb.hnsdane.net.LoopbackProxyServer
 import com.denuoweb.hnsdane.net.NativeBridge
+import java.io.File
+import java.io.FileInputStream
+import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -76,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private val classifier = BrowserUrlClassifier()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val syncStatusExecutor = Executors.newSingleThreadExecutor()
+    private val downloadExecutor = Executors.newSingleThreadExecutor()
     @Volatile
     private var syncStatusPolling: Boolean = false
     private val syncStatusPollRunnable = object : Runnable {
@@ -323,6 +330,7 @@ class MainActivity : ComponentActivity() {
         stopLoopbackGateway()
         hnsWebSocketBridge.close()
         syncStatusExecutor.shutdownNow()
+        downloadExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -1032,6 +1040,11 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        if (classifier.classify(downloadUrl).kind in NATIVE_GATEWAY_TARGET_KINDS) {
+            handleHnsDownload(downloadUrl, userAgent, contentDisposition, mimeType)
+            return
+        }
+
         val fileName = URLUtil.guessFileName(downloadUrl, contentDisposition, mimeType)
         val request = DownloadManager.Request(Uri.parse(downloadUrl))
             .setTitle(fileName)
@@ -1064,6 +1077,103 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleHnsDownload(
+        downloadUrl: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?,
+    ) {
+        val strictMode = HnsResolutionPreferences.strictHnsMode(this)
+        val dohResolver = HnsResolutionPreferences.dohResolverUrl(this)
+        Toast.makeText(this, getString(R.string.toast_download_started), Toast.LENGTH_SHORT).show()
+        downloadExecutor.execute {
+            val result = runCatching {
+                val fetcher = HnsNativeDownloadFetcher(
+                    dataDir = filesDir,
+                    strictHnsMode = { strictMode },
+                    dohResolverUrl = { dohResolver },
+                )
+                val response = fetcher.fetch(downloadUrl, userAgent)
+                try {
+                    val resolvedMimeType = mimeType
+                        ?.takeIf { it.isNotBlank() }
+                        ?: response.mimeType
+                    val responseDisposition = response.headerValue("Content-Disposition")
+                    val fileName = safeDownloadFileName(
+                        URLUtil.guessFileName(
+                            response.finalUrl,
+                            contentDisposition?.takeIf { it.isNotBlank() } ?: responseDisposition,
+                            resolvedMimeType,
+                        ),
+                    )
+                    val savedUri = saveHnsDownloadBody(response.bodyFile, fileName, resolvedMimeType)
+                    BrowserDownloadStore.recordSavedFile(
+                        this,
+                        savedUri.toString(),
+                        response.finalUrl,
+                        fileName,
+                        resolvedMimeType,
+                    )
+                    fileName
+                } finally {
+                    response.bodyFile.delete()
+                }
+            }
+            mainHandler.post {
+                result
+                    .onSuccess { fileName ->
+                        Toast.makeText(this, getString(R.string.toast_download_saved, fileName), Toast.LENGTH_SHORT).show()
+                    }
+                    .onFailure { error ->
+                        Toast.makeText(
+                            this,
+                            getString(R.string.toast_download_not_supported, error.message ?: "HNS download failed"),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+            }
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun saveHnsDownloadBody(
+        bodyFile: File,
+        fileName: String,
+        mimeType: String,
+    ): Uri {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType.ifBlank { "application/octet-stream" })
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val resolver = contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
+            ?: throw IOException("Could not create download entry.")
+        try {
+            resolver.openOutputStream(uri, "w")?.use { output ->
+                FileInputStream(bodyFile).use { input -> input.copyTo(output) }
+            } ?: throw IOException("Could not open download entry.")
+            val completed = ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }
+            resolver.update(uri, completed, null, null)
+            return uri
+        } catch (error: Exception) {
+            resolver.delete(uri, null, null)
+            throw if (error is IOException) error else IOException(error.message ?: "Could not save download.", error)
+        }
+    }
+
+    private fun safeDownloadFileName(fileName: String): String {
+        val cleaned = fileName
+            .trim()
+            .replace(UNSAFE_DOWNLOAD_FILE_CHARS, "_")
+            .trim('.')
+            .ifBlank { "download" }
+        return cleaned.take(MAX_DOWNLOAD_FILE_NAME_CHARS).ifBlank { "download" }
+    }
+
     private fun unsupportedDownloadReason(url: String): String? {
         if (url.isBlank()) {
             return getString(R.string.toast_download_not_supported, "missing URL")
@@ -1080,9 +1190,6 @@ class MainActivity : ComponentActivity() {
         }
         if (uri.host.equals("appassets.androidplatform.net", ignoreCase = true)) {
             return getString(R.string.toast_download_not_supported, "local app assets cannot be downloaded")
-        }
-        if (classifier.classify(url).kind in NATIVE_GATEWAY_TARGET_KINDS) {
-            return getString(R.string.toast_download_not_supported, "HNS-resolved downloads are not supported yet")
         }
         return null
     }
@@ -1139,8 +1246,10 @@ class MainActivity : ComponentActivity() {
         private const val MENU_POPUP_WIDTH_DP = MENU_ICON_BUTTON_SIZE_DP * 3
         private const val MENU_ROW_HEIGHT_DP = 48
         private const val REQUEST_NOTIFICATIONS = 1002
+        private const val MAX_DOWNLOAD_FILE_NAME_CHARS = 120
         private const val PRIVACY_PROMPTS_PREFS = "privacy_prompts"
         private const val KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN = "notification_permission_prompt_shown"
+        private val UNSAFE_DOWNLOAD_FILE_CHARS = Regex("[\\\\/:*?\"<>|\\p{Cntrl}]")
         private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
         private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
         private val SUBFRAME_ALLOWED_SCHEMES = setOf("http", "https", "about", "data", "blob")

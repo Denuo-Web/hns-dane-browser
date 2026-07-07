@@ -6,6 +6,7 @@ import org.json.JSONObject
 
 internal data class BrowserDownloadRecord(
     val downloadId: Long,
+    val contentUri: String,
     val url: String,
     val fileName: String,
     val mimeType: String,
@@ -36,12 +37,36 @@ internal object BrowserDownloadStore {
         val updated = listOf(
             BrowserDownloadRecord(
                 downloadId = downloadId,
+                contentUri = "",
                 url = url,
                 fileName = fileName,
                 mimeType = mimeType.orEmpty(),
                 queuedAtMillis = queuedAtMillis,
             ),
-        ) + records(context).filterNot { it.downloadId == downloadId }
+        ) + records(context).filterNot { it.downloadId == downloadId && downloadId >= 0L }
+
+        save(context, updated.take(MAX_RECORDS))
+    }
+
+    @Synchronized
+    fun recordSavedFile(
+        context: Context,
+        contentUri: String,
+        url: String,
+        fileName: String,
+        mimeType: String?,
+        queuedAtMillis: Long = System.currentTimeMillis(),
+    ) {
+        val updated = listOf(
+            BrowserDownloadRecord(
+                downloadId = -1L,
+                contentUri = contentUri,
+                url = url,
+                fileName = fileName,
+                mimeType = mimeType.orEmpty(),
+                queuedAtMillis = queuedAtMillis,
+            ),
+        ) + records(context).filterNot { it.contentUri == contentUri && contentUri.isNotBlank() }
 
         save(context, updated.take(MAX_RECORDS))
     }
@@ -65,13 +90,15 @@ internal object BrowserDownloadStore {
         return (0 until array.length()).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val downloadId = item.optLong("downloadId", -1L)
+            val contentUri = item.optString("contentUri").trim()
             val url = item.optString("url").trim()
             val fileName = item.optString("fileName").trim()
-            if (downloadId < 0L || url.isBlank()) {
+            if ((downloadId < 0L && contentUri.isBlank()) || url.isBlank()) {
                 null
             } else {
                 BrowserDownloadRecord(
                     downloadId = downloadId,
+                    contentUri = contentUri,
                     url = url,
                     fileName = fileName.ifBlank { "download" },
                     mimeType = item.optString("mimeType").trim(),
@@ -87,6 +114,7 @@ internal object BrowserDownloadStore {
             array.put(
                 JSONObject()
                     .put("downloadId", record.downloadId)
+                    .put("contentUri", record.contentUri)
                     .put("url", record.url)
                     .put("fileName", record.fileName)
                     .put("mimeType", record.mimeType)

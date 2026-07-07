@@ -1,6 +1,6 @@
 # Production Readiness Audit
 
-Last audited: 2026-07-06
+Last audited: 2026-07-07
 
 This audit treats the app as a Play Store closed-testing candidate and checks the shipped Android surface from the outside in: manifest, WebView behavior, release build configuration, network/privacy declarations, diagnostic UI, and release automation.
 
@@ -17,7 +17,7 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 | Data collection posture | Ready for declaration | No ads, analytics SDKs, developer accounts, location, contacts, SMS, camera, microphone, or advertising ID access were found in app code. Browser requests, HNS peer traffic, DNS, and optional compatibility DoH remain user-visible app functionality. |
 | HNS diagnostics | Ready | Resolver trace, HNS proof details, TLSA/DANE inspector, gateway event log, and diagnostic bundle export are present. |
 | Production UI | Improved | Main menu now keeps user browsing controls and HNS page-specific inspectors; full app diagnostics live under Settings. Toolbar status text is bounded so it does not crowd the omnibar on small screens. |
-| Google Play closed testing | Externally blocked | The signed AAB exists, but local API upload is blocked until a Play-linked service account or correctly scoped Android Publisher token is available. Manual Play Console upload remains valid. |
+| Google Play closed testing | Externally blocked | Build packaging reaches `bundleRelease`, but `verifyPlayReleaseBundle` fails until Play upload signing environment variables are configured. Manual Play Console upload remains valid after a verified signed AAB exists. |
 
 ## Applied Cleanup
 
@@ -31,8 +31,8 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 
 ## Remaining Non-Code Work
 
-- Build and upload a fresh `dist/play-store/hns-dane-browser-v0.3.1-play-upload-signed.aab` to the closed testing track in Play Console for package `com.denuoweb.hnsdane`.
-- Complete the Foreground service declaration with the short sync demo video.
+- Build and upload a fresh `dist/play-store/hns-dane-browser-v0.3.2-play-upload-signed.aab` to the closed testing track in Play Console for package `com.denuoweb.hnsdane`.
+- Complete the Foreground service declaration with the short sync demo video using the Console-ready text in `docs/play-store-readiness.md`.
 - Complete Data safety, App access, Content rating, Target audience, Ads, and Privacy policy declarations using `docs/play-store-readiness.md`.
 - Add at least 12 opted-in testers and keep closed testing active for the required period if Google applies the new personal-account production-access rule.
 
@@ -40,5 +40,5 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 
 - Notification permission is requested with an in-app rationale because sync runs as a visible data-sync foreground service. If users decline it, keep the in-app sync progress clear enough to understand sync state without relying on system notification visibility.
 - General-purpose browsing can reach arbitrary third-party web content; keep target audience and content rating conservative.
-- HNS WebSocket / HTTP Upgrade for HNS origins now uses native stream tunneling after HNS resolution, HTTPS/SVCB policy, and DANE validation; keep regression coverage around bridge-unavailable and validation-failure fail-closed behavior.
+- HNS WebSocket / HTTP Upgrade for HNS origins now uses native stream tunneling after HNS resolution, HTTPS/SVCB policy, and DANE validation with bounded bridge messages, handshake buffering, and outbound native write queues; keep regression coverage around bridge-unavailable and validation-failure fail-closed behavior.
 - Parallel/ranged header sync remains bounded by Handshake header-chain validation order and peer/protocol pacing; performance work should avoid weakening canonical-header validation.

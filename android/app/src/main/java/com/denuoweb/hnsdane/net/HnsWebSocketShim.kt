@@ -27,6 +27,8 @@ internal object HnsWebSocketShim {
   var nextId = 1;
   var icannTlds = new Set([$icannTlds]);
   var reservedSingleLabels = new Set(['example', 'invalid', 'local', 'localhost', 'test']);
+  var maxMessageBytes = ${HnsWebSocketLimits.MAX_MESSAGE_BYTES};
+  var maxBufferedBytes = ${HnsWebSocketLimits.MAX_OUTBOUND_QUEUE_BYTES};
 
   function normalizeHost(host) {
     return String(host || '').replace(/^\[/, '').replace(/\]${'$'}/, '').replace(/\.+${'$'}/, '').toLowerCase();
@@ -126,6 +128,23 @@ internal object HnsWebSocketShim {
     return output + (chunk ? btoa(chunk) : '');
   }
 
+  function textByteLength(value) {
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(value).length;
+    if (typeof Blob !== 'undefined') return new Blob([value]).size;
+    return String(value).length;
+  }
+
+  function reserveSend(socket, byteLength) {
+    if (byteLength > maxMessageBytes) throw new DOMException('HNS WebSocket message is too large.', 'QuotaExceededError');
+    if (socket.bufferedAmount + byteLength > maxBufferedBytes) {
+      throw new DOMException('HNS WebSocket send buffer is full.', 'QuotaExceededError');
+    }
+    socket.bufferedAmount += byteLength;
+    setTimeout(function() {
+      socket.bufferedAmount = Math.max(0, socket.bufferedAmount - byteLength);
+    }, 0);
+  }
+
   function HnsNativeWebSocket(url, protocols) {
     this.url = url;
     this.readyState = CONNECTING;
@@ -169,19 +188,19 @@ internal object HnsWebSocketShim {
     if (this.readyState === CONNECTING) throw new DOMException('WebSocket is still connecting.', 'InvalidStateError');
     if (this.readyState !== OPEN) return;
     if (typeof data === 'string') {
-      this.bufferedAmount += data.length;
+      reserveSend(this, textByteLength(data));
       post({ type: 'send', pageId: pageId, id: this.__id, dataType: 'text', data: data });
       return;
     }
     if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
       var buffer = data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-      this.bufferedAmount += buffer.byteLength;
+      reserveSend(this, buffer.byteLength);
       post({ type: 'send', pageId: pageId, id: this.__id, dataType: 'binary', data: arrayBufferToBase64(buffer) });
       return;
     }
     if (typeof Blob !== 'undefined' && data instanceof Blob) {
       var socket = this;
-      this.bufferedAmount += data.size;
+      reserveSend(this, data.size);
       data.arrayBuffer().then(function(buffer) {
         if (socket.readyState === OPEN) {
           post({ type: 'send', pageId: pageId, id: socket.__id, dataType: 'binary', data: arrayBufferToBase64(buffer) });
@@ -189,7 +208,9 @@ internal object HnsWebSocketShim {
       });
       return;
     }
-    post({ type: 'send', pageId: pageId, id: this.__id, dataType: 'text', data: String(data) });
+    data = String(data);
+    reserveSend(this, textByteLength(data));
+    post({ type: 'send', pageId: pageId, id: this.__id, dataType: 'text', data: data });
   };
 
   HnsNativeWebSocket.prototype.close = function(code, reason) {

@@ -46,6 +46,9 @@ class HnsWebSocketBridge(
             return
         }
         val data = message.data ?: return
+        if (data.length > HnsWebSocketLimits.MAX_WEB_MESSAGE_CHARS) {
+            return
+        }
         val payload = runCatching { JSONObject(data) }.getOrNull() ?: return
         when (payload.optString("type")) {
             "open" -> openSession(payload, sourceOrigin.toString(), isMainFrame, view)
@@ -77,7 +80,7 @@ class HnsWebSocketBridge(
         if (id < 0) {
             return
         }
-        if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+        if (sessions.size >= HnsWebSocketLimits.MAX_ACTIVE_SESSIONS) {
             emitClose(webView, key, CLOSE_ABNORMAL, "too many HNS WebSockets", false)
             return
         }
@@ -116,10 +119,19 @@ class HnsWebSocketBridge(
         val session = sessions[HnsWebSocketSessionKey.fromPayload(payload)] ?: return
         when (payload.optString("dataType")) {
             "text" -> session.sendText(payload.optString("data", ""))
-            "binary" -> session.sendBinary(
-                runCatching { Base64.getDecoder().decode(payload.optString("data", "")) }
-                    .getOrDefault(ByteArray(0)),
-            )
+            "binary" -> {
+                val encoded = payload.optString("data", "")
+                if (encoded.length > HnsWebSocketLimits.MAX_OUTBOUND_BINARY_BASE64_CHARS) {
+                    session.reject("HNS WebSocket binary message is too large", CLOSE_MESSAGE_TOO_BIG)
+                    return
+                }
+                val bytes = runCatching { Base64.getDecoder().decode(encoded) }
+                    .getOrElse {
+                        session.reject("HNS WebSocket binary message is malformed")
+                        return
+                    }
+                session.sendBinary(bytes)
+            }
             else -> session.sendText(payload.optString("data", ""))
         }
     }
@@ -153,10 +165,11 @@ class HnsWebSocketBridge(
     }
 
     companion object {
-        const val MAX_ACTIVE_SESSIONS = 32
         const val CLOSE_NORMAL = 1000
         const val CLOSE_GOING_AWAY = 1001
         const val CLOSE_ABNORMAL = 1006
+        const val CLOSE_MESSAGE_TOO_BIG = 1009
+        const val CLOSE_TRY_AGAIN_LATER = 1013
     }
 }
 
@@ -193,11 +206,16 @@ private class NativeHnsWebSocketSession(
 ) {
     private val finished = AtomicBoolean(false)
     private val writeLock = Any()
+    private val outboundQueueLock = Any()
     private var clientWriter: PipedOutputStream? = null
-    private var continuationOpcode: Int? = null
-    private var continuationPayload: ByteArrayOutputStream? = null
+    private var pendingOutboundBytes = 0
+    private var pendingOutboundFrames = 0
     @Volatile
     private var opened = false
+    private val messageAssembler = HnsWebSocketMessageAssembler(
+        onMessage = ::emitMessage,
+        onFailure = { reason -> fail(reason, HnsWebSocketBridge.CLOSE_MESSAGE_TOO_BIG) },
+    )
 
     fun start() {
         val clientInput = PipedInputStream(PIPE_BUFFER_BYTES)
@@ -243,6 +261,10 @@ private class NativeHnsWebSocketSession(
         writeFrame(HnsWebSocketFrameCodec.OPCODE_BINARY, bytes)
     }
 
+    fun reject(reason: String, code: Int = HnsWebSocketBridge.CLOSE_ABNORMAL) {
+        fail(reason, code)
+    }
+
     fun close(code: Int, reason: String) {
         executor.execute {
             runCatching {
@@ -261,15 +283,51 @@ private class NativeHnsWebSocketSession(
         if (finished.get() || !opened) {
             return
         }
-        executor.execute {
-            runCatching {
-                synchronized(writeLock) {
-                    clientWriter?.write(HnsWebSocketFrameCodec.encodeClientFrame(opcode, payload))
-                    clientWriter?.flush()
+        if (payload.size > HnsWebSocketLimits.MAX_MESSAGE_BYTES) {
+            fail("HNS WebSocket message is too large", HnsWebSocketBridge.CLOSE_MESSAGE_TOO_BIG)
+            return
+        }
+        if (!reserveOutbound(payload.size)) {
+            fail("HNS WebSocket send buffer is full", HnsWebSocketBridge.CLOSE_TRY_AGAIN_LATER)
+            return
+        }
+        try {
+            executor.execute {
+                runCatching {
+                    synchronized(writeLock) {
+                        clientWriter?.write(HnsWebSocketFrameCodec.encodeClientFrame(opcode, payload))
+                        clientWriter?.flush()
+                    }
+                }.onFailure {
+                    fail("HNS WebSocket send failed")
+                }.also {
+                    releaseOutbound(payload.size)
                 }
-            }.onFailure {
-                fail("HNS WebSocket send failed")
             }
+        } catch (_: RuntimeException) {
+            releaseOutbound(payload.size)
+            fail("HNS WebSocket send failed")
+        }
+    }
+
+    private fun reserveOutbound(payloadBytes: Int): Boolean =
+        synchronized(outboundQueueLock) {
+            if (
+                pendingOutboundFrames >= HnsWebSocketLimits.MAX_OUTBOUND_QUEUE_FRAMES ||
+                pendingOutboundBytes.toLong() + payloadBytes.toLong() > HnsWebSocketLimits.MAX_OUTBOUND_QUEUE_BYTES
+            ) {
+                false
+            } else {
+                pendingOutboundFrames += 1
+                pendingOutboundBytes += payloadBytes
+                true
+            }
+        }
+
+    private fun releaseOutbound(payloadBytes: Int) {
+        synchronized(outboundQueueLock) {
+            pendingOutboundFrames = (pendingOutboundFrames - 1).coerceAtLeast(0)
+            pendingOutboundBytes = (pendingOutboundBytes - payloadBytes).coerceAtLeast(0)
         }
     }
 
@@ -287,41 +345,25 @@ private class NativeHnsWebSocketSession(
     }
 
     private fun handleFrameBytes(bytes: ByteArray, offset: Int, length: Int) {
-        frameParser.append(bytes, offset, length)
+        runCatching {
+            frameParser.append(bytes, offset, length)
+        }.onFailure { error ->
+            fail(error.message ?: "HNS WebSocket frame is malformed")
+        }
     }
 
     private val frameParser = HnsWebSocketFrameParser { frame ->
         when (frame.opcode) {
             HnsWebSocketFrameCodec.OPCODE_TEXT,
             HnsWebSocketFrameCodec.OPCODE_BINARY,
-            -> handleDataFrame(frame)
-            HnsWebSocketFrameCodec.OPCODE_CONTINUATION -> handleContinuation(frame)
+            HnsWebSocketFrameCodec.OPCODE_CONTINUATION,
+            -> messageAssembler.accept(frame)
             HnsWebSocketFrameCodec.OPCODE_PING -> writeFrame(HnsWebSocketFrameCodec.OPCODE_PONG, frame.payload)
             HnsWebSocketFrameCodec.OPCODE_CLOSE -> {
                 val code = HnsWebSocketFrameCodec.closeCode(frame.payload) ?: HnsWebSocketBridge.CLOSE_NORMAL
                 val reason = HnsWebSocketFrameCodec.closeReason(frame.payload)
                 finishClose(code, reason, true)
             }
-        }
-    }
-
-    private fun handleDataFrame(frame: HnsWebSocketFrame) {
-        if (!frame.fin) {
-            continuationOpcode = frame.opcode
-            continuationPayload = ByteArrayOutputStream().apply { write(frame.payload) }
-            return
-        }
-        emitMessage(frame.opcode, frame.payload)
-    }
-
-    private fun handleContinuation(frame: HnsWebSocketFrame) {
-        val opcode = continuationOpcode ?: return
-        val payload = continuationPayload ?: return
-        payload.write(frame.payload)
-        if (frame.fin) {
-            continuationOpcode = null
-            continuationPayload = null
-            emitMessage(opcode, payload.toByteArray())
         }
     }
 
@@ -341,11 +383,15 @@ private class NativeHnsWebSocketSession(
     }
 
     private fun fail(reason: String) {
+        fail(reason, HnsWebSocketBridge.CLOSE_ABNORMAL)
+    }
+
+    private fun fail(reason: String, code: Int) {
         if (finished.get()) {
             return
         }
         emit(key.event("error").put("reason", reason))
-        finishClose(HnsWebSocketBridge.CLOSE_ABNORMAL, reason, false)
+        finishClose(code, reason, false)
     }
 
     private fun finishClose(code: Int, reason: String, wasClean: Boolean) {
@@ -357,6 +403,10 @@ private class NativeHnsWebSocketSession(
                 clientWriter?.close()
                 clientWriter = null
             }
+        }
+        synchronized(outboundQueueLock) {
+            pendingOutboundFrames = 0
+            pendingOutboundBytes = 0
         }
         emit(
             key.event("close")
@@ -406,13 +456,14 @@ private class NativeHnsWebSocketSession(
     }
 }
 
-private class HnsWebSocketTunnelOutput(
+internal class HnsWebSocketTunnelOutput(
     private val onHandshake: (ByteArray) -> Unit,
     private val onFrameBytes: (ByteArray, Int, Int) -> Unit,
     private val onFailure: (String) -> Unit,
 ) : OutputStream() {
     private val handshake = ByteArrayOutputStream()
     private var handshakeComplete = false
+    private var failed = false
 
     override fun write(b: Int) {
         val byte = byteArrayOf(b.toByte())
@@ -420,7 +471,7 @@ private class HnsWebSocketTunnelOutput(
     }
 
     override fun write(b: ByteArray, off: Int, len: Int) {
-        if (len <= 0) {
+        if (len <= 0 || failed) {
             return
         }
         if (handshakeComplete) {
@@ -432,7 +483,9 @@ private class HnsWebSocketTunnelOutput(
         val bytes = handshake.toByteArray()
         val headEnd = headerEnd(bytes)
         if (headEnd < 0) {
-            if (bytes.size > MAX_HANDSHAKE_BYTES) {
+            if (bytes.size > HnsWebSocketLimits.MAX_HANDSHAKE_BYTES) {
+                failed = true
+                handshake.reset()
                 onFailure("HNS WebSocket handshake response is too large")
             }
             return
@@ -457,7 +510,6 @@ private class HnsWebSocketTunnelOutput(
     }
 
     private companion object {
-        const val MAX_HANDSHAKE_BYTES = 64 * 1024
         val HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
     }
 }

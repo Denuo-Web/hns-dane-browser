@@ -13,5 +13,7 @@ class HnsWebSocketShimTest {
         assertTrue(script.contains("type: 'send', pageId: pageId"))
         assertTrue(script.contains("type: 'close', pageId: pageId"))
         assertTrue(script.contains("if (message.pageId !== pageId) return;"))
+        assertTrue(script.contains("var maxMessageBytes = ${HnsWebSocketLimits.MAX_MESSAGE_BYTES};"))
+        assertTrue(script.contains("reserveSend(this,"))
     }
 }

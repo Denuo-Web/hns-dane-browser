@@ -23,6 +23,8 @@
     <string name="toast_webview_renderer_unresponsive">Page stopped responding</string>
     <string name="toast_webview_renderer_restarted">WebView renderer was restarted</string>
     <string name="toast_download_queued">Download queued: %1$s</string>
+    <string name="toast_download_started">Starting download</string>
+    <string name="toast_download_saved">Download saved: %1$s</string>
     <string name="toast_download_not_supported">Download not supported: %1$s</string>
     <string name="notification_permission_rationale_title">Show sync notifications?</string>
     <string name="notification_permission_rationale_message">HNS sync runs as a visible data sync service while the browser is open. Notifications show sync progress and provide a stop action.</string>

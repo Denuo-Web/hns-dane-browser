@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.text.format.DateFormat
 import android.widget.LinearLayout
@@ -26,7 +27,7 @@ class DownloadsActivity : ComponentActivity() {
         setSecondaryScreen("Downloads") {
             addView(screenSection("Download records") {
                 addScreenRow(preferenceRow(
-                    title = "App-queued downloads",
+                    title = "App downloads",
                     summaryView = status,
                 ))
                 addScreenRow(preferenceRow(
@@ -57,15 +58,15 @@ class DownloadsActivity : ComponentActivity() {
         listContainer.removeAllViews()
         val records = BrowserDownloadStore.records(this)
         status.text = if (records.isEmpty()) {
-            "No app-queued downloads yet."
+            "No app downloads yet."
         } else {
-            "${records.size} app-queued download${if (records.size == 1) "" else "s"}."
+            "${records.size} app download${if (records.size == 1) "" else "s"}."
         }
 
         if (records.isEmpty()) {
             listContainer.addScreenRow(preferenceRow(
                 title = "No recent downloads",
-                summary = "Downloads queued by this browser will appear here.",
+                summary = "Downloads saved or queued by this browser will appear here.",
             ))
         } else {
             records.forEach { record ->
@@ -79,13 +80,17 @@ class DownloadsActivity : ComponentActivity() {
             title = record.fileName,
             summary = buildString {
                 appendLine("Queued: ${formatTime(record.queuedAtMillis)}")
-                appendLine("Status: ${downloadStatus(record.downloadId)}")
+                appendLine("Status: ${downloadStatus(record)}")
                 appendLine("URL: ${record.url}")
             },
             summaryMaxLines = 4,
         )
 
-    private fun downloadStatus(downloadId: Long): String {
+    private fun downloadStatus(record: BrowserDownloadRecord): String {
+        if (record.contentUri.isNotBlank()) {
+            return mediaStoreDownloadStatus(record.contentUri)
+        }
+        val downloadId = record.downloadId
         val manager = getSystemService(DownloadManager::class.java)
         val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
             ?: return "Unknown"
@@ -101,6 +106,17 @@ class DownloadsActivity : ComponentActivity() {
                 DownloadManager.STATUS_FAILED -> "Failed (${it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))})"
                 else -> "Unknown"
             }
+        }
+    }
+
+    private fun mediaStoreDownloadStatus(contentUri: String): String {
+        val uri = runCatching { Uri.parse(contentUri) }.getOrNull() ?: return "Saved file record is invalid"
+        return try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+                "Saved to Downloads"
+            } ?: "Saved file is unavailable"
+        } catch (_: Exception) {
+            "Saved file is unavailable"
         }
     }
 
