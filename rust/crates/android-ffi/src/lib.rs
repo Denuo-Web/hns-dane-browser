@@ -1,3 +1,8 @@
+#![cfg_attr(
+    not(test),
+    deny(clippy::expect_used, clippy::panic, clippy::unwrap_used)
+)]
+
 use hns_chain::{HeaderChain, SqliteHeaderStore};
 use hns_core::dns::{
     DnsEncodeConfig, DnsFlags, DnsHeader, DnsMessage, DnsName, DnsQuestion, RecordType,
@@ -493,8 +498,8 @@ type AndroidCompatibilityGatewayResolver = CompositeResolver<
 >;
 
 enum AndroidGatewayResolver {
-    Strict(AndroidStrictGatewayResolver),
-    Compatibility(AndroidCompatibilityGatewayResolver),
+    Strict(Box<AndroidStrictGatewayResolver>),
+    Compatibility(Box<AndroidCompatibilityGatewayResolver>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -753,13 +758,14 @@ where
 
         match self.primary.resolve(request) {
             Ok(answer) => Ok(answer),
-            Err(error) if doh_fallback_reason(&error).is_some() => {
-                let reason = doh_fallback_reason(&error).expect("fallback reason checked");
+            Err(error) => {
+                let Some(reason) = doh_fallback_reason(&error) else {
+                    return Err(error);
+                };
                 self.remember_fallback_reason(request, reason);
                 self.fallback_marker.mark(reason);
                 self.fallback.resolve(request)
             }
-            Err(error) => Err(error),
         }
     }
 }
@@ -819,14 +825,14 @@ where
 
         match self.primary.resolve_delegated(request, delegation) {
             Ok(answer) => Ok(answer),
-            Err(error) if delegated_doh_transport_fallback_reason(&error).is_some() => {
-                let reason = delegated_doh_transport_fallback_reason(&error)
-                    .expect("fallback reason checked");
+            Err(error) => {
+                let Some(reason) = delegated_doh_transport_fallback_reason(&error) else {
+                    return Err(error);
+                };
                 self.remember_fallback_reason(request, reason);
                 self.fallback_marker.mark(reason);
                 self.fallback.resolve_delegated(request, delegation)
             }
-            Err(error) => Err(error),
         }
     }
 }
@@ -1713,10 +1719,10 @@ fn android_gateway_resolver(
                 AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
                     .with_authoritative_doh_preferred(),
             );
-            AndroidGatewayResolver::Strict(CompositeResolver::new(
+            AndroidGatewayResolver::Strict(Box::new(CompositeResolver::new(
                 primary,
                 IcannDohResolver::new(dns_trace),
-            ))
+            )))
         }
         GatewayResolutionMode::Compatibility => {
             let direct =
@@ -1734,10 +1740,10 @@ fn android_gateway_resolver(
                 HnsDohResolver::new(doh_endpoint, dns_trace.clone()),
                 fallback_marker,
             );
-            AndroidGatewayResolver::Compatibility(CompositeResolver::new(
+            AndroidGatewayResolver::Compatibility(Box::new(CompositeResolver::new(
                 hns,
                 IcannDohResolver::new(dns_trace),
-            ))
+            )))
         }
     }
 }
