@@ -110,6 +110,20 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         unavailableSyncJson("rust-core-unavailable")
     }
 
+    @Synchronized
+    fun installHeaderSnapshot(dataDir: String, snapshotPath: String): String = if (isLoaded) {
+        nativeInstallHeaderSnapshot(dataDir, snapshotPath)
+    } else {
+        unavailableSyncJson("rust-core-unavailable")
+    }
+
+    @Synchronized
+    fun resetHeadersFromPeers(dataDir: String): String = if (isLoaded) {
+        nativeResetHeadersFromPeers(dataDir)
+    } else {
+        unavailableSyncJson("rust-core-unavailable")
+    }
+
     fun hnsProofDetails(dataDir: String, host: String): String = if (isLoaded) {
         nativeHnsProofDetails(dataDir, host)
     } else {
@@ -215,6 +229,10 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
     private external fun nativeSyncStatus(dataDir: String): String
 
     private external fun nativeClearResolverCache(dataDir: String): String
+
+    private external fun nativeInstallHeaderSnapshot(dataDir: String, snapshotPath: String): String
+
+    private external fun nativeResetHeadersFromPeers(dataDir: String): String
 
     private external fun nativeHnsProofDetails(dataDir: String, host: String): String
 

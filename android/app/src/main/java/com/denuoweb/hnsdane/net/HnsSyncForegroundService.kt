@@ -57,7 +57,10 @@ class HnsSyncForegroundService : Service() {
             return
         }
 
-        scheduler = HnsSyncScheduler(filesDir).also { newScheduler ->
+        scheduler = HnsSyncScheduler(
+            filesDir,
+            bridge = BundledHeaderSyncBridge(this),
+        ).also { newScheduler ->
             newScheduler.start { snapshot ->
                 publishSnapshot(snapshot)
                 updateNotification(snapshot)

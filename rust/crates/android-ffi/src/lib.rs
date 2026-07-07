@@ -9,7 +9,7 @@ use hns_core::dns::{
     ResourceRecord,
 };
 use hns_core::network;
-use hns_core::{BlockHeader, Height, NameHash};
+use hns_core::{BlockHeader, HEADER_SIZE, Height, NameHash};
 use hns_dane::{
     DaneDecision, MAX_STATELESS_DANE_ROOTS, StatelessDaneConfig, TlsaMatching, TlsaRecord,
     TlsaSelector, TlsaUsage,
@@ -72,6 +72,9 @@ const ANDROID_PARALLEL_PEER_PROBES: usize = 32;
 const ANDROID_PARALLEL_HEADER_FETCH_PEERS: usize = 4;
 const ANDROID_MIN_PEER_TARGET: usize = 64;
 const ANDROID_PEER_HEIGHT_REFRESH_INTERVAL_SECONDS: u64 = 10 * 60;
+const HEADER_SNAPSHOT_MAGIC: &[u8] = b"HNSHDRSNAP1";
+const HEADER_SNAPSHOT_IMPORT_BATCH: usize = 2_000;
+const HEADER_SNAPSHOT_MAX_HEIGHT: u32 = 1_000_000;
 const MAINNET_GENESIS_TIME: u64 = 1_580_745_078;
 const MAINNET_TARGET_SPACING_SECONDS: u64 = 10 * 60;
 const LOCAL_CHAIN_CURRENTNESS_ALLOWED_LAG: u32 = RESOURCE_PROOF_CACHE_CANONICAL_WINDOW;
@@ -1204,6 +1207,18 @@ pub fn sync_status(data_dir: &str) -> String {
 
 pub fn clear_resolver_cache(data_dir: &str) -> String {
     clear_resolver_cache_inner(data_dir)
+        .unwrap_or_else(NativeSyncStatus::error)
+        .to_json()
+}
+
+pub fn install_header_snapshot(data_dir: &str, snapshot_path: &str) -> String {
+    install_header_snapshot_inner(data_dir, snapshot_path)
+        .unwrap_or_else(NativeSyncStatus::error)
+        .to_json()
+}
+
+pub fn reset_headers_from_peers(data_dir: &str) -> String {
+    reset_headers_from_peers_inner(data_dir)
         .unwrap_or_else(NativeSyncStatus::error)
         .to_json()
 }
@@ -3680,6 +3695,189 @@ fn open_initialized_header_chain(base: &Path) -> Result<HeaderChain<SqliteHeader
     Ok(chain)
 }
 
+fn install_header_snapshot_inner(
+    data_dir: &str,
+    snapshot_path: &str,
+) -> Result<NativeSyncStatus, String> {
+    let base = Path::new(data_dir).join("hns");
+    let mut snapshot =
+        fs::File::open(snapshot_path).map_err(|error| format!("open header snapshot: {error}"))?;
+    let metadata = read_header_snapshot_metadata(&mut snapshot)?;
+    let mut chain = open_initialized_header_chain(&base)?;
+    if chain
+        .best_header()
+        .map_err(|error| format!("read best header before snapshot import: {error}"))?
+        .is_some_and(|header| header.height.0 >= metadata.target_height)
+    {
+        return sync_status_with_override(data_dir, "snapshot_present", 1, 1, 0);
+    }
+
+    let mut header_bytes = [0u8; HEADER_SIZE];
+    snapshot
+        .read_exact(&mut header_bytes)
+        .map_err(|error| format!("read snapshot genesis header: {error}"))?;
+    let genesis = BlockHeader::parse(&header_bytes)
+        .map_err(|error| format!("parse snapshot genesis header: {error}"))?;
+    if genesis != BlockHeader::mainnet_genesis() {
+        return Err("snapshot genesis header does not match mainnet".to_owned());
+    }
+
+    let mut accepted_total = 0usize;
+    let mut batch = Vec::with_capacity(HEADER_SNAPSHOT_IMPORT_BATCH);
+    for height in 1..=metadata.target_height {
+        snapshot
+            .read_exact(&mut header_bytes)
+            .map_err(|error| format!("read snapshot header {height}: {error}"))?;
+        let header = BlockHeader::parse(&header_bytes)
+            .map_err(|error| format!("parse snapshot header {height}: {error}"))?;
+        batch.push(header);
+        if batch.len() >= HEADER_SNAPSHOT_IMPORT_BATCH {
+            accepted_total = accepted_total
+                .saturating_add(insert_header_snapshot_batch(&mut chain, &mut batch)?);
+        }
+    }
+    accepted_total =
+        accepted_total.saturating_add(insert_header_snapshot_batch(&mut chain, &mut batch)?);
+
+    let mut trailing = [0u8; 1];
+    if snapshot
+        .read(&mut trailing)
+        .map_err(|error| format!("read snapshot trailer: {error}"))?
+        != 0
+    {
+        return Err("header snapshot has trailing bytes".to_owned());
+    }
+
+    let tip = chain
+        .canonical_header(Height(metadata.target_height))
+        .ok_or_else(|| "snapshot target height is not canonical after import".to_owned())?;
+    if tip.hash != metadata.tip_hash {
+        return Err(format!(
+            "snapshot tip hash mismatch at height {}: got {}, expected {}",
+            metadata.target_height, tip.hash, metadata.tip_hash
+        ));
+    }
+
+    sync_status_with_override(data_dir, "snapshot_imported", 1, 1, accepted_total)
+}
+
+fn insert_header_snapshot_batch(
+    chain: &mut HeaderChain<SqliteHeaderStore>,
+    batch: &mut Vec<BlockHeader>,
+) -> Result<usize, String> {
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let headers = std::mem::take(batch);
+    let accepted = chain
+        .insert_headers(headers)
+        .map_err(|error| format!("import header snapshot batch: {error}"))?
+        .len();
+    batch.reserve(HEADER_SNAPSHOT_IMPORT_BATCH);
+    Ok(accepted)
+}
+
+struct HeaderSnapshotMetadata {
+    target_height: u32,
+    tip_hash: hns_core::Hash,
+}
+
+fn read_header_snapshot_metadata<R: Read>(
+    reader: &mut R,
+) -> Result<HeaderSnapshotMetadata, String> {
+    let mut magic = vec![0u8; HEADER_SNAPSHOT_MAGIC.len()];
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| format!("read header snapshot magic: {error}"))?;
+    if magic != HEADER_SNAPSHOT_MAGIC {
+        return Err("header snapshot magic mismatch".to_owned());
+    }
+
+    let target_height = read_u32_be(reader, "target height")?;
+    if target_height > HEADER_SNAPSHOT_MAX_HEIGHT {
+        return Err(format!(
+            "header snapshot target height {target_height} exceeds import limit {HEADER_SNAPSHOT_MAX_HEIGHT}"
+        ));
+    }
+    let header_count = read_u32_be(reader, "header count")?;
+    let expected_count = target_height.saturating_add(1);
+    if header_count != expected_count {
+        return Err(format!(
+            "header snapshot count mismatch: got {header_count}, expected {expected_count}"
+        ));
+    }
+
+    let mut tip_hash = [0u8; 32];
+    reader
+        .read_exact(&mut tip_hash)
+        .map_err(|error| format!("read header snapshot tip hash: {error}"))?;
+    let tip_hash = hns_core::Hash::from_slice(&tip_hash)
+        .map_err(|error| format!("parse header snapshot tip hash: {error}"))?;
+
+    Ok(HeaderSnapshotMetadata {
+        target_height,
+        tip_hash,
+    })
+}
+
+fn read_u32_be<R: Read>(reader: &mut R, field: &str) -> Result<u32, String> {
+    let mut bytes = [0u8; 4];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|error| format!("read header snapshot {field}: {error}"))?;
+    Ok(u32::from_be_bytes(bytes))
+}
+
+fn reset_headers_from_peers_inner(data_dir: &str) -> Result<NativeSyncStatus, String> {
+    let base = Path::new(data_dir).join("hns");
+    fs::create_dir_all(&base).map_err(|error| format!("create sync directory: {error}"))?;
+    remove_sqlite_database(&base.join("headers.sqlite"))?;
+    clear_resource_cache_at_base(&base)?;
+    let _chain = open_initialized_header_chain(&base)?;
+    let mut status = read_sync_status(data_dir).unwrap_or_else(|_| NativeSyncStatus::empty());
+    status.status = "headers_reset";
+    status.resource_cache_entries = 0;
+    status.resource_cache_bytes = 0;
+    status.resource_cache_evicted = 0;
+    Ok(status)
+}
+
+fn remove_sqlite_database(path: &Path) -> Result<(), String> {
+    let mut paths = Vec::with_capacity(3);
+    paths.push(path.to_path_buf());
+    paths.push(PathBuf::from(format!("{}-wal", path.display())));
+    paths.push(PathBuf::from(format!("{}-shm", path.display())));
+
+    for candidate in paths {
+        match fs::remove_file(&candidate) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "remove sqlite database file {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sync_status_with_override(
+    data_dir: &str,
+    status_label: &'static str,
+    attempted: usize,
+    successful: usize,
+    accepted: usize,
+) -> Result<NativeSyncStatus, String> {
+    let mut status = read_sync_status(data_dir)?;
+    status.status = status_label;
+    status.attempted = attempted;
+    status.successful = successful;
+    status.accepted = accepted;
+    Ok(status)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LocalChainCurrentness {
     best_height: Option<u32>,
@@ -3828,6 +4026,17 @@ fn best_synced_header(base: &Path) -> Result<hns_chain::StoredHeader, ResolverEr
 fn clear_resolver_cache_inner(data_dir: &str) -> Result<NativeSyncStatus, String> {
     let base = Path::new(data_dir).join("hns");
     fs::create_dir_all(&base).map_err(|error| format!("create sync directory: {error}"))?;
+    clear_resource_cache_at_base(&base)?;
+
+    let mut status = read_sync_status(data_dir).unwrap_or_else(|_| NativeSyncStatus::empty());
+    status.status = "cleared";
+    status.resource_cache_entries = 0;
+    status.resource_cache_bytes = 0;
+    status.resource_cache_evicted = 0;
+    Ok(status)
+}
+
+fn clear_resource_cache_at_base(base: &Path) -> Result<(), String> {
     let path = base.join("resources.sqlite");
     if path.exists() {
         let provider = SqliteResourceValueProvider::open(path)
@@ -3836,13 +4045,7 @@ fn clear_resolver_cache_inner(data_dir: &str) -> Result<NativeSyncStatus, String
             .clear()
             .map_err(|error| format!("clear resource cache: {error}"))?;
     }
-
-    let mut status = read_sync_status(data_dir).unwrap_or_else(|_| NativeSyncStatus::empty());
-    status.status = "cleared";
-    status.resource_cache_entries = 0;
-    status.resource_cache_bytes = 0;
-    status.resource_cache_evicted = 0;
-    Ok(status)
+    Ok(())
 }
 
 fn enforce_resource_cache_limit(base: &Path, max_bytes: usize) -> Result<usize, String> {
@@ -4403,6 +4606,43 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeClearRes
         .get_string(&data_dir)
         .ok()
         .map(|value| clear_resolver_cache(&value.to_string_lossy()))
+        .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
+
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeInstallHeaderSnapshot(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    data_dir: JString<'_>,
+    snapshot_path: JString<'_>,
+) -> jstring {
+    let status = match (env.get_string(&data_dir), env.get_string(&snapshot_path)) {
+        (Ok(data_dir), Ok(snapshot_path)) => install_header_snapshot(
+            &data_dir.to_string_lossy(),
+            &snapshot_path.to_string_lossy(),
+        ),
+        _ => NativeSyncStatus::error("invalid header snapshot input".to_owned()).to_json(),
+    };
+
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeResetHeadersFromPeers(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    data_dir: JString<'_>,
+) -> jstring {
+    let status = env
+        .get_string(&data_dir)
+        .ok()
+        .map(|value| reset_headers_from_peers(&value.to_string_lossy()))
         .unwrap_or_else(|| NativeSyncStatus::error("invalid data directory".to_owned()).to_json());
 
     env.new_string(status)

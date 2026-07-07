@@ -1,0 +1,12 @@
+[package]
+name = "hns-header-snapshot-exporter"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+hns-chain = { path = "../../rust/crates/hns-chain" }
+hns-core = { path = "../../rust/crates/hns-core" }
+hns-p2p = { path = "../../rust/crates/hns-p2p" }
+hns-sync = { path = "../../rust/crates/hns-sync" }

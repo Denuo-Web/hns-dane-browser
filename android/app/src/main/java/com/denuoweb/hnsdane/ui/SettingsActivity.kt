@@ -21,6 +21,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.net.HeaderSnapshotInstaller
+import com.denuoweb.hnsdane.net.HnsSyncForegroundService
 import com.denuoweb.hnsdane.BuildConfig
 import com.denuoweb.hnsdane.net.NativeBridge
 import org.json.JSONObject
@@ -32,6 +34,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var statelessDaneStatus: TextView
     private lateinit var dohResolverStatus: TextView
     private lateinit var resolverCacheStatus: TextView
+    private lateinit var headerResyncStatus: TextView
     private lateinit var historyStatus: TextView
     private lateinit var downloadStatus: TextView
 
@@ -44,6 +47,7 @@ class SettingsActivity : ComponentActivity() {
         statelessDaneStatus = preferenceSummary(statelessDaneText())
         dohResolverStatus = preferenceSummary(HnsResolutionPreferences.dohResolverUrl(this))
         resolverCacheStatus = preferenceSummary("Ready to clear cached resolver values.")
+        headerResyncStatus = preferenceSummary("Reset local headers and sync again from peers.")
         historyStatus = preferenceSummary(historySummary())
         downloadStatus = preferenceSummary(downloadSummary())
 
@@ -122,6 +126,14 @@ class SettingsActivity : ComponentActivity() {
                     destructive = true,
                 ) {
                     confirmClearResolverCache()
+                })
+                addPreference(preferenceRow(
+                    title = "Resync headers from peers",
+                    summaryView = headerResyncStatus,
+                    actionLabel = "Reset",
+                    destructive = true,
+                ) {
+                    confirmHeaderPeerResync()
                 })
                 addPreference(preferenceRow(
                     title = "HNS sync",
@@ -547,6 +559,32 @@ class SettingsActivity : ComponentActivity() {
             "Clear did not complete. Open diagnostics for details."
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun confirmHeaderPeerResync() {
+        AlertDialog.Builder(this)
+            .setTitle("Resync headers from peers?")
+            .setMessage("This removes local HNS headers and cached resolver values, disables the bundled header bootstrap for this install, then starts syncing from peers at block 0.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Reset") { _, _ ->
+                resetHeadersFromPeers()
+            }
+            .show()
+    }
+
+    private fun resetHeadersFromPeers() {
+        HnsSyncForegroundService.stop(this)
+        HeaderSnapshotInstaller.disableBundledSnapshot(this)
+        val result = NativeBridge.resetHeadersFromPeers(filesDir.absolutePath)
+        val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
+        if (status == "headers_reset") {
+            headerResyncStatus.text = "Headers reset to genesis. Peer sync has been started."
+            HnsSyncForegroundService.start(this)
+            Toast.makeText(this, "Header resync started", Toast.LENGTH_SHORT).show()
+        } else {
+            headerResyncStatus.text = "Header reset did not complete. Open diagnostics for details."
+            Toast.makeText(this, "Header resync did not start", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun refreshHomepageStatus() {
