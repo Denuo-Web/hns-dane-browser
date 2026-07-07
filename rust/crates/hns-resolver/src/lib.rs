@@ -195,6 +195,7 @@ pub struct SystemDnssecVerifier;
 pub struct AuthoritativeDnssecResolver<T = UdpTcpDnsTransport, V = SystemDnssecVerifier> {
     transport: T,
     verifier: V,
+    prefer_authoritative_doh: bool,
 }
 
 pub trait DnsTransport {
@@ -891,7 +892,13 @@ impl<T, V> AuthoritativeDnssecResolver<T, V> {
         Self {
             transport,
             verifier,
+            prefer_authoritative_doh: false,
         }
+    }
+
+    pub fn with_authoritative_doh_preferred(mut self) -> Self {
+        self.prefer_authoritative_doh = true;
+        self
     }
 
     pub fn into_parts(self) -> (T, V) {
@@ -929,6 +936,28 @@ where
 
         let ds_rrset = records_for(&delegation.records, &delegation.owner, RecordType::Ds);
         let mut last_error = None;
+        if self.prefer_authoritative_doh {
+            match authoritative_doh_endpoints(&self.transport, delegation) {
+                Ok(endpoints) => {
+                    for endpoint in endpoints {
+                        match resolve_delegated_from_doh_endpoint(
+                            &self.transport,
+                            &self.verifier,
+                            &endpoint,
+                            delegation,
+                            &request_name,
+                            qtype,
+                            &ds_rrset,
+                        ) {
+                            Ok(answer) => return Ok(answer),
+                            Err(error) => last_error = Some(error),
+                        }
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
         for server in servers {
             match resolve_delegated_from_server(
                 &self.transport,
@@ -944,18 +973,20 @@ where
             }
         }
 
-        for endpoint in authoritative_doh_endpoints(&self.transport, delegation)? {
-            match resolve_delegated_from_doh_endpoint(
-                &self.transport,
-                &self.verifier,
-                &endpoint,
-                delegation,
-                &request_name,
-                qtype,
-                &ds_rrset,
-            ) {
-                Ok(answer) => return Ok(answer),
-                Err(error) => last_error = Some(error),
+        if !self.prefer_authoritative_doh {
+            for endpoint in authoritative_doh_endpoints(&self.transport, delegation)? {
+                match resolve_delegated_from_doh_endpoint(
+                    &self.transport,
+                    &self.verifier,
+                    &endpoint,
+                    delegation,
+                    &request_name,
+                    qtype,
+                    &ds_rrset,
+                ) {
+                    Ok(answer) => return Ok(answer),
+                    Err(error) => last_error = Some(error),
+                }
             }
         }
 
@@ -3707,6 +3738,36 @@ mod tests {
                 .unwrap_or_default();
             Ok(dns_response(&query, fixture, false))
         }
+
+        fn exchange_doh(
+            &self,
+            endpoint: &AuthoritativeDohEndpoint,
+            query: &[u8],
+        ) -> Result<Vec<u8>, ResolverError> {
+            let query = DnsMessage::parse(query).unwrap();
+            let question = query.questions[0].clone();
+            let server = SocketAddr::new(endpoint.connect_addr, endpoint.port);
+            self.requests.lock().unwrap().push((
+                server,
+                question.name.to_string(),
+                question.record_type.code(),
+                true,
+            ));
+            let fixture = self
+                .server_responses
+                .get(&(
+                    server,
+                    question.name.to_string(),
+                    question.record_type.code(),
+                ))
+                .or_else(|| {
+                    self.responses
+                        .get(&(question.name.to_string(), question.record_type.code()))
+                })
+                .cloned()
+                .unwrap_or_default();
+            Ok(dns_response(&query, fixture, false))
+        }
     }
 
     #[test]
@@ -4239,6 +4300,112 @@ mod tests {
                 RecordType::Svcb.code(),
                 false,
             )]
+        );
+    }
+
+    #[test]
+    fn authoritative_dnssec_resolver_prefers_discovered_authoritative_doh_when_enabled() {
+        let delegation = HnsDelegation {
+            root_name: "welcome".to_owned(),
+            owner: DnsName::from_ascii("welcome").unwrap(),
+            records: vec![
+                ns_record("welcome", "ns1.welcome"),
+                glue4_record("ns1.welcome", [203, 0, 113, 53]),
+                ds_record("welcome"),
+            ],
+        };
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let resolver = AuthoritativeDnssecResolver::new(
+            ScriptedDnsTransport {
+                responses: dns_responses(vec![
+                    (
+                        "_dns.ns1.welcome",
+                        RecordType::Svcb,
+                        vec![svcb_doh_record(
+                            "_dns.ns1.welcome",
+                            "ns1.welcome",
+                            "/dns-query{?dns}",
+                        )],
+                    ),
+                    (
+                        "welcome",
+                        RecordType::A,
+                        vec![
+                            record(
+                                DnsName::from_ascii("welcome").unwrap(),
+                                RecordType::A,
+                                vec![203, 0, 113, 20],
+                            ),
+                            rrsig_record("welcome"),
+                        ],
+                    ),
+                    (
+                        "welcome",
+                        RecordType::Dnskey,
+                        vec![
+                            record(
+                                DnsName::from_ascii("welcome").unwrap(),
+                                RecordType::Dnskey,
+                                vec![1, 2, 3, 4],
+                            ),
+                            rrsig_record("welcome"),
+                        ],
+                    ),
+                ]),
+                server_responses: HashMap::new(),
+                requests: Arc::clone(&requests),
+                udp_behavior: ScriptedUdpBehavior::Normal,
+            },
+            StaticDnssecVerifier {
+                positive_valid: true,
+                no_data_valid: false,
+                name_error_valid: false,
+                child_positive_valid: false,
+                child_no_data_valid: false,
+                child_name_error_valid: false,
+                validations: Arc::new(Mutex::new(Vec::new())),
+                no_data_validations: Arc::new(Mutex::new(Vec::new())),
+                name_error_validations: Arc::new(Mutex::new(Vec::new())),
+                child_validations: Arc::new(Mutex::new(Vec::new())),
+                child_no_data_validations: Arc::new(Mutex::new(Vec::new())),
+                child_name_error_validations: Arc::new(Mutex::new(Vec::new())),
+            },
+        )
+        .with_authoritative_doh_preferred();
+
+        let answer = resolver
+            .resolve_delegated(
+                &ResolutionRequest {
+                    qname: "welcome".to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                &delegation,
+            )
+            .unwrap();
+
+        assert!(answer.secure);
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 53),
+                    "_dns.ns1.welcome".to_owned(),
+                    RecordType::Svcb.code(),
+                    false,
+                ),
+                (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 443),
+                    "welcome".to_owned(),
+                    RecordType::A.code(),
+                    true,
+                ),
+                (
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 443),
+                    "welcome".to_owned(),
+                    RecordType::Dnskey.code(),
+                    true,
+                ),
+            ]
         );
     }
 

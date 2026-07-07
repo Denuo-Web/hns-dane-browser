@@ -133,7 +133,9 @@ class HnsResolverTraceActivity : ComponentActivity() {
         }
         return (0 until attempts.length()).joinToString(" | ") { index ->
             val attempt = attempts.optJSONObject(index)
-            val protocol = attempt?.optString("protocol")?.takeIf { it.isNotBlank() } ?: "unknown"
+            val protocol = attemptProtocolLabel(
+                attempt?.optString("protocol")?.takeIf { it.isNotBlank() } ?: "unknown",
+            )
             val server = attempt?.optString("server")?.takeIf { it.isNotBlank() } ?: "unknown"
             val status = attempt?.optString("status")?.takeIf { it.isNotBlank() } ?: "unknown"
             val elapsed = attempt
@@ -144,6 +146,16 @@ class HnsResolverTraceActivity : ComponentActivity() {
             "$protocol $server $status $elapsed"
         }
     }
+
+    private fun attemptProtocolLabel(protocol: String): String =
+        when (protocol) {
+            "udp53" -> "Authoritative UDP 53"
+            "tcp53" -> "Authoritative TCP 53"
+            "authoritative_doh" -> "Authoritative DoH"
+            "hns_doh" -> "Compatibility HNS DoH"
+            "icann_doh" -> "Trusted ICANN DoH"
+            else -> protocol
+        }
 
     private fun suggestedFix(trace: JSONObject): String {
         if (HnsResolutionTraceFormat.isIcann(trace)) {

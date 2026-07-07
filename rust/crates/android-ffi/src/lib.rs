@@ -1704,7 +1704,8 @@ fn android_gateway_resolver(
         GatewayResolutionMode::Strict => {
             let primary = DelegatingResolver::new(
                 GatewayProofProvider::new(base, values),
-                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier),
+                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
+                    .with_authoritative_doh_preferred(),
             );
             AndroidGatewayResolver::Strict(CompositeResolver::new(
                 primary,
@@ -1713,7 +1714,8 @@ fn android_gateway_resolver(
         }
         GatewayResolutionMode::Compatibility => {
             let direct =
-                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier);
+                AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
+                    .with_authoritative_doh_preferred();
             let doh = AuthoritativeDnssecResolver::new(
                 HnsDohDnsTransport::new(doh_endpoint.clone(), dns_trace.clone()),
                 SystemDnssecVerifier,
