@@ -95,27 +95,11 @@ class SettingsActivity : ComponentActivity() {
                     startActivity(Intent(this@SettingsActivity, HistoryActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Clear history",
-                    summary = "Remove saved browsing history from this device.",
-                    actionLabel = "Clear",
-                    destructive = true,
-                ) {
-                    confirmClearHistory()
-                })
-                addPreference(preferenceRow(
                     title = "Downloads",
                     summaryView = downloadStatus,
                     actionLabel = "View",
                 ) {
                     startActivity(Intent(this@SettingsActivity, DownloadsActivity::class.java))
-                })
-                addPreference(preferenceRow(
-                    title = "Clear download records",
-                    summary = "Remove this app's download list. Downloaded files stay on the device.",
-                    actionLabel = "Clear",
-                    destructive = true,
-                ) {
-                    confirmClearDownloadRecords()
                 })
             })
 
@@ -127,13 +111,6 @@ class SettingsActivity : ComponentActivity() {
                     actionLabel = "Edit",
                 ) {
                     showEditDohResolverDialog()
-                })
-                addPreference(preferenceRow(
-                    title = "Diagnostics",
-                    summary = "Sync status, resolver state, and native core details.",
-                    actionLabel = "View",
-                ) {
-                    startActivity(Intent(this@SettingsActivity, DiagnosticsActivity::class.java))
                 })
                 addPreference(preferenceRow(
                     title = "Clear resolver cache",
@@ -173,6 +150,13 @@ class SettingsActivity : ComponentActivity() {
                     actionLabel = "Open",
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsTlsaInspectorActivity::class.java))
+                })
+                addPreference(preferenceRow(
+                    title = "Diagnostics",
+                    summary = "Sync status, resolver state, and native core details.",
+                    actionLabel = "View",
+                ) {
+                    startActivity(Intent(this@SettingsActivity, DiagnosticsActivity::class.java))
                 })
             })
 
@@ -522,44 +506,6 @@ class SettingsActivity : ComponentActivity() {
             "Clear did not complete. Open diagnostics for details."
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun confirmClearHistory() {
-        val count = BrowserHistoryStore.entries(this).size
-        if (count == 0) {
-            Toast.makeText(this, "History is already empty", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Clear history?")
-            .setMessage("This removes the app's local browsing history.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
-                val cleared = BrowserHistoryStore.clear(this)
-                refreshHistoryStatus()
-                Toast.makeText(this, "Cleared $cleared history item(s)", Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    private fun confirmClearDownloadRecords() {
-        val count = BrowserDownloadStore.records(this).size
-        if (count == 0) {
-            Toast.makeText(this, "Download records are already empty", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Clear download records?")
-            .setMessage("This clears this browser's download list. It does not delete downloaded files.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
-                val cleared = BrowserDownloadStore.clear(this)
-                refreshDownloadStatus()
-                Toast.makeText(this, "Cleared $cleared download record(s)", Toast.LENGTH_SHORT).show()
-            }
-            .show()
     }
 
     private fun refreshHomepageStatus() {
