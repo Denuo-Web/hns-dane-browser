@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">À propos, informations juridiques et assistance</string>
     <string name="section_app">Application</string>
     <string name="section_app_and_runtime">Application et environnement d\'exécution</string>
+    <string name="section_appearance">Apparence</string>
     <string name="section_browsing_history">Historique de navigation</string>
     <string name="section_diagnostic_bundle">Pack de diagnostic</string>
     <string name="section_diagnostics_tools">Diagnostics et outils</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">Exécutez la synchronisation maintenant</string>
     <string name="row_run_sync_now_summary">Démarrez une synchronisation HNS au premier plan et regardez la mise à jour du statut ici.</string>
     <string name="row_third_party_cookies_blocked">Cookies tiers bloqués</string>
+    <string name="row_theme">Thème</string>
+    <string name="row_theme_summary_dark">Thème sombre.</string>
+    <string name="row_theme_summary_light">Thème clair.</string>
+    <string name="row_theme_summary_system">Suit le thème système Android.</string>
     <string name="row_tlsa_dane_inspector">Inspecteur TLSA / DANE</string>
     <string name="row_tlsa_dane_inspector_summary">Vérifiez les enregistrements TLSA et la politique DANE.</string>
     <string name="history_empty_status">Pas d\'historique de navigation pour l\'instant.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">Désactivé. La preuve HNS et la preuve TLSA utilisent le chemin du résolveur en direct.</string>
     <string name="settings_strict_hns_mode">Mode HNS strict</string>
     <string name="settings_stateless_dane_certificates">Certificats DANE apatrides expérimentaux</string>
+    <string name="settings_theme_dialog_title">Thème</string>
+    <string name="settings_theme_set">Thème défini sur %1$s.</string>
+    <string name="theme_choice_dark">Sombre</string>
+    <string name="theme_choice_light">Clair</string>
+    <string name="theme_choice_system">Suivre le système</string>
     <string name="settings_open_language_failed">Ouvrez les informations sur l\'application Android pour modifier les paramètres de langue.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">Réseau de Handshake publique.</string>

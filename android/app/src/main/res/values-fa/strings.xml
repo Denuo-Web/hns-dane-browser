@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">درباره، حقوقی و پشتیبانی</string>
     <string name="section_app">برنامه</string>
     <string name="section_app_and_runtime">برنامه و زمان اجرا</string>
+    <string name="section_appearance">ظاهر</string>
     <string name="section_browsing_history">تاریخچه مرور</string>
     <string name="section_diagnostic_bundle">بسته تشخیصی</string>
     <string name="section_diagnostics_tools">تشخیص و ابزار</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">اکنون همگام سازی را اجرا کنید</string>
     <string name="row_run_sync_now_summary">یک همگام سازی HNS پیش زمینه را شروع کنید و به روز رسانی وضعیت را در اینجا تماشا کنید.</string>
     <string name="row_third_party_cookies_blocked">کوکی های شخص ثالث مسدود شده است</string>
+    <string name="row_theme">پوسته</string>
+    <string name="row_theme_summary_dark">پوسته تیره.</string>
+    <string name="row_theme_summary_light">پوسته روشن.</string>
+    <string name="row_theme_summary_system">از پوسته سیستم Android پیروی می‌کند.</string>
     <string name="row_tlsa_dane_inspector">بازرس TLSA / DANE</string>
     <string name="row_tlsa_dane_inspector_summary">سوابق TLSA و خط مشی DANE را بررسی کنید.</string>
     <string name="history_empty_status">هنوز سابقه مرور وجود ندارد.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">خاموش شواهد HNS و TLSA از مسیر حل کننده زنده استفاده می کنند.</string>
     <string name="settings_strict_hns_mode">حالت سختگیرانه HNS</string>
     <string name="settings_stateless_dane_certificates">گواهینامه های آزمایشی DANE بدون تابعیت</string>
+    <string name="settings_theme_dialog_title">پوسته</string>
+    <string name="settings_theme_set">پوسته روی %1$s تنظیم شد.</string>
+    <string name="theme_choice_dark">تیره</string>
+    <string name="theme_choice_light">روشن</string>
+    <string name="theme_choice_system">پیروی از سیستم</string>
     <string name="settings_open_language_failed">برای تغییر تنظیمات زبان، اطلاعات برنامه Android را باز کنید.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">شبکه عمومی Handshake.</string>

@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">Über, Recht und Support</string>
     <string name="section_app">App</string>
     <string name="section_app_and_runtime">App und Laufzeit</string>
+    <string name="section_appearance">Darstellung</string>
     <string name="section_browsing_history">Browserverlauf</string>
     <string name="section_diagnostic_bundle">Diagnosepaket</string>
     <string name="section_diagnostics_tools">Diagnose und Tools</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">Führen Sie die Synchronisierung jetzt aus</string>
     <string name="row_run_sync_now_summary">Starten Sie hier eine HNS-Synchronisierung im Vordergrund und sehen Sie sich die Statusaktualisierung an.</string>
     <string name="row_third_party_cookies_blocked">Cookies von Drittanbietern blockiert</string>
+    <string name="row_theme">Design</string>
+    <string name="row_theme_summary_dark">Dunkles Design.</string>
+    <string name="row_theme_summary_light">Helles Design.</string>
+    <string name="row_theme_summary_system">Folgt dem Android-Systemdesign.</string>
     <string name="row_tlsa_dane_inspector">TLSA/DANE-Inspektor</string>
     <string name="row_tlsa_dane_inspector_summary">Überprüfen Sie die TLSA-Datensätze und die DANE-Richtlinie.</string>
     <string name="history_empty_status">Noch kein Browserverlauf.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">Aus. HNS-Beweis und TLSA-Beweis verwenden den Live-Resolver-Pfad.</string>
     <string name="settings_strict_hns_mode">Strenger HNS-Modus</string>
     <string name="settings_stateless_dane_certificates">Experimentelle zustandslose DANE-Zertifikate</string>
+    <string name="settings_theme_dialog_title">Design</string>
+    <string name="settings_theme_set">Design auf %1$s gesetzt.</string>
+    <string name="theme_choice_dark">Dunkel</string>
+    <string name="theme_choice_light">Hell</string>
+    <string name="theme_choice_system">System folgen</string>
     <string name="settings_open_language_failed">Öffnen Sie die Android-App-Info, um die Spracheinstellungen zu ändern.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">Öffentliches Handshake-Netzwerk.</string>

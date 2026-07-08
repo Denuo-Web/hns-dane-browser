@@ -5,7 +5,6 @@ import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
@@ -40,9 +39,11 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var headerResyncStatus: TextView
     private lateinit var historyStatus: TextView
     private lateinit var downloadStatus: TextView
+    private lateinit var themeStatus: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val colors = themeColors()
 
         homepageStatus = preferenceSummary(BrowserPreferences.homepage(this))
         cookieStatus = preferenceSummary(cookieSummary())
@@ -54,10 +55,12 @@ class SettingsActivity : ComponentActivity() {
         headerResyncStatus = preferenceSummary(getString(R.string.settings_header_resync_ready))
         historyStatus = preferenceSummary(historySummary())
         downloadStatus = preferenceSummary(downloadSummary())
+        themeStatus = preferenceSummary(themeText())
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.START
+            setBackgroundColor(colors.background)
             setPadding(dp(20), dp(20), dp(20), dp(20))
             applySystemBarPadding()
             addView(heading(getString(R.string.screen_settings)))
@@ -110,6 +113,16 @@ class SettingsActivity : ComponentActivity() {
                     actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, DownloadsActivity::class.java))
+                })
+            })
+
+            addView(section(getString(R.string.section_appearance)) {
+                addPreference(preferenceRow(
+                    title = getString(R.string.row_theme),
+                    summaryView = themeStatus,
+                    actionLabel = getString(R.string.action_change),
+                ) {
+                    showThemeDialog()
                 })
             })
 
@@ -260,6 +273,7 @@ class SettingsActivity : ComponentActivity() {
 
         setContentView(
             ScrollView(this).apply {
+                setBackgroundColor(colors.background)
                 addView(root, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -278,21 +292,25 @@ class SettingsActivity : ComponentActivity() {
             refreshStatelessDaneStatus()
             refreshHistoryStatus()
             refreshDownloadStatus()
+            refreshThemeStatus()
         }
     }
 
     private fun heading(text: String): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             this.text = text
             textSize = 28f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(32, 33, 36))
+            setTextColor(colors.primaryText)
             setPadding(0, 0, 0, dp(10))
         }
 
     private fun section(title: String, content: LinearLayout.() -> Unit): LinearLayout =
         LinearLayout(this).apply {
+            val colors = themeColors()
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(colors.background)
             setPadding(0, dp(10), 0, dp(12))
             addView(sectionHeading(title))
             content()
@@ -300,10 +318,11 @@ class SettingsActivity : ComponentActivity() {
 
     private fun sectionHeading(text: String): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             this.text = text
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(95, 99, 104))
+            setTextColor(colors.secondaryText)
             setPadding(0, dp(18), 0, dp(6))
         }
 
@@ -357,18 +376,20 @@ class SettingsActivity : ComponentActivity() {
 
     private fun preferenceTitle(text: String): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             this.text = text
             textSize = 16f
-            setTextColor(Color.rgb(32, 33, 36))
+            setTextColor(colors.primaryText)
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
         }
 
     private fun preferenceSummary(text: String): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             this.text = text
             textSize = 14f
-            setTextColor(Color.rgb(95, 99, 104))
+            setTextColor(colors.secondaryText)
             maxLines = 3
             ellipsize = TextUtils.TruncateAt.END
             setPadding(0, dp(3), 0, 0)
@@ -376,6 +397,7 @@ class SettingsActivity : ComponentActivity() {
 
     private fun preferenceActionLabel(text: String, destructive: Boolean): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             this.text = text
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -385,21 +407,23 @@ class SettingsActivity : ComponentActivity() {
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(
                 if (destructive) {
-                    Color.rgb(183, 28, 28)
+                    colors.destructive
                 } else {
-                    Color.rgb(21, 101, 192)
+                    colors.action
                 },
             )
         }
 
     private fun strictHnsModeOption(): LinearLayout =
         LinearLayout(this).apply {
+            val colors = themeColors()
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(colors.background)
             setPadding(0, dp(8), 0, dp(10))
             addView(CheckBox(this@SettingsActivity).apply {
                 text = getString(R.string.settings_strict_hns_mode)
                 textSize = 16f
-                setTextColor(Color.rgb(32, 33, 36))
+                setTextColor(colors.primaryText)
                 setPadding(0, 0, 0, 0)
                 isChecked = HnsResolutionPreferences.strictHnsMode(this@SettingsActivity)
                 setOnCheckedChangeListener { _, checked ->
@@ -417,12 +441,14 @@ class SettingsActivity : ComponentActivity() {
 
     private fun statelessDaneCertificateOption(): LinearLayout =
         LinearLayout(this).apply {
+            val colors = themeColors()
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(colors.background)
             setPadding(0, dp(8), 0, dp(10))
             addView(CheckBox(this@SettingsActivity).apply {
                 text = getString(R.string.settings_stateless_dane_certificates)
                 textSize = 16f
-                setTextColor(Color.rgb(32, 33, 36))
+                setTextColor(colors.primaryText)
                 setPadding(0, 0, 0, 0)
                 isChecked = HnsResolutionPreferences.statelessDaneCertificates(this@SettingsActivity)
                 setOnCheckedChangeListener { _, checked ->
@@ -440,7 +466,7 @@ class SettingsActivity : ComponentActivity() {
 
     private fun divider(): View =
         View(this).apply {
-            setBackgroundColor(Color.rgb(218, 220, 224))
+            setBackgroundColor(themeColors().divider)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1,
@@ -577,6 +603,35 @@ class SettingsActivity : ComponentActivity() {
             .show()
     }
 
+    private fun showThemeDialog() {
+        val modes = BrowserThemeMode.entries.toTypedArray()
+        val labels = modes
+            .map { themeChoiceText(it) }
+            .toTypedArray()
+        val current = BrowserThemePreferences.themeMode(this)
+        val selectedIndex = modes.indexOf(current).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.settings_theme_dialog_title)
+            .setSingleChoiceItems(labels, selectedIndex) { dialog, index ->
+                val selected = modes[index]
+                if (selected != current) {
+                    BrowserThemePreferences.setThemeMode(this, selected)
+                    refreshThemeStatus()
+                    Toast.makeText(
+                        this,
+                        getString(R.string.settings_theme_set, themeChoiceText(selected)),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    BrowserThemePreferences.applyTo(this)
+                    recreate()
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
+    }
+
     private fun useCurrentPageAsHomepage(currentUrl: String) {
         val saved = BrowserPreferences.setHomepage(this, currentUrl)
         if (saved == null) {
@@ -695,6 +750,10 @@ class SettingsActivity : ComponentActivity() {
         downloadStatus.text = downloadSummary()
     }
 
+    private fun refreshThemeStatus() {
+        themeStatus.text = themeText()
+    }
+
     private fun hnsModeText(): String =
         if (HnsResolutionPreferences.strictHnsMode(this)) {
             getString(R.string.settings_hns_mode_on)
@@ -730,6 +789,20 @@ class SettingsActivity : ComponentActivity() {
         val count = BrowserDownloadStore.records(this).size
         return resources.getQuantityString(R.plurals.settings_app_queued_records, count, count)
     }
+
+    private fun themeText(): String =
+        when (BrowserThemePreferences.themeMode(this)) {
+            BrowserThemeMode.System -> getString(R.string.row_theme_summary_system)
+            BrowserThemeMode.Light -> getString(R.string.row_theme_summary_light)
+            BrowserThemeMode.Dark -> getString(R.string.row_theme_summary_dark)
+        }
+
+    private fun themeChoiceText(mode: BrowserThemeMode): String =
+        when (mode) {
+            BrowserThemeMode.System -> getString(R.string.theme_choice_system)
+            BrowserThemeMode.Light -> getString(R.string.theme_choice_light)
+            BrowserThemeMode.Dark -> getString(R.string.theme_choice_dark)
+        }
 
     private fun currentUrlFromIntent(): String? =
         intent.getStringExtra(EXTRA_CURRENT_URL)

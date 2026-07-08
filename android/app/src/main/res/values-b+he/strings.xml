@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">אודות, משפטי ותמיכה</string>
     <string name="section_app">אפליקציה</string>
     <string name="section_app_and_runtime">אפליקציה וזמן ריצה</string>
+    <string name="section_appearance">מראה</string>
     <string name="section_browsing_history">היסטוריית גלישה</string>
     <string name="section_diagnostic_bundle">חבילת אבחון</string>
     <string name="section_diagnostics_tools">אבחון וכלים</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">הפעל סנכרון עכשיו</string>
     <string name="row_run_sync_now_summary">התחל סנכרון HNS בחזית וצפה בעדכון הסטטוס כאן.</string>
     <string name="row_third_party_cookies_blocked">קובצי Cookie של צד שלישי חסומים</string>
+    <string name="row_theme">ערכת נושא</string>
+    <string name="row_theme_summary_dark">ערכת נושא כהה.</string>
+    <string name="row_theme_summary_light">ערכת נושא בהירה.</string>
+    <string name="row_theme_summary_system">עוקב אחר ערכת הנושא של מערכת Android.</string>
     <string name="row_tlsa_dane_inspector">מפקח TLSA / DANE</string>
     <string name="row_tlsa_dane_inspector_summary">בדוק את רשומות TLSA ואת מדיניות DANE.</string>
     <string name="history_empty_status">עדיין אין היסטוריית גלישה.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">כבוי. הוכחת HNS ו-TLSA משתמשות בנתיב הפותר החי.</string>
     <string name="settings_strict_hns_mode">מצב HNS קפדני</string>
     <string name="settings_stateless_dane_certificates">תעודות DANE חסרות אזרחות ניסיוניות</string>
+    <string name="settings_theme_dialog_title">ערכת נושא</string>
+    <string name="settings_theme_set">ערכת הנושא הוגדרה ל-%1$s.</string>
+    <string name="theme_choice_dark">כהה</string>
+    <string name="theme_choice_light">בהיר</string>
+    <string name="theme_choice_system">עקוב אחר המערכת</string>
     <string name="settings_open_language_failed">פתח את פרטי אפליקציית Android כדי לשנות את הגדרות השפה.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">רשת Handshake ציבורית.</string>

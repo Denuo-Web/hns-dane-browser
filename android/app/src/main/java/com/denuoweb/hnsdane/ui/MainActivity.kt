@@ -12,7 +12,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Bundle
@@ -143,6 +142,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val colors = themeColors()
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         GatewayEventLog.configureAppStorage(filesDir)
@@ -199,7 +199,7 @@ class MainActivity : ComponentActivity() {
             textSize = 13f
             minHeight = dp(TOOLBAR_CONTROL_HEIGHT_DP)
             setPadding(dp(8), 0, dp(8), 0)
-            setTextColor(Color.rgb(28, 71, 75))
+            setTextColor(colors.securityText)
             text = getString(R.string.security_syncing)
             contentDescription = getString(R.string.security_status_content_description)
             isClickable = true
@@ -214,7 +214,7 @@ class MainActivity : ComponentActivity() {
         }
         syncProgressStats = TextView(this).apply {
             setPadding(16, 0, 16, 8)
-            setTextColor(Color.rgb(68, 68, 68))
+            setTextColor(colors.secondaryText)
             textSize = 12f
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
@@ -253,6 +253,7 @@ class MainActivity : ComponentActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(colors.background)
             applySystemBarPadding()
             addView(toolbar, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -629,6 +630,7 @@ class MainActivity : ComponentActivity() {
 
     private fun menuButton(): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             hamburgerButton = this
             text = "☰"
             textSize = 30f
@@ -637,15 +639,16 @@ class MainActivity : ComponentActivity() {
             minWidth = dp(48)
             minHeight = dp(48)
             setPadding(dp(12), 0, dp(12), 0)
-            setTextColor(Color.rgb(36, 36, 36))
+            setTextColor(colors.primaryText)
             setOnClickListener { showHamburgerMenu() }
         }
 
     private fun showHamburgerMenu() {
         val popup = PopupWindow(this)
+        val colors = themeColors()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(colors.surface)
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 addView(menuIconButton("›", getString(R.string.menu_forward), webView.canGoForward(), popup) {
@@ -671,7 +674,7 @@ class MainActivity : ComponentActivity() {
             height = LinearLayout.LayoutParams.WRAP_CONTENT
             isFocusable = true
             isOutsideTouchable = true
-            setBackgroundDrawable(ColorDrawable(Color.WHITE))
+            setBackgroundDrawable(ColorDrawable(colors.surface))
             elevation = dp(8).toFloat()
         }
         popup.showAsDropDown(
@@ -689,13 +692,14 @@ class MainActivity : ComponentActivity() {
         action: () -> Unit,
     ): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             text = icon
             textSize = 28f
             gravity = Gravity.CENTER
             contentDescription = label
             minWidth = dp(MENU_ICON_BUTTON_SIZE_DP)
             minHeight = dp(MENU_ICON_BUTTON_SIZE_DP)
-            setTextColor(Color.rgb(36, 36, 36))
+            setTextColor(colors.primaryText)
             isEnabled = enabled
             alpha = if (enabled) 1f else 0.35f
             isClickable = enabled
@@ -720,10 +724,11 @@ class MainActivity : ComponentActivity() {
         action: () -> Unit,
     ): TextView =
         TextView(this).apply {
+            val colors = themeColors()
             text = label
             textSize = 15f
             gravity = Gravity.CENTER_VERTICAL
-            setTextColor(Color.rgb(36, 36, 36))
+            setTextColor(colors.primaryText)
             setPadding(dp(16), 0, dp(16), 0)
             minHeight = dp(MENU_ROW_HEIGHT_DP)
             isClickable = true
@@ -742,7 +747,7 @@ class MainActivity : ComponentActivity() {
 
     private fun menuDivider(): View =
         View(this).apply {
-            setBackgroundColor(Color.rgb(218, 220, 224))
+            setBackgroundColor(themeColors().divider)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(1),

@@ -2,7 +2,6 @@ package com.denuoweb.hnsdane.ui
 
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
 import android.widget.LinearLayout
@@ -81,6 +80,7 @@ private fun ComponentActivity.hnsDiagnosticTab(
     action: () -> Unit,
 ): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         text = tool.title(this@hnsDiagnosticTab, traceJson)
         textSize = 11f
         typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
@@ -88,8 +88,8 @@ private fun ComponentActivity.hnsDiagnosticTab(
         maxLines = 2
         includeFontPadding = false
         setPadding(uiDp(3), 0, uiDp(3), 0)
-        setTextColor(if (selected) Color.WHITE else Color.rgb(21, 101, 192))
-        setBackgroundColor(if (selected) Color.rgb(21, 101, 192) else Color.rgb(232, 240, 254))
+        setTextColor(if (selected) colors.onAction else colors.action)
+        setBackgroundColor(if (selected) colors.action else colors.actionContainer)
         if (!selected) {
             isClickable = true
             isFocusable = true

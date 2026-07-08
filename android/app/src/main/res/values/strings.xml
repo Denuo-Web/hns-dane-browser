@@ -108,6 +108,7 @@
     <string name="section_about_legal_support">About, legal, and support</string>
     <string name="section_app">App</string>
     <string name="section_app_and_runtime">App and runtime</string>
+    <string name="section_appearance">Appearance</string>
     <string name="section_browsing_history">Browsing history</string>
     <string name="section_diagnostic_bundle">Diagnostic bundle</string>
     <string name="section_diagnostics_tools">Diagnostics and tools</string>
@@ -191,6 +192,10 @@
     <string name="row_run_sync_now">Run sync now</string>
     <string name="row_run_sync_now_summary">Start a foreground HNS sync and watch the status update here.</string>
     <string name="row_third_party_cookies_blocked">Third-party cookies blocked</string>
+    <string name="row_theme">Theme</string>
+    <string name="row_theme_summary_dark">Dark theme.</string>
+    <string name="row_theme_summary_light">Light theme.</string>
+    <string name="row_theme_summary_system">Follows your Android system theme.</string>
     <string name="row_tlsa_dane_inspector">TLSA / DANE inspector</string>
     <string name="row_tlsa_dane_inspector_summary">Check TLSA records and DANE policy.</string>
 
@@ -291,6 +296,11 @@
     <string name="settings_stateless_dane_off">Off. HNS proof and TLSA evidence use the live resolver path.</string>
     <string name="settings_strict_hns_mode">Strict HNS mode</string>
     <string name="settings_stateless_dane_certificates">Experimental stateless DANE certificates</string>
+    <string name="settings_theme_dialog_title">Theme</string>
+    <string name="settings_theme_set">Theme set to %1$s.</string>
+    <string name="theme_choice_dark">Dark</string>
+    <string name="theme_choice_light">Light</string>
+    <string name="theme_choice_system">Follow system</string>
     <string name="settings_open_language_failed">Open Android app info to change language settings.</string>
 
     <string name="handshake_network_mainnet">Mainnet</string>

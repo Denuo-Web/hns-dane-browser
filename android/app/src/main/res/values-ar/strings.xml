@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">حول والقانونية والدعم</string>
     <string name="section_app">برنامج</string>
     <string name="section_app_and_runtime">التطبيق ووقت التشغيل</string>
+    <string name="section_appearance">المظهر</string>
     <string name="section_browsing_history">تاريخ التصفح</string>
     <string name="section_diagnostic_bundle">حزمة التشخيص</string>
     <string name="section_diagnostics_tools">التشخيص والأدوات</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">قم بتشغيل المزامنة الآن</string>
     <string name="row_run_sync_now_summary">ابدأ مزامنة HNS الأمامية وشاهد تحديث الحالة هنا.</string>
     <string name="row_third_party_cookies_blocked">تم حظر ملفات تعريف الارتباط للجهات الخارجية</string>
+    <string name="row_theme">السمة</string>
+    <string name="row_theme_summary_dark">السمة الداكنة.</string>
+    <string name="row_theme_summary_light">السمة الفاتحة.</string>
+    <string name="row_theme_summary_system">يتبع سمة نظام Android.</string>
     <string name="row_tlsa_dane_inspector">مفتش TLSA/DANE</string>
     <string name="row_tlsa_dane_inspector_summary">تحقق من Regtestات TLSA وسياسة DANE.</string>
     <string name="history_empty_status">لا يوجد Regtest التصفح حتى الآن.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">عن. يستخدم دليل HNS وأدلة TLSA مسار المحلل المباشر.</string>
     <string name="settings_strict_hns_mode">وضع HNS الصارم</string>
     <string name="settings_stateless_dane_certificates">شهادات DANE التجريبية عديمة الجنسية</string>
+    <string name="settings_theme_dialog_title">السمة</string>
+    <string name="settings_theme_set">تم تعيين السمة إلى %1$s.</string>
+    <string name="theme_choice_dark">داكن</string>
+    <string name="theme_choice_light">فاتح</string>
+    <string name="theme_choice_system">اتبع النظام</string>
     <string name="settings_open_language_failed">افتح معلومات تطبيق Android لتغيير إعدادات اللغة.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">شبكة Handshake العامة.</string>

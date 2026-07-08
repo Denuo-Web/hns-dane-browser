@@ -100,6 +100,7 @@
     <string name="section_about_legal_support">Sobre, jurídico e suporte</string>
     <string name="section_app">Aplicativo</string>
     <string name="section_app_and_runtime">Aplicativo e tempo de execução</string>
+    <string name="section_appearance">Aparência</string>
     <string name="section_browsing_history">Histórico de navegação</string>
     <string name="section_diagnostic_bundle">Pacote de diagnóstico</string>
     <string name="section_diagnostics_tools">Diagnósticos e ferramentas</string>
@@ -182,6 +183,10 @@
     <string name="row_run_sync_now">Execute a sincronização agora</string>
     <string name="row_run_sync_now_summary">Inicie uma sincronização HNS em primeiro plano e assista à atualização de status aqui.</string>
     <string name="row_third_party_cookies_blocked">Cookies de terceiros bloqueados</string>
+    <string name="row_theme">Tema</string>
+    <string name="row_theme_summary_dark">Tema escuro.</string>
+    <string name="row_theme_summary_light">Tema claro.</string>
+    <string name="row_theme_summary_system">Segue o tema do sistema Android.</string>
     <string name="row_tlsa_dane_inspector">Inspetor TLSA/DANE</string>
     <string name="row_tlsa_dane_inspector_summary">Verifique os registros TLSA e a política DANE.</string>
     <string name="history_empty_status">Ainda não há histórico de navegação.</string>
@@ -278,6 +283,11 @@
     <string name="settings_stateless_dane_off">Desligado. A prova HNS e a evidência TLSA usam o caminho do resolvedor ao vivo.</string>
     <string name="settings_strict_hns_mode">Modo HNS estrito</string>
     <string name="settings_stateless_dane_certificates">Certificados DANE apátridas experimentais</string>
+    <string name="settings_theme_dialog_title">Tema</string>
+    <string name="settings_theme_set">Tema definido como %1$s.</string>
+    <string name="theme_choice_dark">Escuro</string>
+    <string name="theme_choice_light">Claro</string>
+    <string name="theme_choice_system">Seguir o sistema</string>
     <string name="settings_open_language_failed">Abra as informações do aplicativo Android para alterar as configurações de idioma.</string>
     <string name="handshake_network_mainnet">Mainnet</string>
     <string name="handshake_network_mainnet_summary">Rede pública de Handshake.</string>

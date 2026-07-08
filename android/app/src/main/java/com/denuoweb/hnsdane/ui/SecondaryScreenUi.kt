@@ -2,7 +2,6 @@ package com.denuoweb.hnsdane.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Color
 import android.graphics.Typeface
 import android.text.SpannableString
 import android.text.Spanned
@@ -25,9 +24,11 @@ internal fun ComponentActivity.setSecondaryScreen(
     onSwipeRight: (() -> Unit)? = null,
     content: LinearLayout.() -> Unit,
 ) {
+    val colors = themeColors()
     val root = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.START
+        setBackgroundColor(colors.background)
         setPadding(uiDp(20), uiDp(20), uiDp(20), uiDp(20))
         applySystemBarPadding()
         addView(screenHeading(title))
@@ -36,6 +37,7 @@ internal fun ComponentActivity.setSecondaryScreen(
 
     setContentView(
         ScrollView(this).apply {
+            setBackgroundColor(colors.background)
             installHorizontalSwipeNavigation(onSwipeLeft, onSwipeRight)
             addView(root, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -50,7 +52,9 @@ internal fun Context.screenSection(
     content: LinearLayout.() -> Unit,
 ): LinearLayout =
     LinearLayout(this).apply {
+        val colors = themeColors()
         orientation = LinearLayout.VERTICAL
+        setBackgroundColor(colors.background)
         setPadding(0, uiDp(10), 0, uiDp(12))
         addView(sectionHeading(title))
         content()
@@ -121,12 +125,14 @@ internal fun Context.checkboxRow(
     onCheckedChange: (Boolean) -> Unit,
 ): LinearLayout =
     LinearLayout(this).apply {
+        val colors = themeColors()
         orientation = LinearLayout.VERTICAL
+        setBackgroundColor(colors.background)
         setPadding(0, uiDp(8), 0, uiDp(10))
         addView(CheckBox(this@checkboxRow).apply {
             text = title
             textSize = 16f
-            setTextColor(ScreenColors.PRIMARY_TEXT)
+            setTextColor(colors.primaryText)
             setPadding(0, 0, 0, 0)
             isChecked = checked
             setOnCheckedChangeListener { _, value -> onCheckedChange(value) }
@@ -146,12 +152,13 @@ internal fun Context.preferenceSummary(
     bold: Boolean = false,
 ): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = text
         textSize = 14f
         if (bold) {
             typeface = Typeface.DEFAULT_BOLD
         }
-        setTextColor(ScreenColors.SECONDARY_TEXT)
+        setTextColor(colors.secondaryText)
         this.maxLines = maxLines
         ellipsize = if (maxLines == Int.MAX_VALUE) null else TextUtils.TruncateAt.END
         setTextIsSelectable(selectable)
@@ -164,9 +171,10 @@ internal fun Context.reportText(
     boldFieldValues: Boolean = false,
 ): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = if (boldFieldValues) text.withBoldFieldValues() else text
         textSize = 14f
-        setTextColor(ScreenColors.PRIMARY_TEXT)
+        setTextColor(colors.primaryText)
         if (monospace) {
             typeface = Typeface.MONOSPACE
             textSize = 13f
@@ -180,33 +188,37 @@ internal fun Context.fieldReportText(text: String): TextView =
 
 internal fun Context.screenHeading(text: String): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = text
         textSize = 28f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(ScreenColors.PRIMARY_TEXT)
+        setTextColor(colors.primaryText)
         setPadding(0, 0, 0, uiDp(10))
     }
 
 internal fun Context.sectionHeading(text: String): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = text
         textSize = 13f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(ScreenColors.SECONDARY_TEXT)
+        setTextColor(colors.secondaryText)
         setPadding(0, uiDp(18), 0, uiDp(6))
     }
 
 internal fun Context.preferenceTitle(text: String): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = text
         textSize = 16f
-        setTextColor(ScreenColors.PRIMARY_TEXT)
+        setTextColor(colors.primaryText)
         maxLines = 2
         ellipsize = TextUtils.TruncateAt.END
     }
 
 internal fun Context.preferenceActionLabel(text: String, destructive: Boolean): TextView =
     TextView(this).apply {
+        val colors = themeColors()
         this.text = text
         textSize = 14f
         typeface = Typeface.DEFAULT_BOLD
@@ -216,16 +228,16 @@ internal fun Context.preferenceActionLabel(text: String, destructive: Boolean): 
         ellipsize = TextUtils.TruncateAt.END
         setTextColor(
             if (destructive) {
-                ScreenColors.DESTRUCTIVE
+                colors.destructive
             } else {
-                ScreenColors.ACTION
+                colors.action
             },
         )
     }
 
 internal fun View.screenDivider(): View =
     View(context).apply {
-        setBackgroundColor(ScreenColors.DIVIDER)
+        setBackgroundColor(context.themeColors().divider)
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             1,
@@ -324,12 +336,4 @@ private fun SpannableString.bold(start: Int, end: Int) {
     if (start < end) {
         setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
-}
-
-private object ScreenColors {
-    val PRIMARY_TEXT: Int = Color.rgb(32, 33, 36)
-    val SECONDARY_TEXT: Int = Color.rgb(95, 99, 104)
-    val ACTION: Int = Color.rgb(21, 101, 192)
-    val DESTRUCTIVE: Int = Color.rgb(183, 28, 28)
-    val DIVIDER: Int = Color.rgb(218, 220, 224)
 }
