@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.HnsSyncForegroundService
 import com.denuoweb.hnsdane.net.NativeBridge
 import java.util.concurrent.atomic.AtomicBoolean
@@ -27,16 +28,16 @@ class HnsSyncActivity : ComponentActivity() {
             bold = true,
         )
 
-        setSecondaryScreen("HNS Sync") {
-            addView(screenSection("HNS sync") {
+        setSecondaryScreen(getString(R.string.screen_hns_sync)) {
+            addView(screenSection(getString(R.string.row_hns_sync)) {
                 addScreenRow(preferenceRow(
-                    title = "Sync status",
+                    title = getString(R.string.row_sync_status),
                     summaryView = syncStatus,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Run sync now",
-                    summary = "Start a foreground HNS sync and watch the status update here.",
-                    actionLabel = "Run",
+                    title = getString(R.string.row_run_sync_now),
+                    summary = getString(R.string.row_run_sync_now_summary),
+                    actionLabel = getString(R.string.action_run),
                 ) {
                     runSyncNow()
                 })
@@ -51,13 +52,13 @@ class HnsSyncActivity : ComponentActivity() {
 
     private fun runSyncNow() {
         if (syncRunInProgress) {
-            Toast.makeText(this, "Sync is already running", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.sync_already_running), Toast.LENGTH_SHORT).show()
             return
         }
 
         syncRunInProgress = true
         HnsSyncForegroundService.start(this)
-        syncStatus.text = "running"
+        syncStatus.text = getString(R.string.common_running)
 
         val running = AtomicBoolean(true)
         activePoller = running
@@ -68,7 +69,7 @@ class HnsSyncActivity : ComponentActivity() {
                 val status = NativeBridge.syncStatus(filesDir.absolutePath, network)
                 runOnUiThread {
                     if (running.get()) {
-                        syncStatus.text = "running $status"
+                        syncStatus.text = getString(R.string.common_running_status, status)
                     }
                 }
             }

@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 
 class DownloadsActivity : ComponentActivity() {
     private lateinit var listContainer: LinearLayout
@@ -24,29 +25,29 @@ class DownloadsActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        setSecondaryScreen("Downloads") {
-            addView(screenSection("Download records") {
+        setSecondaryScreen(getString(R.string.screen_downloads)) {
+            addView(screenSection(getString(R.string.section_download_records)) {
                 addScreenRow(preferenceRow(
-                    title = "App downloads",
+                    title = getString(R.string.row_app_downloads),
                     summaryView = status,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Open system downloads",
-                    summary = "View downloaded files in Android DownloadManager.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_open_system_downloads),
+                    summary = getString(R.string.row_open_system_downloads_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openSystemDownloads()
                 })
                 addScreenRow(preferenceRow(
-                    title = "Clear download records",
-                    summary = "Remove this browser's download list. Downloaded files stay on the device.",
-                    actionLabel = "Clear",
+                    title = getString(R.string.row_clear_download_records),
+                    summary = getString(R.string.row_clear_download_records_summary),
+                    actionLabel = getString(R.string.action_clear),
                     destructive = true,
                 ) {
                     confirmClearDownloadRecords()
                 })
             })
-            addView(screenSection("Recent downloads") {
+            addView(screenSection(getString(R.string.section_recent_downloads)) {
                 addView(listContainer)
             })
         }
@@ -58,15 +59,15 @@ class DownloadsActivity : ComponentActivity() {
         listContainer.removeAllViews()
         val records = BrowserDownloadStore.records(this)
         status.text = if (records.isEmpty()) {
-            "No app downloads yet."
+            getString(R.string.downloads_empty_status)
         } else {
-            "${records.size} app download${if (records.size == 1) "" else "s"}."
+            resources.getQuantityString(R.plurals.downloads_app_downloads_status, records.size, records.size)
         }
 
         if (records.isEmpty()) {
             listContainer.addScreenRow(preferenceRow(
-                title = "No recent downloads",
-                summary = "Downloads saved or queued by this browser will appear here.",
+                title = getString(R.string.downloads_empty_title),
+                summary = getString(R.string.downloads_empty_summary),
             ))
         } else {
             records.forEach { record ->
@@ -78,11 +79,12 @@ class DownloadsActivity : ComponentActivity() {
     private fun downloadRow(record: BrowserDownloadRecord): LinearLayout =
         preferenceRow(
             title = record.fileName,
-            summary = buildString {
-                appendLine("Queued: ${formatTime(record.queuedAtMillis)}")
-                appendLine("Status: ${downloadStatus(record)}")
-                appendLine("URL: ${record.url}")
-            },
+            summary = getString(
+                R.string.downloads_row_summary,
+                formatTime(record.queuedAtMillis),
+                downloadStatus(record),
+                record.url,
+            ),
             summaryMaxLines = 4,
         )
 
@@ -93,30 +95,34 @@ class DownloadsActivity : ComponentActivity() {
         val downloadId = record.downloadId
         val manager = getSystemService(DownloadManager::class.java)
         val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
-            ?: return "Unknown"
+            ?: return getString(R.string.downloads_status_unknown)
         cursor.use {
             if (!it.moveToFirst()) {
-                return "No longer listed by DownloadManager"
+                return getString(R.string.downloads_status_not_listed)
             }
             return when (it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                DownloadManager.STATUS_PENDING -> "Pending"
-                DownloadManager.STATUS_PAUSED -> "Paused"
+                DownloadManager.STATUS_PENDING -> getString(R.string.downloads_status_pending)
+                DownloadManager.STATUS_PAUSED -> getString(R.string.downloads_status_paused)
                 DownloadManager.STATUS_RUNNING -> progressText(it)
-                DownloadManager.STATUS_SUCCESSFUL -> "Complete"
-                DownloadManager.STATUS_FAILED -> "Failed (${it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))})"
-                else -> "Unknown"
+                DownloadManager.STATUS_SUCCESSFUL -> getString(R.string.downloads_status_complete)
+                DownloadManager.STATUS_FAILED -> getString(
+                    R.string.downloads_status_failed,
+                    it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)),
+                )
+                else -> getString(R.string.downloads_status_unknown)
             }
         }
     }
 
     private fun mediaStoreDownloadStatus(contentUri: String): String {
-        val uri = runCatching { Uri.parse(contentUri) }.getOrNull() ?: return "Saved file record is invalid"
+        val uri = runCatching { Uri.parse(contentUri) }.getOrNull()
+            ?: return getString(R.string.downloads_saved_record_invalid)
         return try {
             contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-                "Saved to Downloads"
-            } ?: "Saved file is unavailable"
+                getString(R.string.downloads_saved_to_downloads)
+            } ?: getString(R.string.downloads_saved_file_unavailable)
         } catch (_: Exception) {
-            "Saved file is unavailable"
+            getString(R.string.downloads_saved_file_unavailable)
         }
     }
 
@@ -126,9 +132,9 @@ class DownloadsActivity : ComponentActivity() {
         )
         val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
         return if (total > 0L) {
-            "Downloading $downloaded / $total bytes"
+            getString(R.string.downloads_progress_with_total, downloaded.toString(), total.toString())
         } else {
-            "Downloading $downloaded bytes"
+            getString(R.string.downloads_progress_without_total, downloaded.toString())
         }
     }
 
@@ -136,24 +142,28 @@ class DownloadsActivity : ComponentActivity() {
         try {
             startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "No system downloads app is available", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.downloads_no_system_app), Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun confirmClearDownloadRecords() {
         val count = BrowserDownloadStore.records(this).size
         if (count == 0) {
-            Toast.makeText(this, "Download records are already empty", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.downloads_records_already_empty), Toast.LENGTH_SHORT).show()
             return
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Clear download records?")
-            .setMessage("This clears this browser's download list. It does not delete downloaded files.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
+            .setTitle(R.string.downloads_clear_title)
+            .setMessage(R.string.downloads_clear_message)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_clear) { _, _ ->
                 val cleared = BrowserDownloadStore.clear(this)
-                Toast.makeText(this, "Cleared $cleared download record(s)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    resources.getQuantityString(R.plurals.downloads_cleared_records, cleared, cleared),
+                    Toast.LENGTH_SHORT,
+                ).show()
                 refreshDownloads()
             }
             .show()
@@ -161,7 +171,7 @@ class DownloadsActivity : ComponentActivity() {
 
     private fun formatTime(queuedAtMillis: Long): String =
         if (queuedAtMillis <= 0L) {
-            "Unknown time"
+            getString(R.string.history_unknown_time)
         } else {
             DateFormat.format("yyyy-MM-dd HH:mm", queuedAtMillis).toString()
         }

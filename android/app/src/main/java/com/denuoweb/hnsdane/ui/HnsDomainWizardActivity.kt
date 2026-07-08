@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.NativeBridge
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,7 +23,7 @@ class HnsDomainWizardActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         input = EditText(this).apply {
-            hint = "myname/ or www.myname/"
+            hint = getString(R.string.wizard_input_hint)
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_GO
             setOnEditorActionListener { _, actionId, _ ->
@@ -35,30 +36,30 @@ class HnsDomainWizardActivity : ComponentActivity() {
             }
         }
 
-        output = reportText("Enter an HNS name you own, then run the local proof/resource analyzer.")
+        output = reportText(getString(R.string.wizard_intro))
 
-        setSecondaryScreen("HNS Domain Setup") {
-            addView(screenSection("Domain") {
+        setSecondaryScreen(getString(R.string.screen_hns_domain_setup)) {
+            addView(screenSection(getString(R.string.section_domain)) {
                 addView(input, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Analyze domain",
-                    summary = "Check the local HNS proof and resource records.",
-                    actionLabel = "Analyze",
+                    title = getString(R.string.wizard_analyze_domain),
+                    summary = getString(R.string.wizard_analyze_summary),
+                    actionLabel = getString(R.string.action_analyze),
                 ) {
                     analyze()
                 })
                 addScreenRow(preferenceRow(
-                    title = "Copy report",
-                    summary = "Copy the current analysis as text.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.wizard_copy_report),
+                    summary = getString(R.string.wizard_copy_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
                     copy(lastReport.ifBlank { output.text.toString() })
                 })
             })
-            addView(screenSection("Report") {
+            addView(screenSection(getString(R.string.section_report)) {
                 addView(output)
             })
         }
@@ -67,7 +68,7 @@ class HnsDomainWizardActivity : ComponentActivity() {
     private fun analyze() {
         val host = normalizeHost(input.text.toString())
         if (host.isBlank()) {
-            output.text = "Enter a valid HNS name first."
+            output.text = getString(R.string.wizard_invalid_name)
             return
         }
         val proofJson = NativeBridge.hnsProofDetails(
@@ -81,10 +82,10 @@ class HnsDomainWizardActivity : ComponentActivity() {
 
     private fun reportFor(host: String, proofJson: String): String {
         val proof = runCatching { JSONObject(proofJson) }.getOrNull()
-            ?: return "Could not parse proof details.\n\nRaw:\n$proofJson"
+            ?: return getString(R.string.wizard_parse_error, proofJson)
         val name = proof.optString("name", host.substringAfterLast("."))
-        val status = proof.optString("proofStatus", "unknown")
-        val cacheStatus = proof.optString("cacheStatus", "unknown")
+        val status = proof.optString("proofStatus", getString(R.string.common_unknown))
+        val cacheStatus = proof.optString("cacheStatus", getString(R.string.common_unknown))
         val recordTypes = proof.optJSONArray("recordTypes")
         val records = proof.optJSONArray("resourceRecords")
         val hasNs = hasRecordType(recordTypes, "NS")
@@ -93,34 +94,34 @@ class HnsDomainWizardActivity : ComponentActivity() {
         val hasTxt = hasRecordType(recordTypes, "TXT")
 
         return buildString {
-            appendLine("# HNS Domain Wizard")
+            appendLine(getString(R.string.wizard_report_title))
             appendLine()
-            appendLine("Host: $host")
-            appendLine("Root: $name")
-            appendLine("Proof status: $status")
-            appendLine("Cache status: $cacheStatus")
-            appendLine("Records: ${arrayText(recordTypes)}")
+            appendLine(getString(R.string.wizard_field_host, host))
+            appendLine(getString(R.string.wizard_field_root, name))
+            appendLine(getString(R.string.wizard_field_proof_status, status))
+            appendLine(getString(R.string.wizard_field_cache_status, cacheStatus))
+            appendLine(getString(R.string.wizard_field_records, arrayText(recordTypes)))
             appendLine()
-            appendLine("Current problem:")
+            appendLine(getString(R.string.wizard_current_problem))
             appendLine(problemText(status, cacheStatus, hasNs, hasAddress, hasDs))
             appendLine()
-            appendLine("Suggested fix:")
+            appendLine(getString(R.string.wizard_suggested_fix))
             appendLine(suggestedFix(name, status, hasNs, hasAddress, hasDs))
             appendLine()
-            appendLine("Strict HNS + DANE checklist:")
-            appendLine("- HNS resource has NS plus usable GLUE4/GLUE6, or direct SYNTH4/SYNTH6.")
-            appendLine("- Authoritative DNS answers UDP 53 and TCP 53 for $name.")
-            appendLine("- HNS DS matches child DNSKEY, and child zone has valid RRSIG/NSEC denial data.")
-            appendLine("- HTTPS sites publish TLSA at _443._tcp.$host.")
+            appendLine(getString(R.string.wizard_checklist_title))
+            appendLine(getString(R.string.wizard_checklist_resource))
+            appendLine(getString(R.string.wizard_checklist_dns, name))
+            appendLine(getString(R.string.wizard_checklist_dnssec))
+            appendLine(getString(R.string.wizard_checklist_tlsa, host))
             appendLine()
-            appendLine("Decoded records:")
+            appendLine(getString(R.string.wizard_decoded_records))
             appendLine(recordsText(records))
             if (hasTxt) {
                 appendLine()
-                appendLine("TXT records are visible, but TXT alone does not make a browser-loadable origin.")
+                appendLine(getString(R.string.wizard_txt_warning))
             }
             appendLine()
-            appendLine("Raw proof JSON:")
+            appendLine(getString(R.string.wizard_raw_json))
             appendLine(proofJson)
         }
     }
@@ -133,19 +134,19 @@ class HnsDomainWizardActivity : ComponentActivity() {
         hasDs: Boolean,
     ): String = when {
         status == "unavailable" ->
-            "No local proof is available yet ($cacheStatus). Sync first, then retry."
+            getString(R.string.wizard_problem_unavailable, cacheStatus)
         status == "not_found" ->
-            "The HNS root proof says this name does not currently exist."
+            getString(R.string.wizard_problem_not_found)
         status != "verified" ->
-            "The local proof is not verified yet: $status."
+            getString(R.string.wizard_problem_not_verified, status)
         !hasNs && !hasAddress ->
-            "The name has no browser-usable NS/address data."
+            getString(R.string.wizard_problem_no_data)
         hasNs && !hasAddress ->
-            "The name delegates to NS records, but no local address is visible in the HNS proof. The delegated nameserver must be reachable and authoritative."
+            getString(R.string.wizard_problem_no_address)
         hasAddress && !hasDs ->
-            "The name has address data, but no HNS DS. It can load directly, but strict delegated DNSSEC/DANE is not fully established."
+            getString(R.string.wizard_problem_no_ds)
         else ->
-            "The HNS resource looks browser-usable. If loading fails, inspect the Resolver Trace and TLSA Inspector for delegated DNS or DANE failures."
+            getString(R.string.wizard_problem_usable)
     }
 
     private fun suggestedFix(
@@ -156,17 +157,17 @@ class HnsDomainWizardActivity : ComponentActivity() {
         hasDs: Boolean,
     ): String = when {
         status == "unavailable" ->
-            "Run sync until the app has the current header tip, then open this wizard again."
+            getString(R.string.wizard_fix_unavailable)
         status == "not_found" ->
-            "Register or renew $name, then publish an HNS resource."
+            getString(R.string.wizard_fix_not_found, name)
         !hasNs && !hasAddress ->
-            "Add either:\n\nSYNTH4 203.0.113.10\n\nor:\n\nNS ns1.$name.\nGLUE4 ns1.$name. 203.0.113.10"
+            getString(R.string.wizard_fix_add_records, name)
         hasNs && !hasAddress ->
-            "If ns1.$name is in-bailiwick, add GLUE4/GLUE6. Then configure authoritative DNS to answer:\n\n$name. A 203.0.113.20\nwww.$name. A 203.0.113.20"
+            getString(R.string.wizard_fix_add_glue, name)
         !hasDs ->
-            "For strict HNS+DANE, add DS in HNS, DNSKEY/RRSIG in your authoritative zone, and TLSA for _443._tcp.$name."
+            getString(R.string.wizard_fix_add_dane, name)
         else ->
-            "Verify your webserver answers on the published A/AAAA target, then use Resolver Trace for transport-level failures."
+            getString(R.string.wizard_fix_verify_webserver)
     }
 
     private fun normalizeHost(value: String): String =
@@ -187,26 +188,29 @@ class HnsDomainWizardActivity : ComponentActivity() {
 
     private fun arrayText(array: JSONArray?): String =
         if (array == null || array.length() == 0) {
-            "none"
+            getString(R.string.common_none)
         } else {
             (0 until array.length()).joinToString(", ") { index -> array.optString(index) }
         }
 
     private fun recordsText(records: JSONArray?): String =
         if (records == null || records.length() == 0) {
-            "none"
+            getString(R.string.common_none)
         } else {
             (0 until records.length()).joinToString("\n") { index ->
                 val record = records.optJSONObject(index)
-                "- ${record?.optString("type", "unknown") ?: "unknown"} " +
-                    "${record?.optString("name", "unknown") ?: "unknown"} " +
-                    "rdata=${record?.optString("rdataHex", "unknown") ?: "unknown"}"
+                getString(
+                    R.string.wizard_record_line,
+                    record?.optString("type", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                    record?.optString("name", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                    record?.optString("rdataHex", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                )
             }
         }
 
     private fun copy(value: String) {
         getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText("HNS domain wizard report", value))
-        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+            .setPrimaryClip(ClipData.newPlainText(getString(R.string.wizard_clip_label), value))
+        Toast.makeText(this, getString(R.string.common_copied), Toast.LENGTH_SHORT).show()
     }
 }

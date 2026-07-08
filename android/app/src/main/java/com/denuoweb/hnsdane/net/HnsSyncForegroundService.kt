@@ -123,7 +123,7 @@ class HnsSyncForegroundService : Service() {
         progress.status == "error" || progress.status == "seed_failed" -> {
             getString(R.string.sync_notification_error)
         }
-        progress.isBehind || progress.status == "syncing" -> progress.summary()
+        progress.isBehind || progress.status == "syncing" -> progress.summary(this)
         else -> getString(R.string.sync_notification_running)
     }
 

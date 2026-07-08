@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.GatewayEvent
 import com.denuoweb.hnsdane.net.GatewayEventLog
 
@@ -20,7 +21,7 @@ class GatewayActivity : ComponentActivity() {
         GatewayEventLog.configureAppStorage(filesDir)
 
         setSecondaryScreen(
-            title = "Gateway",
+            title = getString(R.string.screen_gateway),
             onSwipeLeft = {
                 openAdjacentHnsDiagnostic(HnsDiagnosticTool.Gateway, forward = true, url, traceJson)
             },
@@ -29,14 +30,14 @@ class GatewayActivity : ComponentActivity() {
             },
         ) {
             addView(hnsDiagnosticTabs(HnsDiagnosticTool.Gateway, url, traceJson))
-            addView(screenSection("Recent gateway events") {
+            addView(screenSection(getString(R.string.section_recent_gateway_events)) {
                 addView(fieldReportText(gatewaySummary()))
             })
-            addView(screenSection("Export") {
+            addView(screenSection(getString(R.string.section_export)) {
                 addScreenRow(preferenceRow(
-                    title = "Copy gateway events",
-                    summary = "Copy the current gateway event log.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_gateway_events),
+                    summary = getString(R.string.row_copy_gateway_events_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
                     copyGatewayEvents()
                 })
@@ -47,7 +48,7 @@ class GatewayActivity : ComponentActivity() {
     private fun gatewaySummary(): String {
         val events = GatewayEventLog.snapshot()
         if (events.isEmpty()) {
-            return "Recent gateway events: none"
+            return getString(R.string.gateway_empty)
         }
         return events.joinToString(separator = "\n\n") { event ->
             eventSummary(event)
@@ -56,18 +57,18 @@ class GatewayActivity : ComponentActivity() {
 
     private fun eventSummary(event: GatewayEvent): String =
         buildString {
-            appendLine("Timestamp: ${event.timestampMillis}")
-            appendLine("Stage: ${event.stage}")
-            appendLine("Host: ${event.host}")
-            appendLine("Status: ${event.status}")
-            append("Reason: ${event.reason}")
+            appendLine(getString(R.string.gateway_event_timestamp, event.timestampMillis.toString()))
+            appendLine(getString(R.string.gateway_event_stage, event.stage))
+            appendLine(getString(R.string.gateway_event_host, event.host))
+            appendLine(getString(R.string.gateway_event_status, event.status.toString()))
+            append(getString(R.string.gateway_event_reason, event.reason))
         }
 
     private fun copyGatewayEvents() {
         val events = GatewayEventLog.snapshotText()
         getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText("HNS DANE Browser gateway events", events))
-        Toast.makeText(this, "Gateway events copied", Toast.LENGTH_SHORT).show()
+            .setPrimaryClip(ClipData.newPlainText(getString(R.string.gateway_clip_label), events))
+        Toast.makeText(this, getString(R.string.gateway_copied), Toast.LENGTH_SHORT).show()
     }
 
     companion object {

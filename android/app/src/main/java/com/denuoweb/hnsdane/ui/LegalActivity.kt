@@ -9,61 +9,62 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.denuoweb.hnsdane.BuildConfig
+import com.denuoweb.hnsdane.R
 
 class LegalActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        setSecondaryScreen("Legal") {
-            addView(screenSection("App") {
+        setSecondaryScreen(getString(R.string.screen_legal)) {
+            addView(screenSection(getString(R.string.section_app)) {
                 addScreenRow(preferenceRow(
-                    title = "Build",
+                    title = getString(R.string.row_build),
                     summary = buildLabel(),
                     selectableSummary = true,
                 ))
             })
-            addView(screenSection("Privacy policy") {
+            addView(screenSection(getString(R.string.section_privacy_policy)) {
                 addScreenRow(preferenceRow(
-                    title = "Summary",
-                    summary = BrowserAppInfo.PRIVACY_POLICY_SUMMARY,
+                    title = getString(R.string.row_license_summary_title),
+                    summary = getString(R.string.legal_privacy_summary),
                     selectableSummary = true,
                     summaryMaxLines = Int.MAX_VALUE,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Privacy policy URL",
+                    title = getString(R.string.row_privacy_policy_url),
                     summary = BrowserAppInfo.PRIVACY_POLICY_URL,
-                    actionLabel = "Open",
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openLink(
                         Uri.parse(BrowserAppInfo.PRIVACY_POLICY_URL),
-                        "privacy policy URL",
+                        getString(R.string.legal_copy_privacy_policy_url),
                         BrowserAppInfo.PRIVACY_POLICY_URL,
                     )
                 })
             })
-            addView(screenSection("License") {
+            addView(screenSection(getString(R.string.section_license)) {
                 addScreenRow(preferenceRow(
-                    title = BrowserAppInfo.LICENSE_NAME,
-                    summary = BrowserAppInfo.LICENSE_SUMMARY,
+                    title = getString(R.string.legal_license_name),
+                    summary = getString(R.string.legal_license_summary),
                     selectableSummary = true,
                     summaryMaxLines = Int.MAX_VALUE,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Source code",
+                    title = getString(R.string.row_source_code),
                     summary = BrowserAppInfo.SOURCE_CODE_URL,
-                    actionLabel = "Open",
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openLink(
                         Uri.parse(BrowserAppInfo.SOURCE_CODE_URL),
-                        "source code URL",
+                        getString(R.string.legal_copy_source_code_url),
                         BrowserAppInfo.SOURCE_CODE_URL,
                     )
                 })
             })
-            addView(screenSection("User agreement") {
+            addView(screenSection(getString(R.string.section_user_agreement)) {
                 addScreenRow(preferenceRow(
-                    title = "Agreement",
-                    summary = BrowserAppInfo.USER_AGREEMENT,
+                    title = getString(R.string.row_agreement),
+                    summary = getString(R.string.legal_user_agreement),
                     selectableSummary = true,
                     summaryMaxLines = Int.MAX_VALUE,
                 ))
@@ -77,12 +78,16 @@ class LegalActivity : ComponentActivity() {
         } catch (_: ActivityNotFoundException) {
             getSystemService(ClipboardManager::class.java)
                 .setPrimaryClip(ClipData.newPlainText(copyLabel, copyText))
-            Toast.makeText(this, "Copied $copyLabel", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.common_copied_label, copyLabel), Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun buildLabel(): String {
-        val channel = if (BuildConfig.DEBUG) "debug demo" else "release"
-        return "$channel ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        val channel = if (BuildConfig.DEBUG) {
+            getString(R.string.common_debug_demo)
+        } else {
+            getString(R.string.common_release)
+        }
+        return getString(R.string.common_build_label, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
     }
 }

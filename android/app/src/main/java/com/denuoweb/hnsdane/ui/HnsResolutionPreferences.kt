@@ -1,29 +1,37 @@
 package com.denuoweb.hnsdane.ui
 
 import android.content.Context
+import androidx.annotation.StringRes
+import com.denuoweb.hnsdane.R
 import java.net.URI
 import java.util.Locale
 
 enum class HandshakeNetwork(
     val id: String,
-    val displayName: String,
-    val summary: String,
+    @param:StringRes private val displayNameRes: Int,
+    @param:StringRes private val summaryRes: Int,
 ) {
     Mainnet(
         id = "mainnet",
-        displayName = "Mainnet",
-        summary = "Public Handshake network.",
+        displayNameRes = R.string.handshake_network_mainnet,
+        summaryRes = R.string.handshake_network_mainnet_summary,
     ),
     Testnet(
         id = "testnet",
-        displayName = "Testnet",
-        summary = "Public test network for development.",
+        displayNameRes = R.string.handshake_network_testnet,
+        summaryRes = R.string.handshake_network_testnet_summary,
     ),
     Regtest(
         id = "regtest",
-        displayName = "Regtest",
-        summary = "Local regtest node on 127.0.0.1:14038.",
+        displayNameRes = R.string.handshake_network_regtest,
+        summaryRes = R.string.handshake_network_regtest_summary,
     );
+
+    fun displayName(context: Context): String =
+        context.getString(displayNameRes)
+
+    fun summary(context: Context): String =
+        context.getString(summaryRes)
 
     companion object {
         fun fromId(id: String?): HandshakeNetwork =

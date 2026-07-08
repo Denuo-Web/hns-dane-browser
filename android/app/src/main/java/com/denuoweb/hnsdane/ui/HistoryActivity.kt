@@ -8,6 +8,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 
 class HistoryActivity : ComponentActivity() {
     private lateinit var listContainer: LinearLayout
@@ -21,22 +22,22 @@ class HistoryActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        setSecondaryScreen("History") {
-            addView(screenSection("Browsing history") {
+        setSecondaryScreen(getString(R.string.screen_history)) {
+            addView(screenSection(getString(R.string.section_browsing_history)) {
                 addScreenRow(preferenceRow(
-                    title = "Saved pages",
+                    title = getString(R.string.row_saved_pages),
                     summaryView = status,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Clear history",
-                    summary = "Remove saved browsing history from this device.",
-                    actionLabel = "Clear",
+                    title = getString(R.string.row_clear_history),
+                    summary = getString(R.string.row_clear_history_summary),
+                    actionLabel = getString(R.string.action_clear),
                     destructive = true,
                 ) {
                     confirmClearHistory()
                 })
             })
-            addView(screenSection("Recent pages") {
+            addView(screenSection(getString(R.string.section_recent_pages)) {
                 addView(listContainer)
             })
         }
@@ -48,15 +49,15 @@ class HistoryActivity : ComponentActivity() {
         listContainer.removeAllViews()
         val entries = BrowserHistoryStore.entries(this)
         status.text = if (entries.isEmpty()) {
-            "No browsing history yet."
+            getString(R.string.history_empty_status)
         } else {
-            "${entries.size} recent page${if (entries.size == 1) "" else "s"}."
+            resources.getQuantityString(R.plurals.history_recent_pages_status, entries.size, entries.size)
         }
 
         if (entries.isEmpty()) {
             listContainer.addScreenRow(preferenceRow(
-                title = "No recent pages",
-                summary = "Pages you visit will appear here.",
+                title = getString(R.string.history_empty_title),
+                summary = getString(R.string.history_empty_summary),
             ))
         } else {
             entries.forEach { entry ->
@@ -69,7 +70,7 @@ class HistoryActivity : ComponentActivity() {
         preferenceRow(
             title = entry.title.ifBlank { entry.url },
             summary = "${formatTime(entry.visitedAtMillis)}\n${entry.url}",
-            actionLabel = "Open",
+            actionLabel = getString(R.string.action_open),
             summaryMaxLines = 3,
         ) {
             startActivity(
@@ -82,17 +83,21 @@ class HistoryActivity : ComponentActivity() {
     private fun confirmClearHistory() {
         val count = BrowserHistoryStore.entries(this).size
         if (count == 0) {
-            Toast.makeText(this, "History is already empty", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.history_already_empty), Toast.LENGTH_SHORT).show()
             return
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Clear history?")
-            .setMessage("This removes the app's local list of recently visited pages.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
+            .setTitle(R.string.history_clear_title)
+            .setMessage(R.string.history_clear_message)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_clear) { _, _ ->
                 val cleared = BrowserHistoryStore.clear(this)
-                Toast.makeText(this, "Cleared $cleared history item(s)", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    resources.getQuantityString(R.plurals.history_cleared_items, cleared, cleared),
+                    Toast.LENGTH_SHORT,
+                ).show()
                 refreshHistory()
             }
             .show()
@@ -100,7 +105,7 @@ class HistoryActivity : ComponentActivity() {
 
     private fun formatTime(visitedAtMillis: Long): String =
         if (visitedAtMillis <= 0L) {
-            "Unknown time"
+            getString(R.string.history_unknown_time)
         } else {
             DateFormat.format("yyyy-MM-dd HH:mm", visitedAtMillis).toString()
         }

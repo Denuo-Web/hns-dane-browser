@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
@@ -21,6 +22,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.HeaderSnapshotInstaller
 import com.denuoweb.hnsdane.net.HnsSyncForegroundService
 import com.denuoweb.hnsdane.BuildConfig
@@ -48,8 +50,8 @@ class SettingsActivity : ComponentActivity() {
         hnsModeStatus = preferenceSummary(hnsModeText())
         statelessDaneStatus = preferenceSummary(statelessDaneText())
         dohResolverStatus = preferenceSummary(HnsResolutionPreferences.dohResolverUrl(this))
-        resolverCacheStatus = preferenceSummary("Ready to clear cached resolver values.")
-        headerResyncStatus = preferenceSummary("Reset local headers and sync again from peers.")
+        resolverCacheStatus = preferenceSummary(getString(R.string.settings_resolver_cache_ready))
+        headerResyncStatus = preferenceSummary(getString(R.string.settings_header_resync_ready))
         historyStatus = preferenceSummary(historySummary())
         downloadStatus = preferenceSummary(downloadSummary())
 
@@ -58,188 +60,198 @@ class SettingsActivity : ComponentActivity() {
             gravity = Gravity.START
             setPadding(dp(20), dp(20), dp(20), dp(20))
             applySystemBarPadding()
-            addView(heading("Settings"))
+            addView(heading(getString(R.string.screen_settings)))
 
-            addView(section("Start page") {
+            addView(section(getString(R.string.section_start_page)) {
                 addPreference(preferenceRow(
-                    title = "Homepage",
+                    title = getString(R.string.row_homepage),
                     summaryView = homepageStatus,
-                    actionLabel = "Edit",
+                    actionLabel = getString(R.string.action_edit),
                 ) {
                     showEditHomepageDialog()
                 })
                 currentUrlFromIntent()?.let { currentUrl ->
                     addPreference(preferenceRow(
-                        title = "Set current page as homepage",
+                        title = getString(R.string.row_set_current_page_homepage),
                         summary = currentUrl,
-                        actionLabel = "Set",
+                        actionLabel = getString(R.string.action_set),
                     ) {
                         useCurrentPageAsHomepage(currentUrl)
                     })
                 }
                 addPreference(preferenceRow(
-                    title = "Reset homepage",
-                    summary = "Restore the default Denuo Web homepage.",
-                    actionLabel = "Reset",
+                    title = getString(R.string.row_reset_homepage),
+                    summary = getString(R.string.row_reset_homepage_summary),
+                    actionLabel = getString(R.string.action_reset),
                     destructive = true,
                 ) {
                     confirmResetHomepage()
                 })
             })
 
-            addView(section("Privacy and data") {
+            addView(section(getString(R.string.section_privacy_and_data)) {
                 addPreference(preferenceRow(
-                    title = "Cookies",
+                    title = getString(R.string.row_cookies),
                     summaryView = cookieStatus,
-                    actionLabel = "Manage",
+                    actionLabel = getString(R.string.action_manage),
                 ) {
                     startActivity(Intent(this@SettingsActivity, CookieSettingsActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "History",
+                    title = getString(R.string.row_history),
                     summaryView = historyStatus,
-                    actionLabel = "View",
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HistoryActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Downloads",
+                    title = getString(R.string.row_downloads),
                     summaryView = downloadStatus,
-                    actionLabel = "View",
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, DownloadsActivity::class.java))
                 })
             })
 
-            addView(section("HNS resolution") {
+            addView(section(getString(R.string.section_language)) {
                 addPreference(preferenceRow(
-                    title = "Handshake network",
+                    title = getString(R.string.row_app_language),
+                    summary = getString(R.string.row_app_language_summary),
+                    actionLabel = getString(R.string.action_open),
+                ) {
+                    openAppLanguageSettings()
+                })
+            })
+
+            addView(section(getString(R.string.section_hns_resolution)) {
+                addPreference(preferenceRow(
+                    title = getString(R.string.row_handshake_network),
                     summaryView = hnsNetworkStatus,
-                    actionLabel = "Change",
+                    actionLabel = getString(R.string.action_change),
                 ) {
                     showNetworkDialog()
                 })
                 addPreference(strictHnsModeOption())
                 addPreference(statelessDaneCertificateOption())
                 addPreference(preferenceRow(
-                    title = "Compatibility DoH resolver",
+                    title = getString(R.string.row_compatibility_doh_resolver),
                     summaryView = dohResolverStatus,
-                    actionLabel = "Edit",
+                    actionLabel = getString(R.string.action_edit),
                 ) {
                     showEditDohResolverDialog()
                 })
                 addPreference(preferenceRow(
-                    title = "Clear resolver cache",
+                    title = getString(R.string.row_clear_resolver_cache),
                     summaryView = resolverCacheStatus,
-                    actionLabel = "Clear",
+                    actionLabel = getString(R.string.action_clear),
                     destructive = true,
                 ) {
                     confirmClearResolverCache()
                 })
                 addPreference(preferenceRow(
-                    title = "Resync headers from peers",
+                    title = getString(R.string.row_resync_headers_from_peers),
                     summaryView = headerResyncStatus,
-                    actionLabel = "Reset",
+                    actionLabel = getString(R.string.action_reset),
                     destructive = true,
                 ) {
                     confirmHeaderPeerResync()
                 })
                 addPreference(preferenceRow(
-                    title = "HNS sync",
-                    summary = "View sync status and run a manual sync.",
-                    actionLabel = "View",
+                    title = getString(R.string.row_hns_sync),
+                    summary = getString(R.string.row_hns_sync_summary),
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsSyncActivity::class.java))
                 })
             })
 
-            addView(section("Diagnostics and tools") {
+            addView(section(getString(R.string.section_diagnostics_tools)) {
                 addPreference(preferenceRow(
-                    title = "HNS domain setup",
-                    summary = "Check records and delegation for an HNS domain.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_hns_domain_setup),
+                    summary = getString(R.string.row_hns_domain_setup_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsDomainWizardActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Resolver trace",
-                    summary = "Inspect resolution steps for a name.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_resolver_trace),
+                    summary = getString(R.string.row_resolver_trace_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsResolverTraceActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "HNS proof details",
-                    summary = "Inspect local proof data for an HNS name.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_hns_proof_details),
+                    summary = getString(R.string.row_hns_proof_details_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsProofDetailsActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "TLSA / DANE inspector",
-                    summary = "Check TLSA records and DANE policy.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_tlsa_dane_inspector),
+                    summary = getString(R.string.row_tlsa_dane_inspector_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     startActivity(Intent(this@SettingsActivity, HnsTlsaInspectorActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Diagnostics",
-                    summary = "Build, runtime, and native core details.",
-                    actionLabel = "View",
+                    title = getString(R.string.row_diagnostics),
+                    summary = getString(R.string.row_diagnostics_summary),
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, DiagnosticsActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Gateway",
-                    summary = "Inspect recent native gateway events.",
-                    actionLabel = "View",
+                    title = getString(R.string.row_gateway),
+                    summary = getString(R.string.row_gateway_summary),
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, GatewayActivity::class.java))
                 })
             })
 
-            addView(section("About, legal, and support") {
+            addView(section(getString(R.string.section_about_legal_support)) {
                 addPreference(preferenceRow(
-                    title = "Build",
+                    title = getString(R.string.row_build),
                     summary = buildLabel(),
                 ))
                 addPreference(preferenceRow(
-                    title = "Legal",
-                    summary = "Privacy policy, license, and user agreement.",
-                    actionLabel = "View",
+                    title = getString(R.string.row_legal),
+                    summary = getString(R.string.row_legal_summary),
+                    actionLabel = getString(R.string.action_view),
                 ) {
                     startActivity(Intent(this@SettingsActivity, LegalActivity::class.java))
                 })
                 addPreference(preferenceRow(
-                    title = "Privacy policy",
+                    title = getString(R.string.row_privacy_policy),
                     summary = BrowserAppInfo.PRIVACY_POLICY_URL,
-                    actionLabel = "Open",
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openLink(
                         Uri.parse(BrowserAppInfo.PRIVACY_POLICY_URL),
-                        "privacy policy URL",
+                        getString(R.string.legal_copy_privacy_policy_url),
                         BrowserAppInfo.PRIVACY_POLICY_URL,
                     )
                 })
                 addPreference(preferenceRow(
-                    title = "Source code",
+                    title = getString(R.string.row_source_code),
                     summary = BrowserAppInfo.SOURCE_CODE_URL,
-                    actionLabel = "Open",
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openLink(
                         Uri.parse(BrowserAppInfo.SOURCE_CODE_URL),
-                        "source code URL",
+                        getString(R.string.legal_copy_source_code_url),
                         BrowserAppInfo.SOURCE_CODE_URL,
                     )
                 })
                 addPreference(preferenceRow(
-                    title = "Donate HNS",
-                    summary = "Optional. Donations do not unlock features.",
-                    actionLabel = "Open",
+                    title = getString(R.string.row_donate_hns),
+                    summary = getString(R.string.row_donate_hns_summary),
+                    actionLabel = getString(R.string.action_open),
                 ) {
                     openLink(
                         Uri.parse(BrowserAppInfo.HNS_DONATION_URI),
-                        "HNS donation address",
+                        getString(R.string.legal_copy_hns_donation_address),
                         BrowserAppInfo.HNS_DONATION_ADDRESS,
                     )
                 })
@@ -385,7 +397,7 @@ class SettingsActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, dp(10))
             addView(CheckBox(this@SettingsActivity).apply {
-                text = "Strict HNS mode"
+                text = getString(R.string.settings_strict_hns_mode)
                 textSize = 16f
                 setTextColor(Color.rgb(32, 33, 36))
                 setPadding(0, 0, 0, 0)
@@ -408,7 +420,7 @@ class SettingsActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(8), 0, dp(10))
             addView(CheckBox(this@SettingsActivity).apply {
-                text = "Experimental stateless DANE certificates"
+                text = getString(R.string.settings_stateless_dane_certificates)
                 textSize = 16f
                 setTextColor(Color.rgb(32, 33, 36))
                 setPadding(0, 0, 0, 0)
@@ -450,7 +462,24 @@ class SettingsActivity : ComponentActivity() {
         } catch (_: ActivityNotFoundException) {
             getSystemService(ClipboardManager::class.java)
                 .setPrimaryClip(ClipData.newPlainText(copyLabel, copyText))
-            Toast.makeText(this, "Copied $copyLabel", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.common_copied_label, copyLabel), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openAppLanguageSettings() {
+        val packageUri = Uri.fromParts("package", packageName, null)
+        val languageSettings = Intent(ACTION_APP_LOCALE_SETTINGS).setData(packageUri)
+        try {
+            startActivity(languageSettings)
+            return
+        } catch (_: ActivityNotFoundException) {
+            // Fall through to app details on Android builds without a direct app-language panel.
+        }
+
+        try {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(packageUri))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, getString(R.string.settings_open_language_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -463,21 +492,21 @@ class SettingsActivity : ComponentActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Edit homepage")
-            .setMessage("Enter an http:// or https:// URL, or an HNS name such as example/ or www.example/.")
+            .setTitle(R.string.settings_homepage_edit_title)
+            .setMessage(R.string.settings_homepage_edit_message)
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_save, null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val saved = BrowserPreferences.setHomepage(this, input.text.toString())
                 if (saved == null) {
-                    input.error = "Enter an HTTP(S) URL or HNS name"
+                    input.error = getString(R.string.settings_homepage_error)
                     return@setOnClickListener
                 }
                 refreshHomepageStatus()
-                Toast.makeText(this, "Homepage saved", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.settings_homepage_saved), Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
@@ -493,28 +522,28 @@ class SettingsActivity : ComponentActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Edit DoH resolver")
-            .setMessage("Enter an HTTPS DNS-over-HTTPS endpoint. Leave blank to use the default.")
+            .setTitle(R.string.settings_doh_edit_title)
+            .setMessage(R.string.settings_doh_edit_message)
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setNeutralButton("Reset", null)
-            .setPositiveButton("Save", null)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setNeutralButton(R.string.action_reset, null)
+            .setPositiveButton(R.string.action_save, null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val saved = HnsResolutionPreferences.setDohResolverUrl(this, input.text.toString())
                 if (saved == null) {
-                    input.error = "Enter a valid HTTPS DoH URL"
+                    input.error = getString(R.string.settings_doh_error)
                     return@setOnClickListener
                 }
                 refreshDohResolverStatus()
-                Toast.makeText(this, "DoH resolver saved", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.settings_doh_saved), Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
                 HnsResolutionPreferences.resetDohResolverUrl(this)
                 refreshDohResolverStatus()
-                Toast.makeText(this, "DoH resolver reset", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.settings_doh_reset), Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
@@ -524,59 +553,61 @@ class SettingsActivity : ComponentActivity() {
     private fun showNetworkDialog() {
         val networks = HandshakeNetwork.entries.toTypedArray()
         val labels = networks
-            .map { "${it.displayName} - ${it.summary}" }
+            .map { getString(R.string.settings_network_choice, it.displayName(this), it.summary(this)) }
             .toTypedArray()
         val current = HnsResolutionPreferences.handshakeNetwork(this)
         val selectedIndex = networks.indexOf(current).coerceAtLeast(0)
 
         AlertDialog.Builder(this)
-            .setTitle("Handshake network")
+            .setTitle(R.string.row_handshake_network)
             .setSingleChoiceItems(labels, selectedIndex) { dialog, index ->
                 val selected = networks[index]
                 if (selected != current) {
                     HnsSyncForegroundService.stop(this)
                     HnsResolutionPreferences.setHandshakeNetwork(this, selected)
                     refreshHnsNetworkStatus()
-                    resolverCacheStatus.text = "Ready to clear cached resolver values for ${selected.displayName}."
-                    headerResyncStatus.text = "Reset ${selected.displayName} headers and sync again from peers."
-                    Toast.makeText(this, "Network set to ${selected.displayName}", Toast.LENGTH_SHORT).show()
+                    val selectedName = selected.displayName(this)
+                    resolverCacheStatus.text = getString(R.string.settings_resolver_cache_ready_network, selectedName)
+                    headerResyncStatus.text = getString(R.string.settings_header_resync_ready_network, selectedName)
+                    Toast.makeText(this, getString(R.string.settings_network_set, selectedName), Toast.LENGTH_SHORT).show()
                 }
                 dialog.dismiss()
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
     private fun useCurrentPageAsHomepage(currentUrl: String) {
         val saved = BrowserPreferences.setHomepage(this, currentUrl)
         if (saved == null) {
-            Toast.makeText(this, "Current page is not a supported homepage URL", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.settings_homepage_current_unsupported), Toast.LENGTH_SHORT).show()
             return
         }
         refreshHomepageStatus()
-        Toast.makeText(this, "Homepage saved", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.settings_homepage_saved), Toast.LENGTH_SHORT).show()
     }
 
     private fun confirmResetHomepage() {
         AlertDialog.Builder(this)
-            .setTitle("Reset homepage?")
-            .setMessage("This restores the default Denuo Web homepage.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Reset") { _, _ ->
+            .setTitle(R.string.settings_homepage_reset_title)
+            .setMessage(R.string.settings_homepage_reset_message)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_reset) { _, _ ->
                 BrowserPreferences.resetHomepage(this)
                 refreshHomepageStatus()
-                Toast.makeText(this, "Homepage reset", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, getString(R.string.settings_homepage_reset), Toast.LENGTH_SHORT).show()
             }
             .show()
     }
 
     private fun confirmClearResolverCache() {
         val network = HnsResolutionPreferences.handshakeNetwork(this)
+        val networkName = network.displayName(this)
         AlertDialog.Builder(this)
-            .setTitle("Clear resolver cache?")
-            .setMessage("The app will keep synced ${network.displayName} headers and peers, but cached HNS resource values for this network will be removed.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
+            .setTitle(R.string.settings_resolver_cache_clear_title)
+            .setMessage(getString(R.string.settings_resolver_cache_clear_message, networkName))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_clear) { _, _ ->
                 clearResolverCache()
             }
             .show()
@@ -584,28 +615,30 @@ class SettingsActivity : ComponentActivity() {
 
     private fun clearResolverCache() {
         val network = HnsResolutionPreferences.handshakeNetwork(this)
+        val networkName = network.displayName(this)
         val result = NativeBridge.clearResolverCache(filesDir.absolutePath, network.id)
         val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
         val message = if (status == "cleared") {
-            "${network.displayName} resolver cache cleared"
+            getString(R.string.settings_resolver_cache_cleared, networkName)
         } else {
-            "Resolver cache did not report a successful clear"
+            getString(R.string.settings_resolver_cache_clear_failed)
         }
         resolverCacheStatus.text = if (status == "cleared") {
-            "${network.displayName} cache cleared just now."
+            getString(R.string.settings_resolver_cache_cleared_status, networkName)
         } else {
-            "Clear did not complete. Open diagnostics for details."
+            getString(R.string.settings_resolver_cache_clear_failed_status)
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun confirmHeaderPeerResync() {
         val network = HnsResolutionPreferences.handshakeNetwork(this)
+        val networkName = network.displayName(this)
         AlertDialog.Builder(this)
-            .setTitle("Resync headers from peers?")
-            .setMessage("This removes local ${network.displayName} headers and cached resolver values, then starts syncing from peers at block 0.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Reset") { _, _ ->
+            .setTitle(R.string.settings_header_resync_title)
+            .setMessage(getString(R.string.settings_header_resync_message, networkName))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_reset) { _, _ ->
                 resetHeadersFromPeers()
             }
             .show()
@@ -613,6 +646,7 @@ class SettingsActivity : ComponentActivity() {
 
     private fun resetHeadersFromPeers() {
         val network = HnsResolutionPreferences.handshakeNetwork(this)
+        val networkName = network.displayName(this)
         HnsSyncForegroundService.stop(this)
         if (network == HandshakeNetwork.Mainnet) {
             HeaderSnapshotInstaller.disableBundledSnapshot(this, network.id)
@@ -620,12 +654,12 @@ class SettingsActivity : ComponentActivity() {
         val result = NativeBridge.resetHeadersFromPeers(filesDir.absolutePath, network.id)
         val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
         if (status == "headers_reset") {
-            headerResyncStatus.text = "${network.displayName} headers reset to genesis. Peer sync has been started."
+            headerResyncStatus.text = getString(R.string.settings_header_resync_started_status, networkName)
             HnsSyncForegroundService.start(this)
-            Toast.makeText(this, "Header resync started", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.settings_header_resync_started), Toast.LENGTH_SHORT).show()
         } else {
-            headerResyncStatus.text = "Header reset did not complete. Open diagnostics for details."
-            Toast.makeText(this, "Header resync did not start", Toast.LENGTH_SHORT).show()
+            headerResyncStatus.text = getString(R.string.settings_header_resync_failed_status)
+            Toast.makeText(this, getString(R.string.settings_header_resync_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -663,38 +697,38 @@ class SettingsActivity : ComponentActivity() {
 
     private fun hnsModeText(): String =
         if (HnsResolutionPreferences.strictHnsMode(this)) {
-            "On. Delegated resolution failures fail closed."
+            getString(R.string.settings_hns_mode_on)
         } else {
-            "Off. Compatibility fallback may be used after local or direct resolution fails."
+            getString(R.string.settings_hns_mode_off)
         }
 
     private fun hnsNetworkText(): String {
         val network = HnsResolutionPreferences.handshakeNetwork(this)
-        return "${network.displayName}. ${network.summary}"
+        return getString(R.string.settings_hns_network_summary, network.displayName(this), network.summary(this))
     }
 
     private fun statelessDaneText(): String =
         if (HnsResolutionPreferences.statelessDaneCertificates(this)) {
-            "On. Certificate-carried HNS proof evidence may satisfy DANE when valid."
+            getString(R.string.settings_stateless_dane_on)
         } else {
-            "Off. HNS proof and TLSA evidence use the live resolver path."
+            getString(R.string.settings_stateless_dane_off)
         }
 
     private fun cookieSummary(): String =
         if (BrowserCookiePreferences.blockThirdPartyCookies(this)) {
-            "Third-party cookies are blocked. First-party cookies are allowed."
+            getString(R.string.settings_cookie_summary_blocking)
         } else {
-            "First-party and third-party cookies are allowed."
+            getString(R.string.cookie_summary_allowing_all)
         }
 
     private fun historySummary(): String {
         val count = BrowserHistoryStore.entries(this).size
-        return "$count saved page${if (count == 1) "" else "s"}"
+        return resources.getQuantityString(R.plurals.settings_saved_pages, count, count)
     }
 
     private fun downloadSummary(): String {
         val count = BrowserDownloadStore.records(this).size
-        return "$count app-queued record${if (count == 1) "" else "s"}"
+        return resources.getQuantityString(R.plurals.settings_app_queued_records, count, count)
     }
 
     private fun currentUrlFromIntent(): String? =
@@ -703,11 +737,16 @@ class SettingsActivity : ComponentActivity() {
             ?.takeIf { it.isNotBlank() }
 
     private fun buildLabel(): String {
-        val channel = if (BuildConfig.DEBUG) "debug demo" else "release"
-        return "$channel ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        val channel = if (BuildConfig.DEBUG) {
+            getString(R.string.common_debug_demo)
+        } else {
+            getString(R.string.common_release)
+        }
+        return getString(R.string.common_build_label, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
     }
 
     companion object {
         const val EXTRA_CURRENT_URL = "com.denuoweb.hnsdane.CURRENT_URL"
+        private const val ACTION_APP_LOCALE_SETTINGS = "android.settings.APP_LOCALE_SETTINGS"
     }
 }

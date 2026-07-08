@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -19,7 +20,7 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setSecondaryScreen(
-            title = "TLSA / DANE Inspector",
+            title = getString(R.string.screen_tlsa_dane_inspector),
             onSwipeLeft = {
                 openAdjacentHnsDiagnostic(HnsDiagnosticTool.TlsaInspector, forward = true, url, traceJson)
             },
@@ -28,26 +29,26 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
             },
         ) {
             addView(hnsDiagnosticTabs(HnsDiagnosticTool.TlsaInspector, url, traceJson))
-            addView(screenSection("Summary") {
+            addView(screenSection(getString(R.string.section_summary)) {
                 addView(fieldReportText(friendlySummary()))
             })
-            addView(screenSection("Export") {
+            addView(screenSection(getString(R.string.section_export)) {
                 addScreenRow(preferenceRow(
-                    title = "Copy JSON",
-                    summary = "Copy the raw TLSA/DANE trace payload.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_json),
+                    summary = getString(R.string.export_tlsa_dane_json_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
-                    copy("TLSA inspector JSON", rawJson())
+                    copy(getString(R.string.copy_label_tlsa_json), rawJson())
                 })
                 addScreenRow(preferenceRow(
-                    title = "Copy Markdown",
-                    summary = "Copy a compact Markdown report.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_markdown),
+                    summary = getString(R.string.row_copy_markdown_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
-                    copy("TLSA inspector Markdown", markdownReport())
+                    copy(getString(R.string.copy_label_tlsa_markdown), markdownReport())
                 })
             })
-            addView(screenSection("Raw export") {
+            addView(screenSection(getString(R.string.section_raw_export)) {
                 addView(reportText(rawJson(), monospace = true))
             })
         }
@@ -55,52 +56,56 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
 
     private fun friendlySummary(): String {
         val trace = parsedTrace()
-            ?: return "No resolver trace is available. Load an HTTPS HNS page first."
+            ?: return getString(R.string.trace_no_tlsa_resolver_trace)
         val tls = trace.optJSONObject("tls")
-            ?: return "No HTTPS TLSA/DANE trace is available for this page."
+            ?: return getString(R.string.trace_no_tlsa_trace)
         val dane = tls.optJSONObject("dane")
         val certificate = tls.optJSONObject("certificate")
         return buildString {
-            appendLine("URL: ${url.ifBlank { trace.optString("url", "unknown") }}")
-            appendLine("Host: ${trace.optString("host", "unknown")}")
-            appendLine("TLS mode: ${HnsTlsaTraceFormat.tlsMode(tls)}")
-            appendLine("TLSA owner: ${tls.optString("tlsaOwner", "unknown")}")
-            appendLine("TLSA status: ${HnsTlsaTraceFormat.tlsaStatus(tls)}")
-            appendLine("TLSA found: ${HnsTlsaTraceFormat.tlsaFound(tls)}")
-            appendLine("TLSA source: ${HnsTlsaTraceFormat.tlsaSource(tls)}")
-            appendLine("DNSSEC secure: ${HnsTlsaTraceFormat.dnssecSecure(tls)}")
-            appendLine("DANE decision: ${HnsTlsaTraceFormat.daneDecision(tls)}")
-            appendLine("Matched usage: ${dane?.optString("matchedUsage", "none") ?: "none"}")
-            appendLine("Certificate match: ${dane?.optString("certificateMatch", "unknown") ?: "unknown"}")
-            appendLine("WebPKI fallback: ${if (dane?.optBoolean("webPkiFallback", false) == true) "yes" else "no"}")
-            appendLine("WebPKI status: ${certificate?.optString("webPkiStatus", "unknown") ?: "unknown"}")
-            appendLine("Certificate SHA-256: ${certificate?.optString("endEntitySha256", "unknown") ?: "unknown"}")
-            appendLine("SPKI SHA-256: ${certificate?.optString("spkiSha256", "unknown") ?: "unknown"}")
-            appendLine("Intermediate certs: ${certificate?.optString("intermediateCount", "unknown") ?: "unknown"}")
+            appendLine(getString(R.string.trace_field_url, url.ifBlank { trace.optString("url", getString(R.string.common_unknown)) }))
+            appendLine(getString(R.string.trace_field_host, trace.optString("host", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.trace_field_tls_mode, LocalizedTraceText.tlsMode(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_tlsa_owner, tls.optString("tlsaOwner", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.trace_field_tlsa_status, LocalizedTraceText.tlsaStatus(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_tlsa_found, LocalizedTraceText.tlsaFound(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_tlsa_source, LocalizedTraceText.tlsaSource(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_dnssec_secure, LocalizedTraceText.dnssecSecure(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_dane_decision, LocalizedTraceText.daneDecision(this@HnsTlsaInspectorActivity, tls)))
+            appendLine(getString(R.string.trace_field_matched_usage, LocalizedTraceText.valueOrNone(this@HnsTlsaInspectorActivity, dane?.optString("matchedUsage"))))
+            appendLine(getString(R.string.trace_field_certificate_match, LocalizedTraceText.valueOrUnknown(this@HnsTlsaInspectorActivity, dane?.optString("certificateMatch"))))
+            appendLine(getString(R.string.trace_field_webpki_fallback, LocalizedTraceText.yesNo(this@HnsTlsaInspectorActivity, dane?.optBoolean("webPkiFallback", false) == true)))
+            appendLine(getString(R.string.trace_field_webpki_status, LocalizedTraceText.valueOrUnknown(this@HnsTlsaInspectorActivity, certificate?.optString("webPkiStatus"))))
+            appendLine(getString(R.string.trace_field_certificate_sha256, LocalizedTraceText.valueOrUnknown(this@HnsTlsaInspectorActivity, certificate?.optString("endEntitySha256"))))
+            appendLine(getString(R.string.trace_field_spki_sha256, LocalizedTraceText.valueOrUnknown(this@HnsTlsaInspectorActivity, certificate?.optString("spkiSha256"))))
+            appendLine(getString(R.string.trace_field_intermediate_certs, LocalizedTraceText.valueOrUnknown(this@HnsTlsaInspectorActivity, certificate?.optString("intermediateCount"))))
             appendLine()
-            appendLine("TLSA records:")
+            appendLine(getString(R.string.trace_tlsa_records))
             appendLine(recordsText(tls.optJSONArray("records")))
             appendLine()
-            appendLine("SPKI DER:")
-            appendLine(certificate?.optString("spkiDerHex")?.takeIf { it.isNotBlank() } ?: "unavailable")
+            appendLine(getString(R.string.trace_spki_der))
+            appendLine(certificate?.optString("spkiDerHex")?.takeIf { it.isNotBlank() } ?: getString(R.string.common_unavailable))
         }
     }
 
     private fun recordsText(records: JSONArray?): String =
         if (records == null || records.length() == 0) {
-            "none"
+            getString(R.string.common_none)
         } else {
             (0 until records.length()).joinToString("\n") { index ->
                 val record = records.optJSONObject(index)
-                "- usage=${record?.optString("usage", "unknown") ?: "unknown"}, " +
-                    "selector=${record?.optString("selector", "unknown") ?: "unknown"}, " +
-                    "matching=${record?.optString("matching", "unknown") ?: "unknown"}, " +
-                    "association=${record?.optString("associationDataHex", "unknown") ?: "unknown"}"
+                getString(
+                    R.string.trace_tlsa_record_line,
+                    record?.optString("usage", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                    record?.optString("selector", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                    record?.optString("matching", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown),
+                    record?.optString("associationDataHex", getString(R.string.common_unknown))
+                        ?: getString(R.string.common_unknown),
+                )
             }
         }
 
     private fun markdownReport(): String =
-        "# TLSA / DANE Report\n\n```\n${rawJson()}\n```\n"
+        "${getString(R.string.trace_markdown_tlsa_title)}\n\n```\n${rawJson()}\n```\n"
 
     private fun rawJson(): String =
         traceJson.ifBlank { """{"error":"no_hns_tlsa_trace_available"}""" }
@@ -111,7 +116,7 @@ class HnsTlsaInspectorActivity : ComponentActivity() {
     private fun copy(label: String, value: String) {
         getSystemService(ClipboardManager::class.java)
             .setPrimaryClip(ClipData.newPlainText(label, value))
-        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.common_copied), Toast.LENGTH_SHORT).show()
     }
 
     companion object {

@@ -218,7 +218,7 @@ class MainActivity : ComponentActivity() {
             textSize = 12f
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
-            text = HnsSyncProgress.fromJson(null).summary()
+            text = HnsSyncProgress.fromJson(null).summary(this@MainActivity)
         }
         pageProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = PAGE_PROGRESS_MAX
@@ -873,7 +873,7 @@ class MainActivity : ComponentActivity() {
         if (permille != null) {
             syncProgressBar.progress = permille
         }
-        syncProgressStats.text = progress.summary()
+        syncProgressStats.text = progress.summary(this)
     }
 
     private fun refreshPageProgress() {
@@ -1077,13 +1077,19 @@ class MainActivity : ComponentActivity() {
         } catch (error: IllegalArgumentException) {
             Toast.makeText(
                 this,
-                getString(R.string.toast_download_not_supported, error.message ?: "unsupported URL"),
+                getString(
+                    R.string.toast_download_not_supported,
+                    error.message ?: getString(R.string.download_error_unsupported_url),
+                ),
                 Toast.LENGTH_LONG,
             ).show()
         } catch (error: SecurityException) {
             Toast.makeText(
                 this,
-                getString(R.string.toast_download_not_supported, error.message ?: "blocked by Android"),
+                getString(
+                    R.string.toast_download_not_supported,
+                    error.message ?: getString(R.string.download_error_blocked_by_android),
+                ),
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -1143,7 +1149,10 @@ class MainActivity : ComponentActivity() {
                     .onFailure { error ->
                         Toast.makeText(
                             this,
-                            getString(R.string.toast_download_not_supported, error.message ?: "HNS download failed"),
+                            getString(
+                                R.string.toast_download_not_supported,
+                                error.message ?: getString(R.string.download_error_hns_failed),
+                            ),
                             Toast.LENGTH_LONG,
                         ).show()
                     }
@@ -1192,20 +1201,23 @@ class MainActivity : ComponentActivity() {
 
     private fun unsupportedDownloadReason(url: String): String? {
         if (url.isBlank()) {
-            return getString(R.string.toast_download_not_supported, "missing URL")
+            return getString(R.string.toast_download_not_supported, getString(R.string.download_error_missing_url))
         }
 
         val uri = runCatching { Uri.parse(url) }.getOrNull()
-            ?: return getString(R.string.toast_download_not_supported, "invalid URL")
+            ?: return getString(R.string.toast_download_not_supported, getString(R.string.download_error_invalid_url))
         val scheme = uri.scheme?.lowercase()
         if (scheme == "blob" || scheme == "data") {
-            return getString(R.string.toast_download_not_supported, "$scheme URLs are not supported yet")
+            return getString(
+                R.string.toast_download_not_supported,
+                getString(R.string.download_error_blob_data_urls, scheme),
+            )
         }
         if (scheme != "http" && scheme != "https") {
-            return getString(R.string.toast_download_not_supported, "only HTTP and HTTPS downloads are supported")
+            return getString(R.string.toast_download_not_supported, getString(R.string.download_error_http_https_only))
         }
         if (uri.host.equals("appassets.androidplatform.net", ignoreCase = true)) {
-            return getString(R.string.toast_download_not_supported, "local app assets cannot be downloaded")
+            return getString(R.string.toast_download_not_supported, getString(R.string.download_error_local_assets))
         }
         return null
     }

@@ -1,5 +1,6 @@
 package com.denuoweb.hnsdane.ui
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -7,15 +8,17 @@ import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.annotation.StringRes
+import com.denuoweb.hnsdane.R
 
 internal enum class HnsDiagnosticTool(
-    private val defaultTitle: String,
+    @param:StringRes private val defaultTitleRes: Int,
 ) {
-    ResolverTrace("Resolver trace"),
-    ProofDetails("HNS proof"),
-    TlsaInspector("TLSA / DANE"),
-    Diagnostics("Diagnostics"),
-    Gateway("Gateway");
+    ResolverTrace(R.string.diagnostic_tab_resolver_trace),
+    ProofDetails(R.string.diagnostic_tab_hns_proof),
+    TlsaInspector(R.string.diagnostic_tab_tlsa_dane),
+    Diagnostics(R.string.diagnostic_tab_diagnostics),
+    Gateway(R.string.diagnostic_tab_gateway);
 
     fun next(): HnsDiagnosticTool =
         entries[(ordinal + 1) % entries.size]
@@ -23,10 +26,14 @@ internal enum class HnsDiagnosticTool(
     fun previous(): HnsDiagnosticTool =
         entries[(ordinal + entries.size - 1) % entries.size]
 
-    fun title(traceJson: String): String =
+    fun title(context: Context, traceJson: String): String =
         when (this) {
-            ProofDetails -> HnsResolutionTraceFormat.proofTabTitle(traceJson)
-            else -> defaultTitle
+            ProofDetails -> if (HnsResolutionTraceFormat.isIcann(HnsResolutionTraceFormat.parse(traceJson))) {
+                context.getString(R.string.diagnostic_tab_dnssec)
+            } else {
+                context.getString(defaultTitleRes)
+            }
+            else -> context.getString(defaultTitleRes)
         }
 }
 
@@ -74,7 +81,7 @@ private fun ComponentActivity.hnsDiagnosticTab(
     action: () -> Unit,
 ): TextView =
     TextView(this).apply {
-        text = tool.title(traceJson)
+        text = tool.title(this@hnsDiagnosticTab, traceJson)
         textSize = 11f
         typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         gravity = Gravity.CENTER

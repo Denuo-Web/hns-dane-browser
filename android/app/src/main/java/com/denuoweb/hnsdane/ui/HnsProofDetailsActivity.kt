@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.core.HnsHostPolicy
 import com.denuoweb.hnsdane.net.NativeBridge
 import org.json.JSONArray
@@ -25,7 +26,7 @@ class HnsProofDetailsActivity : ComponentActivity() {
         val trace = parsedTrace()
         val isIcann = HnsResolutionTraceFormat.isIcann(trace) || HnsHostPolicy.isIcannDaneTestHost(host)
         val detailsJson = if (host.isBlank()) {
-            """{"host":"","name":null,"nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"invalid_input","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"no HNS host is available for this page"}"""
+            """{"host":"","name":null,"nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"invalid_input","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"no_hns_host_available"}"""
         } else if (isIcann) {
             icannDetailsJson(host, trace)
         } else {
@@ -37,7 +38,7 @@ class HnsProofDetailsActivity : ComponentActivity() {
         }
 
         setSecondaryScreen(
-            title = if (isIcann) "DNSSEC Details" else "HNS Proof Details",
+            title = if (isIcann) getString(R.string.screen_dnssec_details) else getString(R.string.screen_hns_proof_details),
             onSwipeLeft = {
                 openAdjacentHnsDiagnostic(HnsDiagnosticTool.ProofDetails, forward = true, url, traceJson)
             },
@@ -46,26 +47,40 @@ class HnsProofDetailsActivity : ComponentActivity() {
             },
         ) {
             addView(hnsDiagnosticTabs(HnsDiagnosticTool.ProofDetails, url, traceJson))
-            addView(screenSection("Summary") {
+            addView(screenSection(getString(R.string.section_summary)) {
                 addView(fieldReportText(friendlySummary(detailsJson)))
             })
-            addView(screenSection("Export") {
+            addView(screenSection(getString(R.string.section_export)) {
                 addScreenRow(preferenceRow(
-                    title = "Copy JSON",
-                    summary = "Copy the raw validation details payload.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_json),
+                    summary = getString(R.string.export_validation_details_json_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
-                    copy(if (isIcann) "DNSSEC details JSON" else "HNS proof details JSON", detailsJson)
+                    copy(
+                        if (isIcann) {
+                            getString(R.string.copy_label_dnssec_json)
+                        } else {
+                            getString(R.string.copy_label_hns_proof_json)
+                        },
+                        detailsJson,
+                    )
                 })
                 addScreenRow(preferenceRow(
-                    title = "Copy Markdown",
-                    summary = "Copy a compact Markdown report.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_markdown),
+                    summary = getString(R.string.row_copy_markdown_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
-                    copy(if (isIcann) "DNSSEC details Markdown" else "HNS proof details Markdown", markdownReport(detailsJson))
+                    copy(
+                        if (isIcann) {
+                            getString(R.string.copy_label_dnssec_markdown)
+                        } else {
+                            getString(R.string.copy_label_hns_proof_markdown)
+                        },
+                        markdownReport(detailsJson),
+                    )
                 })
             })
-            addView(screenSection("Raw export") {
+            addView(screenSection(getString(R.string.section_raw_export)) {
                 addView(reportText(detailsJson, monospace = true))
             })
         }
@@ -95,26 +110,26 @@ class HnsProofDetailsActivity : ComponentActivity() {
 
     private fun friendlySummary(detailsJson: String): String {
         val details = parsedDetails(detailsJson)
-            ?: return "No validation details are available for this page yet."
+            ?: return getString(R.string.trace_no_validation_details)
         if (details.optString("nameClass") == "icann") {
             return icannFriendlySummary(details)
         }
         val currentTip = details.optJSONObject("currentTip")
         val resourceValueHex = details.optString("resourceValueHex")
         return buildString {
-            appendLine("Host: ${details.optString("host", "unknown")}")
-            appendLine("Name: ${details.optString("name", "unknown")}")
-            appendLine("Name hash: ${details.optString("nameHash", "unknown")}")
-            appendLine("Tree root: ${details.optString("treeRoot", "none")}")
-            appendLine("Block height: ${details.optString("blockHeight", "none")}")
-            appendLine("Proof status: ${details.optString("proofStatus", "unknown")}")
-            appendLine("Cache status: ${details.optString("cacheStatus", "unknown")}")
-            appendLine("Current tip: ${currentTipText(currentTip)}")
-            appendLine("Secure: ${details.optString("secure", "unknown")}")
-            appendLine("Exists: ${details.optString("exists", "unknown")}")
-            appendLine("Record types: ${arrayText(details.optJSONArray("recordTypes"))}")
-            appendLine("Resource value: ${resourceValueHex.ifBlank { "none" }}")
-            appendLine("Error: ${details.optString("error", "none").takeIf { it != "null" } ?: "none"}")
+            appendLine(getString(R.string.trace_field_host, details.optString("host", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_name, details.optString("name", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_name_hash, details.optString("nameHash", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_tree_root, details.optString("treeRoot", getString(R.string.common_none))))
+            appendLine(getString(R.string.proof_field_block_height, details.optString("blockHeight", getString(R.string.common_none))))
+            appendLine(getString(R.string.wizard_field_proof_status, details.optString("proofStatus", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.wizard_field_cache_status, details.optString("cacheStatus", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_current_tip, currentTipText(currentTip)))
+            appendLine(getString(R.string.proof_field_secure, details.optString("secure", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_exists, details.optString("exists", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.proof_field_record_types, arrayText(details.optJSONArray("recordTypes"))))
+            appendLine(getString(R.string.proof_field_resource_value, resourceValueHex.ifBlank { getString(R.string.common_none) }))
+            appendLine(getString(R.string.proof_field_error, LocalizedTraceText.valueOrNone(this@HnsProofDetailsActivity, details.optString("error"))))
         }
     }
 
@@ -132,25 +147,29 @@ class HnsProofDetailsActivity : ComponentActivity() {
 
     private fun icannFriendlySummary(details: JSONObject): String =
         buildString {
-            appendLine("Host: ${details.optString("host", "unknown")}")
-            appendLine("Namespace: ICANN DNS")
-            appendLine("HNS proof: not applicable")
-            appendLine("DNSSEC: ${details.optString("dnssec", "unknown")}")
-            appendLine("Resolution source: ${HnsResolutionTraceFormat.resolutionSource(details)}")
-            appendLine("Record types: ${arrayText(details.optJSONArray("resourceRecords"))}")
-            appendLine("Error: ${details.optString("error", "none").takeIf { it != "null" } ?: "none"}")
+            appendLine(getString(R.string.trace_field_host, details.optString("host", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.trace_field_namespace, getString(R.string.trace_namespace_icann_dns)))
+            appendLine(getString(R.string.trace_field_hns_proof, getString(R.string.proof_not_applicable)))
+            appendLine(getString(R.string.trace_field_dnssec, details.optString("dnssec", getString(R.string.common_unknown))))
+            appendLine(getString(R.string.trace_field_resolution_source, LocalizedTraceText.resolutionSource(this@HnsProofDetailsActivity, details)))
+            appendLine(getString(R.string.proof_field_record_types, arrayText(details.optJSONArray("resourceRecords"))))
+            appendLine(getString(R.string.proof_field_error, LocalizedTraceText.valueOrNone(this@HnsProofDetailsActivity, details.optString("error"))))
         }
 
     private fun currentTipText(currentTip: JSONObject?): String =
         if (currentTip == null) {
-            "unknown"
+            getString(R.string.common_unknown)
         } else {
-            "height ${currentTip.optString("height", "unknown")}, tree ${currentTip.optString("treeRoot", "unknown")}"
+            getString(
+                R.string.proof_current_tip_text,
+                currentTip.optString("height", getString(R.string.common_unknown)),
+                currentTip.optString("treeRoot", getString(R.string.common_unknown)),
+            )
         }
 
     private fun arrayText(array: JSONArray?): String =
         if (array == null || array.length() == 0) {
-            "none"
+            getString(R.string.common_none)
         } else {
             (0 until array.length()).joinToString(", ") { index -> array.optString(index) }
         }
@@ -159,16 +178,22 @@ class HnsProofDetailsActivity : ComponentActivity() {
         val details = parsedDetails(detailsJson)
         val isIcann = details?.optString("nameClass") == "icann"
         return buildString {
-            appendLine(if (isIcann) "# DNSSEC Details" else "# HNS Proof Details")
+            appendLine(
+                if (isIcann) {
+                    getString(R.string.proof_markdown_dnssec_title)
+                } else {
+                    getString(R.string.proof_markdown_hns_title)
+                },
+            )
             appendLine()
-            appendLine("Host: ${details?.optString("host", "unknown") ?: "unknown"}")
+            appendLine(getString(R.string.trace_field_host, details?.optString("host", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown)))
             if (isIcann) {
-                appendLine("Namespace: ICANN DNS")
-                appendLine("DNSSEC: ${details?.optString("dnssec", "unknown") ?: "unknown"}")
+                appendLine(getString(R.string.trace_field_namespace, getString(R.string.trace_namespace_icann_dns)))
+                appendLine(getString(R.string.trace_field_dnssec, details?.optString("dnssec", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown)))
             } else {
-                appendLine("Name: ${details?.optString("name", "unknown") ?: "unknown"}")
-                appendLine("Proof status: ${details?.optString("proofStatus", "unknown") ?: "unknown"}")
-                appendLine("Cache status: ${details?.optString("cacheStatus", "unknown") ?: "unknown"}")
+                appendLine(getString(R.string.proof_field_name, details?.optString("name", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown)))
+                appendLine(getString(R.string.wizard_field_proof_status, details?.optString("proofStatus", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown)))
+                appendLine(getString(R.string.wizard_field_cache_status, details?.optString("cacheStatus", getString(R.string.common_unknown)) ?: getString(R.string.common_unknown)))
             }
             appendLine()
             appendLine("```json")
@@ -186,7 +211,7 @@ class HnsProofDetailsActivity : ComponentActivity() {
     private fun copy(label: String, value: String) {
         getSystemService(ClipboardManager::class.java)
             .setPrimaryClip(ClipData.newPlainText(label, value))
-        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(R.string.common_copied), Toast.LENGTH_SHORT).show()
     }
 
     companion object {

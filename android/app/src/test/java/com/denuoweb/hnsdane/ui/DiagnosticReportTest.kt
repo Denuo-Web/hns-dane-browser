@@ -8,6 +8,7 @@ class DiagnosticReportTest {
     @Test
     fun markdownIncludesOperationalFieldsAndEscapesCodeFences() {
         val report = DiagnosticReport.markdown(
+            labels = ENGLISH_LABELS,
             buildLabel = "debug 0.3.1 (22)",
             rustCore = "hns-dane-browser-rust-core/0.3.1",
             rustDiagnostics = """{"securityDefault":"fail-closed","note":"```"}""",
@@ -25,5 +26,17 @@ class DiagnosticReportTest {
         assertFalse(report.contains("## Recent Gateway Events"))
         assertTrue(report.contains("` ` `"))
         assertFalse(report.contains("\"note\":\"```\""))
+    }
+
+    private companion object {
+        val ENGLISH_LABELS = DiagnosticReportLabels(
+            title = "# HNS DANE Browser Diagnostic Bundle",
+            generated = { "Generated: $it" },
+            build = { "Build: $it" },
+            rustCore = { "Rust core: $it" },
+            proxyOverride = { "Proxy override supported: $it" },
+            thirdPartyCookies = { "Third-party cookies blocked: $it" },
+            rustDiagnostics = "## Rust Diagnostics",
+        )
     }
 }

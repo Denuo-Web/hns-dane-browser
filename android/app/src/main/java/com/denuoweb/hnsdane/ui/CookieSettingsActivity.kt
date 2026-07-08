@@ -5,6 +5,7 @@ import android.webkit.CookieManager
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.R
 
 class CookieSettingsActivity : ComponentActivity() {
     private lateinit var status: TextView
@@ -14,10 +15,10 @@ class CookieSettingsActivity : ComponentActivity() {
 
         status = preferenceSummary(summary())
 
-        setSecondaryScreen("Cookie Options") {
-            addView(screenSection("Website data") {
+        setSecondaryScreen(getString(R.string.screen_cookie_options)) {
+            addView(screenSection(getString(R.string.section_website_data)) {
                 addScreenRow(checkboxRow(
-                    title = "Block third-party cookies",
+                    title = getString(R.string.row_block_third_party_cookies),
                     summaryView = status,
                     checked = BrowserCookiePreferences.blockThirdPartyCookies(this@CookieSettingsActivity),
                 ) { checked ->
@@ -25,9 +26,9 @@ class CookieSettingsActivity : ComponentActivity() {
                     status.text = summary()
                 })
                 addScreenRow(preferenceRow(
-                    title = "Delete cookies",
-                    summary = "Remove cookies stored by websites in this browser.",
-                    actionLabel = "Delete",
+                    title = getString(R.string.row_delete_cookies),
+                    summary = getString(R.string.row_delete_cookies_summary),
+                    actionLabel = getString(R.string.action_delete),
                     destructive = true,
                 ) {
                     deleteCookies()
@@ -40,8 +41,12 @@ class CookieSettingsActivity : ComponentActivity() {
         CookieManager.getInstance().removeAllCookies { removedAny ->
             CookieManager.getInstance().flush()
             runOnUiThread {
-                val message = if (removedAny) "Cookies deleted" else "No cookies to delete"
-                status.text = "$message. ${summary()}"
+                val message = if (removedAny) {
+                    getString(R.string.cookie_deleted)
+                } else {
+                    getString(R.string.cookie_none_to_delete)
+                }
+                status.text = getString(R.string.cookie_status_after_delete, message, summary())
                 Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
             }
         }
@@ -49,8 +54,8 @@ class CookieSettingsActivity : ComponentActivity() {
 
     private fun summary(): String =
         if (BrowserCookiePreferences.blockThirdPartyCookies(this)) {
-            "First-party cookies are allowed. Third-party cookies are blocked."
+            getString(R.string.cookie_summary_blocking)
         } else {
-            "First-party and third-party cookies are allowed."
+            getString(R.string.cookie_summary_allowing_all)
         }
 }

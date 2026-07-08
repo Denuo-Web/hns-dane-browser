@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.webkit.WebViewFeature
 import com.denuoweb.hnsdane.BuildConfig
+import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.NativeBridge
 
 class DiagnosticsActivity : ComponentActivity() {
@@ -21,7 +22,7 @@ class DiagnosticsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setSecondaryScreen(
-            title = "Diagnostics",
+            title = getString(R.string.screen_diagnostics),
             onSwipeLeft = {
                 openAdjacentHnsDiagnostic(HnsDiagnosticTool.Diagnostics, forward = true, url, traceJson)
             },
@@ -30,51 +31,51 @@ class DiagnosticsActivity : ComponentActivity() {
             },
         ) {
             addView(hnsDiagnosticTabs(HnsDiagnosticTool.Diagnostics, url, traceJson))
-            addView(screenSection("App and runtime") {
+            addView(screenSection(getString(R.string.section_app_and_runtime)) {
                 addScreenRow(preferenceRow(
-                    title = "Build",
+                    title = getString(R.string.row_build),
                     summary = buildLabel(),
                     selectableSummary = true,
                     boldSummary = true,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Rust core",
+                    title = getString(R.string.row_rust_core),
                     summary = NativeBridge.version(),
                     selectableSummary = true,
                     boldSummary = true,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Rust diagnostics",
+                    title = getString(R.string.row_rust_diagnostics),
                     summary = NativeBridge.diagnostics(),
                     selectableSummary = true,
                     summaryMaxLines = Int.MAX_VALUE,
                     boldSummary = true,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Proxy override",
+                    title = getString(R.string.row_proxy_override),
                     summary = WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE).toString(),
                     selectableSummary = true,
                     boldSummary = true,
                 ))
                 addScreenRow(preferenceRow(
-                    title = "Third-party cookies blocked",
+                    title = getString(R.string.row_third_party_cookies_blocked),
                     summary = BrowserCookiePreferences.blockThirdPartyCookies(this@DiagnosticsActivity).toString(),
                     selectableSummary = true,
                     boldSummary = true,
                 ))
             })
-            addView(screenSection("Diagnostic bundle") {
+            addView(screenSection(getString(R.string.section_diagnostic_bundle)) {
                 addScreenRow(preferenceRow(
-                    title = "Copy diagnostic bundle",
-                    summary = "Copy build, runtime, and native core details.",
-                    actionLabel = "Copy",
+                    title = getString(R.string.row_copy_diagnostic_bundle),
+                    summary = getString(R.string.row_copy_diagnostic_bundle_summary),
+                    actionLabel = getString(R.string.action_copy),
                 ) {
                     copyDiagnosticBundle()
                 })
                 addScreenRow(preferenceRow(
-                    title = "Share diagnostic bundle",
-                    summary = "Send the same diagnostic report through Android sharing.",
-                    actionLabel = "Share",
+                    title = getString(R.string.row_share_diagnostic_bundle),
+                    summary = getString(R.string.row_share_diagnostic_bundle_summary),
+                    actionLabel = getString(R.string.action_share),
                 ) {
                     shareDiagnosticBundle()
                 })
@@ -84,21 +85,22 @@ class DiagnosticsActivity : ComponentActivity() {
 
     private fun copyDiagnosticBundle() {
         getSystemService(ClipboardManager::class.java)
-            .setPrimaryClip(ClipData.newPlainText("HNS DANE Browser diagnostic bundle", diagnosticBundle()))
-        Toast.makeText(this, "Diagnostic bundle copied", Toast.LENGTH_SHORT).show()
+            .setPrimaryClip(ClipData.newPlainText(getString(R.string.diagnostics_clip_label), diagnosticBundle()))
+        Toast.makeText(this, getString(R.string.diagnostics_copied), Toast.LENGTH_SHORT).show()
     }
 
     private fun shareDiagnosticBundle() {
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/markdown"
-            putExtra(Intent.EXTRA_SUBJECT, "HNS DANE Browser diagnostic bundle")
+            putExtra(Intent.EXTRA_SUBJECT, getString(R.string.diagnostics_clip_label))
             putExtra(Intent.EXTRA_TEXT, diagnosticBundle())
         }
-        startActivity(Intent.createChooser(sendIntent, "Share diagnostic bundle"))
+        startActivity(Intent.createChooser(sendIntent, getString(R.string.diagnostics_share_chooser)))
     }
 
     private fun diagnosticBundle(): String =
         DiagnosticReport.markdown(
+            context = this,
             buildLabel = buildLabel(),
             rustCore = NativeBridge.version(),
             rustDiagnostics = NativeBridge.diagnostics(),
@@ -107,8 +109,12 @@ class DiagnosticsActivity : ComponentActivity() {
         )
 
     private fun buildLabel(): String {
-        val channel = if (BuildConfig.DEBUG) "debug demo" else "release"
-        return "$channel ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+        val channel = if (BuildConfig.DEBUG) {
+            getString(R.string.common_debug_demo)
+        } else {
+            getString(R.string.common_release)
+        }
+        return getString(R.string.common_build_label, channel, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
     }
 
     companion object {

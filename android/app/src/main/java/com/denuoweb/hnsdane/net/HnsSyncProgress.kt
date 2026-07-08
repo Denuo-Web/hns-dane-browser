@@ -1,5 +1,7 @@
 package com.denuoweb.hnsdane.net
 
+import android.content.Context
+import com.denuoweb.hnsdane.R
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -74,8 +76,55 @@ data class HnsSyncProgress(
         return "${status.ifBlank { "idle" }} • bestHeight $formattedBest • $targetPart$acceptedPart$peerPart"
     }
 
+    fun summary(context: Context): String {
+        val formattedBest = bestHeight?.formatHeight(context) ?: context.getString(R.string.common_unknown)
+        val target = targetHeight
+        val targetPart = when {
+            isBehind && target != null -> context.getString(R.string.sync_progress_target, target.formatHeight(context))
+            bestPeerHeight != null -> context.getString(
+                R.string.sync_progress_best_peer_height,
+                bestPeerHeight.formatHeight(context),
+            )
+            estimatedTipHeight != null -> context.getString(
+                R.string.sync_progress_target,
+                estimatedTipHeight.formatHeight(context),
+            )
+            else -> context.getString(R.string.sync_progress_target_unknown)
+        }
+        val acceptedPart = accepted
+            ?.takeIf { it > 0L }
+            ?.let { " • ${context.getString(R.string.sync_progress_accepted, it.formatHeight(context))}" }
+            .orEmpty()
+        val peerPart = peerCount
+            ?.takeIf { it > 0L }
+            ?.let { " • ${context.getString(R.string.sync_progress_peers, it.formatHeight(context))}" }
+            .orEmpty()
+        return context.getString(
+            R.string.sync_progress_summary,
+            statusLabel(context),
+            formattedBest,
+            targetPart,
+            acceptedPart,
+            peerPart,
+        )
+    }
+
     private fun Long.formatHeight(): String =
         NumberFormat.getIntegerInstance(Locale.US).format(this)
+
+    private fun Long.formatHeight(context: Context): String =
+        NumberFormat.getIntegerInstance(context.resources.configuration.locales[0] ?: Locale.getDefault()).format(this)
+
+    private fun statusLabel(context: Context): String =
+        when (status.ifBlank { "idle" }) {
+            "idle" -> context.getString(R.string.sync_status_idle)
+            "syncing" -> context.getString(R.string.sync_status_syncing)
+            "up_to_date" -> context.getString(R.string.sync_status_up_to_date)
+            "error" -> context.getString(R.string.sync_status_error)
+            "seed_failed" -> context.getString(R.string.sync_status_seed_failed)
+            "peer_failed" -> context.getString(R.string.sync_status_peer_failed)
+            else -> status.replace('_', ' ')
+        }
 
     companion object {
         private val RETRY_STATUSES = setOf("error", "peer_failed", "seed_failed")
