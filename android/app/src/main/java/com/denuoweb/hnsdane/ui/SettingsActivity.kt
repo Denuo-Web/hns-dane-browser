@@ -22,8 +22,6 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.denuoweb.hnsdane.R
-import com.denuoweb.hnsdane.net.HeaderSnapshotInstaller
-import com.denuoweb.hnsdane.net.HnsSyncForegroundService
 import com.denuoweb.hnsdane.BuildConfig
 import com.denuoweb.hnsdane.net.NativeBridge
 import org.json.JSONObject
@@ -36,7 +34,6 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var statelessDaneStatus: TextView
     private lateinit var dohResolverStatus: TextView
     private lateinit var resolverCacheStatus: TextView
-    private lateinit var headerResyncStatus: TextView
     private lateinit var historyStatus: TextView
     private lateinit var downloadStatus: TextView
     private lateinit var themeStatus: TextView
@@ -52,7 +49,6 @@ class SettingsActivity : ComponentActivity() {
         statelessDaneStatus = preferenceSummary(statelessDaneText())
         dohResolverStatus = preferenceSummary(HnsResolutionPreferences.dohResolverUrl(this))
         resolverCacheStatus = preferenceSummary(getString(R.string.settings_resolver_cache_ready))
-        headerResyncStatus = preferenceSummary(getString(R.string.settings_header_resync_ready))
         historyStatus = preferenceSummary(historySummary())
         downloadStatus = preferenceSummary(downloadSummary())
         themeStatus = preferenceSummary(themeText())
@@ -160,14 +156,6 @@ class SettingsActivity : ComponentActivity() {
                     destructive = true,
                 ) {
                     confirmClearResolverCache()
-                })
-                addPreference(preferenceRow(
-                    title = getString(R.string.row_resync_headers_from_peers),
-                    summaryView = headerResyncStatus,
-                    actionLabel = getString(R.string.action_reset),
-                    destructive = true,
-                ) {
-                    confirmHeaderPeerResync()
                 })
                 addPreference(preferenceRow(
                     title = getString(R.string.row_hns_sync),
@@ -589,12 +577,10 @@ class SettingsActivity : ComponentActivity() {
             .setSingleChoiceItems(labels, selectedIndex) { dialog, index ->
                 val selected = networks[index]
                 if (selected != current) {
-                    HnsSyncForegroundService.stop(this)
                     HnsResolutionPreferences.setHandshakeNetwork(this, selected)
                     refreshHnsNetworkStatus()
                     val selectedName = selected.displayName(this)
                     resolverCacheStatus.text = getString(R.string.settings_resolver_cache_ready_network, selectedName)
-                    headerResyncStatus.text = getString(R.string.settings_header_resync_ready_network, selectedName)
                     Toast.makeText(this, getString(R.string.settings_network_set, selectedName), Toast.LENGTH_SHORT).show()
                 }
                 dialog.dismiss()
@@ -684,38 +670,6 @@ class SettingsActivity : ComponentActivity() {
             getString(R.string.settings_resolver_cache_clear_failed_status)
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun confirmHeaderPeerResync() {
-        val network = HnsResolutionPreferences.handshakeNetwork(this)
-        val networkName = network.displayName(this)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.settings_header_resync_title)
-            .setMessage(getString(R.string.settings_header_resync_message, networkName))
-            .setNegativeButton(R.string.action_cancel, null)
-            .setPositiveButton(R.string.action_reset) { _, _ ->
-                resetHeadersFromPeers()
-            }
-            .show()
-    }
-
-    private fun resetHeadersFromPeers() {
-        val network = HnsResolutionPreferences.handshakeNetwork(this)
-        val networkName = network.displayName(this)
-        HnsSyncForegroundService.stop(this)
-        if (network == HandshakeNetwork.Mainnet) {
-            HeaderSnapshotInstaller.disableBundledSnapshot(this, network.id)
-        }
-        val result = NativeBridge.resetHeadersFromPeers(filesDir.absolutePath, network.id)
-        val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
-        if (status == "headers_reset") {
-            headerResyncStatus.text = getString(R.string.settings_header_resync_started_status, networkName)
-            HnsSyncForegroundService.start(this)
-            Toast.makeText(this, getString(R.string.settings_header_resync_started), Toast.LENGTH_SHORT).show()
-        } else {
-            headerResyncStatus.text = getString(R.string.settings_header_resync_failed_status)
-            Toast.makeText(this, getString(R.string.settings_header_resync_failed), Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun refreshHomepageStatus() {

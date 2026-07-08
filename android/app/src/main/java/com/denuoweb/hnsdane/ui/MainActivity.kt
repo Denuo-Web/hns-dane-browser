@@ -1,16 +1,10 @@
 package com.denuoweb.hnsdane.ui
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.ActivityNotFoundException
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
@@ -58,11 +52,12 @@ import com.denuoweb.hnsdane.core.BrowserUrlClassifier
 import com.denuoweb.hnsdane.core.HnsPageResolverPolicy
 import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import com.denuoweb.hnsdane.core.SecurityState
+import com.denuoweb.hnsdane.net.BundledHeaderSyncBridge
 import com.denuoweb.hnsdane.net.GatewayEventLog
 import com.denuoweb.hnsdane.net.HnsProxyController
 import com.denuoweb.hnsdane.net.HnsServiceWorkerGatewayClient
 import com.denuoweb.hnsdane.net.HnsSyncProgress
-import com.denuoweb.hnsdane.net.HnsSyncForegroundService
+import com.denuoweb.hnsdane.net.HnsSyncScheduler
 import com.denuoweb.hnsdane.net.HnsSyncSnapshot
 import com.denuoweb.hnsdane.net.HnsNativeDownloadFetcher
 import com.denuoweb.hnsdane.net.HnsWebSocketBridge
@@ -89,24 +84,6 @@ class MainActivity : ComponentActivity() {
             pollSyncStatusOnce()
         }
     }
-    private val syncSnapshotReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != HnsSyncForegroundService.ACTION_SYNC_SNAPSHOT) {
-                return
-            }
-
-            val statusJson = intent.getStringExtra(HnsSyncForegroundService.EXTRA_STATUS_JSON) ?: return
-            lastSyncSnapshot = HnsSyncSnapshot(
-                statusJson = statusJson,
-                updatedAtMillis = intent.getLongExtra(
-                    HnsSyncForegroundService.EXTRA_UPDATED_AT_MILLIS,
-                    System.currentTimeMillis(),
-                ),
-            )
-            refreshSecurityState()
-            refreshSyncProgress()
-        }
-    }
     private lateinit var webView: WebView
     private lateinit var omnibox: EditText
     private lateinit var securityLabel: TextView
@@ -127,7 +104,7 @@ class MainActivity : ComponentActivity() {
     private var mainFrameHnsTraceJson: String? = null
     private var mainFrameHnsStatusUrl: String? = null
     private var lastSyncSnapshot: HnsSyncSnapshot? = null
-    private var syncReceiverRegistered: Boolean = false
+    private var activeSyncScheduler: HnsSyncScheduler? = null
     private var activityStarted: Boolean = false
     private var activityDestroyed: Boolean = false
     private var proxyOverrideApplied: Boolean = false
@@ -242,7 +219,7 @@ class MainActivity : ComponentActivity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(8, 0, 8, 0)
+            setPadding(dp(8), 0, dp(8), 0)
             addView(securityLabel, LinearLayout.LayoutParams(
                 dp(SECURITY_LABEL_WIDTH_DP),
                 dp(TOOLBAR_CONTROL_HEIGHT_DP),
@@ -254,7 +231,6 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(colors.background)
-            applySystemBarPadding()
             addView(toolbar, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -294,7 +270,6 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) {
             loadInitialPage(intent)
         }
-        root.post { requestNotificationPermissionIfNeeded() }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -311,8 +286,6 @@ class MainActivity : ComponentActivity() {
         activityStarted = true
         BrowserCookiePreferences.applyTo(webView)
         startLoopbackGateway()
-        registerSyncSnapshotReceiver()
-        HnsSyncForegroundService.start(this)
         lastSyncSnapshot = HnsSyncSnapshot(
             statusJson = NativeBridge.syncStatus(
                 filesDir.absolutePath,
@@ -322,19 +295,21 @@ class MainActivity : ComponentActivity() {
         )
         refreshSecurityState()
         refreshSyncProgress()
+        startActiveSync()
         startSyncStatusPolling()
     }
 
     override fun onStop() {
         activityStarted = false
         stopSyncStatusPolling()
-        unregisterSyncSnapshotReceiver()
+        stopActiveSync()
         stopLoopbackGateway()
         super.onStop()
     }
 
     override fun onDestroy() {
         activityDestroyed = true
+        stopActiveSync()
         stopLoopbackGateway()
         hnsWebSocketBridge.close()
         syncStatusExecutor.shutdownNow()
@@ -470,20 +445,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun registerSyncSnapshotReceiver() {
-        if (syncReceiverRegistered) {
-            return
-        }
-
-        ContextCompat.registerReceiver(
-            this,
-            syncSnapshotReceiver,
-            IntentFilter(HnsSyncForegroundService.ACTION_SYNC_SNAPSHOT),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        syncReceiverRegistered = true
-    }
-
     private fun configureServiceWorkerInterception() {
         if (
             !WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) ||
@@ -557,15 +518,6 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun unregisterSyncSnapshotReceiver() {
-        if (!syncReceiverRegistered) {
-            return
-        }
-
-        unregisterReceiver(syncSnapshotReceiver)
-        syncReceiverRegistered = false
-    }
-
     private fun startSyncStatusPolling() {
         syncStatusPolling = true
         mainHandler.removeCallbacks(syncStatusPollRunnable)
@@ -602,30 +554,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (isFinishing || isDestroyed) {
-            return
-        }
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-            return
-        }
-        val prefs = getSharedPreferences(PRIVACY_PROMPTS_PREFS, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN, false)) {
+    private fun startActiveSync() {
+        if (activeSyncScheduler != null || activityDestroyed) {
             return
         }
 
-        prefs.edit()
-            .putBoolean(KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN, true)
-            .apply()
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.notification_permission_rationale_title)
-            .setMessage(R.string.notification_permission_rationale_message)
-            .setNegativeButton(R.string.notification_permission_rationale_not_now, null)
-            .setPositiveButton(R.string.notification_permission_rationale_continue) { _, _ ->
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        val scheduler = HnsSyncScheduler(
+            filesDir,
+            bridge = BundledHeaderSyncBridge(this),
+            network = { HnsResolutionPreferences.handshakeNetworkId(this) },
+        )
+        activeSyncScheduler = scheduler
+        scheduler.start { snapshot ->
+            mainHandler.post {
+                if (activeSyncScheduler !== scheduler || activityDestroyed) {
+                    return@post
+                }
+                lastSyncSnapshot = snapshot
+                refreshSecurityState()
+                refreshSyncProgress()
             }
-            .show()
+        }
+    }
+
+    private fun stopActiveSync() {
+        activeSyncScheduler?.close()
+        activeSyncScheduler = null
     }
 
     private fun menuButton(): TextView =
@@ -633,12 +587,12 @@ class MainActivity : ComponentActivity() {
             val colors = themeColors()
             hamburgerButton = this
             text = "☰"
-            textSize = 30f
+            textSize = 34f
             gravity = Gravity.CENTER
             contentDescription = getString(R.string.menu_hamburger_content_description)
-            minWidth = dp(48)
-            minHeight = dp(48)
-            setPadding(dp(12), 0, dp(12), 0)
+            minWidth = dp(MENU_ICON_BUTTON_SIZE_DP)
+            minHeight = dp(MENU_ICON_BUTTON_SIZE_DP)
+            setPadding(dp(14), 0, dp(14), 0)
             setTextColor(colors.primaryText)
             setOnClickListener { showHamburgerMenu() }
         }
@@ -694,7 +648,7 @@ class MainActivity : ComponentActivity() {
         TextView(this).apply {
             val colors = themeColors()
             text = icon
-            textSize = 28f
+            textSize = 32f
             gravity = Gravity.CENTER
             contentDescription = label
             minWidth = dp(MENU_ICON_BUTTON_SIZE_DP)
@@ -726,7 +680,7 @@ class MainActivity : ComponentActivity() {
         TextView(this).apply {
             val colors = themeColors()
             text = label
-            textSize = 15f
+            textSize = 17f
             gravity = Gravity.CENTER_VERTICAL
             setTextColor(colors.primaryText)
             setPadding(dp(16), 0, dp(16), 0)
@@ -873,6 +827,17 @@ class MainActivity : ComponentActivity() {
         }
 
         val progress = HnsSyncProgress.fromJson(lastSyncSnapshot?.statusJson)
+        if (progress.isCurrent) {
+            HnsSyncUiPreferences.setProgressVisible(this, false)
+        }
+        if (!HnsSyncUiPreferences.progressVisible(this)) {
+            syncProgressBar.visibility = View.GONE
+            syncProgressStats.visibility = View.GONE
+            return
+        }
+
+        syncProgressBar.visibility = View.VISIBLE
+        syncProgressStats.visibility = View.VISIBLE
         val permille = progress.progressPermille()
         syncProgressBar.isIndeterminate = permille == null
         if (permille != null) {
@@ -1275,13 +1240,10 @@ class MainActivity : ComponentActivity() {
         private const val SYNC_STATUS_POLL_MS = 2_000L
         private const val SECURITY_LABEL_WIDTH_DP = 136
         private const val TOOLBAR_CONTROL_HEIGHT_DP = 48
-        private const val MENU_ICON_BUTTON_SIZE_DP = 48
+        private const val MENU_ICON_BUTTON_SIZE_DP = 55
         private const val MENU_POPUP_WIDTH_DP = MENU_ICON_BUTTON_SIZE_DP * 3
-        private const val MENU_ROW_HEIGHT_DP = 48
-        private const val REQUEST_NOTIFICATIONS = 1002
+        private const val MENU_ROW_HEIGHT_DP = 55
         private const val MAX_DOWNLOAD_FILE_NAME_CHARS = 120
-        private const val PRIVACY_PROMPTS_PREFS = "privacy_prompts"
-        private const val KEY_NOTIFICATION_PERMISSION_PROMPT_SHOWN = "notification_permission_prompt_shown"
         private val UNSAFE_DOWNLOAD_FILE_CHARS = Regex("[\\\\/:*?\"<>|\\p{Cntrl}]")
         private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
         private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")

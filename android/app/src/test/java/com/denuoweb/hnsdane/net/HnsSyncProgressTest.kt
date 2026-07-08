@@ -33,6 +33,7 @@ class HnsSyncProgressTest {
         )
 
         assertFalse(progress.isBehind)
+        assertTrue(progress.isCurrent)
         assertFalse(progress.shouldContinueSoon)
         assertEquals(1000, progress.progressPermille())
     }
@@ -61,6 +62,7 @@ class HnsSyncProgressTest {
         )
 
         assertTrue(progress.isBehind)
+        assertTrue(progress.isCurrent)
         assertFalse(progress.isBehindKnownPeer)
         assertFalse(progress.hasUnknownTargetProgress)
         assertFalse(progress.shouldContinueSoon)

@@ -34,6 +34,9 @@ data class HnsSyncProgress(
             return peer > best
         }
 
+    val isCurrent: Boolean
+        get() = status == "up_to_date" || (status in CURRENT_STATUSES && !isBehind)
+
     val shouldContinueSoon: Boolean
         get() = isBehindKnownPeer || hasUnknownTargetProgress || status == "syncing"
 
@@ -127,6 +130,7 @@ data class HnsSyncProgress(
         }
 
     companion object {
+        private val CURRENT_STATUSES = setOf("synced", "attempted")
         private val RETRY_STATUSES = setOf("error", "peer_failed", "seed_failed")
 
         fun fromJson(statusJson: String?): HnsSyncProgress {
