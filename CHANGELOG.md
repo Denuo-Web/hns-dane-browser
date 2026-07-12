@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.9 - 2026-07-12
+
+### Fixed
+
+- Restricted insecure HNS resolution opt-in to cleartext HNS origins; HTTPS and WSS HNS origins still fail closed on unsigned HNS address, HTTPS/SVCB, or TLSA/DANE resolution.
+- Bumped the Android app, Rust core, network user-agent strings, Play upload defaults, and Play metadata package for the 0.3.9 release.
+
 ## 0.3.8 - 2026-07-12
 
 ### Security
