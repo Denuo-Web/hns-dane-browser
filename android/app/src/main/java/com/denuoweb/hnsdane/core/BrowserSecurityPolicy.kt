@@ -8,6 +8,7 @@ object BrowserSecurityPolicy {
         mainFrameHnsStatusCode: Int? = null,
         mainFrameHnsTlsPolicy: HnsPageTlsPolicy? = null,
         mainFrameHnsResolverPolicy: HnsPageResolverPolicy? = null,
+        mainFrameHnsTraceJson: String? = null,
     ): SecurityState {
         if (targetKind != BrowserTargetKind.HnsName && targetKind != BrowserTargetKind.NativeGateway) {
             return SecurityState.WebPkiOnly
@@ -16,6 +17,9 @@ object BrowserSecurityPolicy {
             return SecurityState.ValidationFailed
         }
         if (mainFrameHnsStatusCode?.let { it in 200..299 } == true) {
+            if (targetKind == BrowserTargetKind.HnsName && mainFrameHnsTraceJson.isInsecureHnsResolution()) {
+                return SecurityState.HnsInsecure
+            }
             if (mainFrameHnsTlsPolicy == HnsPageTlsPolicy.Dane) {
                 if (mainFrameHnsResolverPolicy == HnsPageResolverPolicy.HnsDohCompatibility) {
                     return SecurityState.DaneCompatibility
@@ -61,6 +65,9 @@ object BrowserSecurityPolicy {
 
     private fun String?.hasSyncStatus(status: String): Boolean =
         this?.contains("\"status\":\"$status\"") == true
+
+    private fun String?.isInsecureHnsResolution(): Boolean =
+        this?.contains("\"dnssec\":\"unsigned\"") == true
 
     private fun String?.isBehindPeerHeight(): Boolean {
         val json = this ?: return false

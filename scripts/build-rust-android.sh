@@ -37,8 +37,15 @@ cd "$ROOT_DIR/rust"
 cargo "${ARGS[@]}"
 
 NDK_DIR="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-OBJCOPY="$NDK_DIR/toolchains/llvm/prebuilt/linux-arm64/bin/llvm-objcopy"
-if [[ "$PROFILE" == "release" && -x "$OBJCOPY" ]]; then
+if [[ "$PROFILE" == "release" ]]; then
+  mapfile -t objcopy_candidates < <(
+    find "$NDK_DIR/toolchains/llvm/prebuilt" -type f -path '*/bin/llvm-objcopy' -perm -111 -print | sort
+  )
+  if [[ ${#objcopy_candidates[@]} -ne 1 || ! -x "${objcopy_candidates[0]}" ]]; then
+    echo "ERROR: expected one executable llvm-objcopy under $NDK_DIR/toolchains/llvm/prebuilt." >&2
+    exit 2
+  fi
+  OBJCOPY="${objcopy_candidates[0]}"
   find "$OUT_DIR" -type f -name '*.so' -print0 |
     while IFS= read -r -d '' library; do
       "$OBJCOPY" --strip-unneeded "$library"

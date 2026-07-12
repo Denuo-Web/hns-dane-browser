@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
             dataDir = filesDir,
             activeMainFrameUrl = { activeMainFrameUrl },
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+            allowInsecureHnsResolution = { HnsResolutionPreferences.allowInsecureHnsResolution(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
             handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
@@ -138,6 +139,7 @@ class MainActivity : ComponentActivity() {
             dataDir = filesDir,
             allowProxyFallbackForBodyRequests = { proxyAvailable },
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+            allowInsecureHnsResolution = { HnsResolutionPreferences.allowInsecureHnsResolution(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
             handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
@@ -327,6 +329,7 @@ class MainActivity : ComponentActivity() {
             EPHEMERAL_GATEWAY_PORT,
             filesDir,
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
+            allowInsecureHnsResolution = { HnsResolutionPreferences.allowInsecureHnsResolution(this) },
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
             handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
@@ -792,6 +795,7 @@ class MainActivity : ComponentActivity() {
                 mainFrameHnsStatusCode = mainFrameHnsStatusCode,
                 mainFrameHnsTlsPolicy = mainFrameHnsTlsPolicy,
                 mainFrameHnsResolverPolicy = mainFrameHnsResolverPolicy,
+                mainFrameHnsTraceJson = mainFrameHnsTraceJson,
             ),
         )
     }
@@ -870,6 +874,7 @@ class MainActivity : ComponentActivity() {
             SecurityState.Syncing -> getString(R.string.security_syncing)
             SecurityState.Loading -> getString(R.string.security_loading)
             SecurityState.HnsVerified -> getString(R.string.security_hns_verified)
+            SecurityState.HnsInsecure -> getString(R.string.security_hns_insecure)
             SecurityState.HnsCompatibility -> getString(R.string.security_hns_compat)
             SecurityState.DaneVerified -> getString(R.string.security_dane_verified)
             SecurityState.DaneCompatibility -> getString(R.string.security_dane_compat)
@@ -1077,6 +1082,7 @@ class MainActivity : ComponentActivity() {
         mimeType: String?,
     ) {
         val strictMode = HnsResolutionPreferences.strictHnsMode(this)
+        val allowInsecureResolution = HnsResolutionPreferences.allowInsecureHnsResolution(this)
         val dohResolver = HnsResolutionPreferences.dohResolverUrl(this)
         val statelessDane = HnsResolutionPreferences.statelessDaneCertificates(this)
         val handshakeNetwork = HnsResolutionPreferences.handshakeNetworkId(this)
@@ -1086,6 +1092,7 @@ class MainActivity : ComponentActivity() {
                 val fetcher = HnsNativeDownloadFetcher(
                     dataDir = filesDir,
                     strictHnsMode = { strictMode },
+                    allowInsecureHnsResolution = { allowInsecureResolution },
                     dohResolverUrl = { dohResolver },
                     statelessDaneCertificates = { statelessDane },
                     handshakeNetwork = { handshakeNetwork },

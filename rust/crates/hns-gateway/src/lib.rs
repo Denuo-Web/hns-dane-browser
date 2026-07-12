@@ -22,6 +22,7 @@ const MAX_CNAME_CHAIN_LEN: usize = 8;
 pub struct GatewayConfig {
     pub bind: SocketAddr,
     pub auth_token: Option<String>,
+    pub allow_insecure_hns_origin_resolution: bool,
     pub require_secure_resolution: bool,
     pub hns_https_mode: HnsHttpsMode,
     pub supported_origin_protocols: Vec<OriginProtocol>,
@@ -100,6 +101,7 @@ impl Default for GatewayConfig {
         Self {
             bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 15_353),
             auth_token: None,
+            allow_insecure_hns_origin_resolution: false,
             require_secure_resolution: true,
             hns_https_mode: HnsHttpsMode::Strict,
             supported_origin_protocols: vec![
@@ -191,7 +193,7 @@ where
         }
 
         let resolution = self.resolver.resolve(&request.resolution)?;
-        if self.config.require_secure_resolution && !resolution.secure {
+        if !resolution.secure && !self.allows_insecure_hns_origin_resolution(&request.origin.host) {
             return Err(GatewayError::InsecureResolution);
         }
 
@@ -256,6 +258,10 @@ where
         self.resolve_native_tlsa_records(&request)
     }
 
+    fn allows_insecure_hns_origin_resolution(&self, host: &str) -> bool {
+        self.config.allow_insecure_hns_origin_resolution && classify_name(host) == NameClass::Hns
+    }
+
     fn resolve_native_tlsa_records(
         &self,
         request: &ResolutionRequest,
@@ -280,7 +286,7 @@ where
                 qtype: qtype.code(),
             };
             let answer = self.resolver.resolve(&request)?;
-            if self.config.require_secure_resolution && !answer.secure {
+            if !answer.secure && !self.allows_insecure_hns_origin_resolution(host) {
                 return Err(GatewayError::InsecureResolution);
             }
             if let Some(address) = first_resolved_address(&answer.records, host) {
@@ -671,6 +677,40 @@ mod tests {
             gateway.handle(&request).unwrap_err(),
             GatewayError::InsecureResolution,
         );
+    }
+
+    #[test]
+    fn allows_unsigned_hns_https_origin_with_no_tlsa() {
+        let gateway = Gateway::new(
+            GatewayConfig {
+                allow_insecure_hns_origin_resolution: true,
+                hns_https_mode: HnsHttpsMode::Compatibility,
+                ..GatewayConfig::default()
+            },
+            ScriptedResolver::new(
+                vec![
+                    response("name", RecordType::A.code(), false, vec![address_record()]),
+                    response("name", RecordType::Https.code(), true, vec![]),
+                    response("_443._tcp.name", RecordType::Tlsa.code(), true, vec![]),
+                ],
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        gateway.handle(&request("name", "name")).unwrap();
+
+        let captured = gateway
+            .transport()
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured.tls.mode, DomainTrustMode::HnsCompatibility);
+        assert!(captured.tls.dnssec_secure);
+        assert!(captured.tls.tlsa_records.is_empty());
     }
 
     #[test]
@@ -1633,6 +1673,37 @@ mod tests {
             ScriptedResolver::new(
                 vec![
                     response("name", RecordType::A.code(), true, vec![address_record()]),
+                    response("name", RecordType::Https.code(), true, vec![]),
+                    response(
+                        "_443._tcp.name",
+                        RecordType::Tlsa.code(),
+                        false,
+                        vec![tlsa_record("_443._tcp.name", vec![3, 1, 0, 0xaa])],
+                    ),
+                ],
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway.handle(&request("name", "name")).unwrap_err(),
+            GatewayError::InsecureResolution,
+        );
+    }
+
+    #[test]
+    fn allowing_unsigned_hns_origins_keeps_unsigned_tlsa_fail_closed() {
+        let gateway = Gateway::new(
+            GatewayConfig {
+                allow_insecure_hns_origin_resolution: true,
+                hns_https_mode: HnsHttpsMode::Compatibility,
+                ..GatewayConfig::default()
+            },
+            ScriptedResolver::new(
+                vec![
+                    response("name", RecordType::A.code(), false, vec![address_record()]),
                     response("name", RecordType::Https.code(), true, vec![]),
                     response(
                         "_443._tcp.name",

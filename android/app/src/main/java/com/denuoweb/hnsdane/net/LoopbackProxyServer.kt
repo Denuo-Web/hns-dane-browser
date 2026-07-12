@@ -28,6 +28,7 @@ class LoopbackProxyServer(
     private val hnsGatewayBridge: HnsGatewayBridge = NativeBridge,
     private val hnsConnectTerminator: HnsConnectTerminator = LocalTlsHnsConnectTerminator(),
     private val strictHnsMode: () -> Boolean = { false },
+    private val allowInsecureHnsResolution: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
     private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
@@ -182,6 +183,7 @@ class LoopbackProxyServer(
             val body = readHnsRequestBody(client.getInputStream(), request)
             val gatewayHeaders = request.headersForGateway(
                 strictHnsMode(),
+                allowInsecureHnsResolution(),
                 dohResolverUrl(),
                 statelessDaneCertificates(),
                 handshakeNetwork(),
@@ -240,6 +242,7 @@ class LoopbackProxyServer(
             pathAndQuery = target.pathAndQuery,
             headers = request.headersForGateway(
                 strictHnsMode(),
+                allowInsecureHnsResolution(),
                 dohResolverUrl(),
                 statelessDaneCertificates(),
                 handshakeNetwork(),
@@ -663,6 +666,7 @@ internal data class ProxyRequest(
 
     fun headersForGateway(
         strictHnsMode: Boolean = false,
+        allowInsecureHnsResolution: Boolean = false,
         dohResolverUrl: String = "",
         statelessDaneCertificates: Boolean = false,
         handshakeNetwork: String = DEFAULT_NETWORK,
@@ -672,12 +676,16 @@ internal data class ProxyRequest(
             .filterNot { it.first.equals("Trailer", ignoreCase = true) }
             .filterNot { hasTransferEncoding() && it.first.equals("Content-Length", ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) }
+            .filterNot { it.first.equals(HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) }
             .filterNot { it.first.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) }
             .toMutableList()
         if (strictHnsMode) {
             sanitized += HNS_GATEWAY_STRICT_MODE_HEADER to "1"
+        }
+        if (allowInsecureHnsResolution) {
+            sanitized += HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER to "1"
         }
         dohResolverUrl.takeIf { it.isNotBlank() }?.let { resolver ->
             sanitized += HNS_GATEWAY_DOH_RESOLVER_HEADER to resolver

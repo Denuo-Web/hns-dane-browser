@@ -23,10 +23,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
+private val HTTP_HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+
 class HnsWebSocketBridge(
     private val dataDir: File,
     private val activeMainFrameUrl: () -> String?,
     private val strictHnsMode: () -> Boolean = { false },
+    private val allowInsecureHnsResolution: () -> Boolean = { false },
     private val dohResolverUrl: () -> String = { "" },
     private val statelessDaneCertificates: () -> Boolean = { false },
     private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
@@ -104,6 +107,7 @@ class HnsWebSocketBridge(
             protocols = payload.optJSONArray("protocols").stringValues(),
             dataDir = dataDir,
             strictHnsMode = strictHnsMode,
+            allowInsecureHnsResolution = allowInsecureHnsResolution,
             dohResolverUrl = dohResolverUrl,
             statelessDaneCertificates = statelessDaneCertificates,
             handshakeNetwork = handshakeNetwork,
@@ -202,6 +206,7 @@ private class NativeHnsWebSocketSession(
     private val protocols: List<String>,
     private val dataDir: File,
     private val strictHnsMode: () -> Boolean,
+    private val allowInsecureHnsResolution: () -> Boolean,
     private val dohResolverUrl: () -> String,
     private val statelessDaneCertificates: () -> Boolean,
     private val handshakeNetwork: () -> String,
@@ -438,6 +443,9 @@ private class NativeHnsWebSocketSession(
         if (strictHnsMode()) {
             headers += HNS_GATEWAY_STRICT_MODE_HEADER to "1"
         }
+        if (allowInsecureHnsResolution()) {
+            headers += HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER to "1"
+        }
         dohResolverUrl().takeIf { it.isNotBlank() }?.let { resolver ->
             headers += HNS_GATEWAY_DOH_RESOLVER_HEADER to resolver
         }
@@ -503,7 +511,7 @@ internal class HnsWebSocketTunnelOutput(
             return
         }
 
-        val frameOffset = headEnd + HEADER_END.size
+        val frameOffset = headEnd + HTTP_HEADER_END.size
         val head = bytes.copyOfRange(0, frameOffset)
         handshakeComplete = true
         onHandshake(head)
@@ -513,16 +521,12 @@ internal class HnsWebSocketTunnelOutput(
     }
 
     private fun headerEnd(bytes: ByteArray): Int {
-        for (index in 0..(bytes.size - HEADER_END.size)) {
-            if (HEADER_END.indices.all { offset -> bytes[index + offset] == HEADER_END[offset] }) {
+        for (index in 0..(bytes.size - HTTP_HEADER_END.size)) {
+            if (HTTP_HEADER_END.indices.all { offset -> bytes[index + offset] == HTTP_HEADER_END[offset] }) {
                 return index
             }
         }
         return -1
-    }
-
-    private companion object {
-        val HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
     }
 }
 

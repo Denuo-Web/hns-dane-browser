@@ -19,6 +19,35 @@ class HnsWebViewGatewayInterceptorTest {
     }
 
     @Test
+    fun forwardsInsecureResolutionPreferenceOnlyAsInternalGatewayHeader() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val dataDir = createTempDirectory("hns-insecure-resolution-test").toFile()
+        val interceptor = HnsWebViewGatewayInterceptor(
+            dataDir,
+            bridge,
+            allowInsecureHnsResolution = { true },
+        )
+
+        val response = interceptor.intercept(
+            "GET",
+            "http://welcome/",
+            mapOf(HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER to "0"),
+        )
+
+        requireNotNull(response)
+        assertEquals(200, response.statusCode)
+        assertEquals(
+            listOf(HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER to "1"),
+            bridge.calls.single().headers.filter {
+                it.first == HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER
+            },
+        )
+        dataDir.deleteRecursively()
+    }
+
+    @Test
     fun hnsHttpsGetUsesNativeGatewayBridge() {
         val bridge = RecordingGatewayBridge(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nX-Test: yes\r\nContent-Length: 2\r\n\r\nok"
