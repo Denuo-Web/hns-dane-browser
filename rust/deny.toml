@@ -16,6 +16,7 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
+    "NCSA",
     "PolyForm-Noncommercial-1.0.0",
     "Unicode-3.0",
     "Zlib",

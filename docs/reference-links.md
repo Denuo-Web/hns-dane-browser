@@ -6,7 +6,7 @@ Paste-ready research and implementation checklist for an Android WebView-based H
 
 ## Baseline Rule
 
-Before coding, re-check every “latest” package/API link. As of 2026-06-25, AndroidX WebKit stable is listed as 1.16.0, AGP stable docs show 9.2.0, Gradle stable shows 9.5.1, UniFFI docs show 0.31.1, Hickory DNS docs show 0.26.1, and cargo-nextest changelog shows 0.9.138. These are moving targets.
+Before coding, re-check every “latest” package/API link. As of 2026-07-10, the configured Android build uses stable AndroidX Activity 1.13.0, Core 1.18.0, WebKit 1.16.0, AGP 9.2.1, and Gradle 9.6.1. Research links for optional or future components are not claims that those components are currently used.
 
 ## Android Browser Shell
 
@@ -60,7 +60,7 @@ Use these for Android WebView shell hardening, native-bridge avoidance, local-fi
 Use these for current Kotlin/Gradle/NDK setup.
 
 - [Android Gradle Plugin release notes](https://developer.android.com/build/releases)
-- [AGP 9.2.0 release notes](https://developer.android.com/build/releases/agp-9-2-0-release-notes)
+- [AGP 9.2 release notes](https://developer.android.com/build/releases/agp-9-2-0-release-notes)
 - [Android Gradle Plugin API/DSL reference](https://developer.android.com/reference/tools/gradle-api)
 - [Gradle releases](https://gradle.org/releases/)
 - [Kotlin Gradle configuration](https://kotlinlang.org/docs/gradle-configure-project.html)

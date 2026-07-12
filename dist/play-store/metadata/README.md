@@ -22,6 +22,6 @@ This directory contains the source text and field checklist for the Google Play 
 - Ads declaration: No ads
 - Privacy policy URL: `https://denuoweb.com/work/hns-dane-browser/privacy`
 - Default closed-testing upload artifact: `../hns-dane-browser-v0.3.7-play-upload-signed.aab`
-- Foreground service type to declare: `dataSync`
+- Foreground service type: none; remove any stale `dataSync` declaration because sync is activity-scoped and the manifest declares no service.
 
 The Android App Bundle is generated during release builds and is intentionally not committed.

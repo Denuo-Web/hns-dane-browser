@@ -13,12 +13,11 @@ internal data class HnsWebSocketTarget(
 )
 
 internal object HnsWebSocketRequestPolicy {
-    fun validate(
+    fun validateMessageSource(
         sourceOrigin: String,
         activeMainFrameUrl: String?,
-        targetUrl: String,
         isMainFrame: Boolean,
-    ): HnsWebSocketTarget {
+    ) {
         if (!isMainFrame) {
             throw HnsWebSocketPolicyException("HNS WebSocket bridge is only available to the main frame.")
         }
@@ -39,7 +38,25 @@ internal object HnsWebSocketRequestPolicy {
         if (!HnsHostPolicy.requiresHnsResolution(activeHost)) {
             throw HnsWebSocketPolicyException("active page is not an HNS page.")
         }
+    }
 
+    fun validate(
+        sourceOrigin: String,
+        activeMainFrameUrl: String?,
+        targetUrl: String,
+        isMainFrame: Boolean,
+    ): HnsWebSocketTarget {
+        validateMessageSource(sourceOrigin, activeMainFrameUrl, isMainFrame)
+        val activeUri = parseUri(activeMainFrameUrl, "active HNS page is unavailable")
+        val sourceUri = parseUri(sourceOrigin, "message source origin is unavailable")
+        val activeScheme = activeUri.scheme?.lowercase(Locale.US)
+            ?: throw HnsWebSocketPolicyException("active page scheme is unavailable.")
+        val activeHost = activeUri.httpAuthorityHost()?.normalizeHost()
+            ?: throw HnsWebSocketPolicyException("active page host is unavailable.")
+
+        if (targetUrl.length > MAX_TARGET_URL_CHARS) {
+            throw HnsWebSocketPolicyException("target WebSocket URL is too long.")
+        }
         val targetUri = parseUri(targetUrl, "target WebSocket URL is invalid")
         val targetScheme = targetUri.scheme?.lowercase(Locale.US)
             ?: throw HnsWebSocketPolicyException("target WebSocket scheme is unavailable.")
@@ -59,7 +76,11 @@ internal object HnsWebSocketRequestPolicy {
             throw HnsWebSocketPolicyException("target WebSocket host is outside the active HNS page scope.")
         }
 
-        val port = if (targetUri.port > 0) targetUri.port else defaultPort(targetScheme)
+        val port = when (val explicitPort = targetUri.port) {
+            -1 -> defaultPort(targetScheme)
+            in 1..65535 -> explicitPort
+            else -> throw HnsWebSocketPolicyException("target WebSocket port is invalid.")
+        }
         val rawPath = targetUri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
         val pathAndQuery = targetUri.rawQuery?.let { "$rawPath?$it" } ?: rawPath
         return HnsWebSocketTarget(
@@ -101,7 +122,7 @@ internal object HnsWebSocketRequestPolicy {
     }
 
     private fun effectivePort(uri: URI, scheme: String): Int =
-        if (uri.port > 0) uri.port else defaultPort(scheme)
+        if (uri.port in 1..65535) uri.port else defaultPort(scheme)
 
     private fun defaultPort(scheme: String): Int =
         when (scheme.lowercase(Locale.US)) {
@@ -114,6 +135,8 @@ internal object HnsWebSocketRequestPolicy {
 
     private fun String.inScopeOf(scope: String): Boolean =
         this == scope || endsWith(".$scope")
+
+    private const val MAX_TARGET_URL_CHARS = 16 * 1024
 }
 
 internal class HnsWebSocketPolicyException(message: String) : IllegalArgumentException(message)

@@ -198,14 +198,20 @@
 <string name="history_unknown_time">Неизвестное время</string>
 <plurals name="history_recent_pages_status">
 <item quantity="one">Последняя страница %d.</item>
+<item quantity="few">Последние страницы %d.</item>
+<item quantity="many">Последние страницы %d.</item>
 <item quantity="other">Последние страницы %d.</item>
 </plurals>
 <plurals name="history_cleared_items">
 <item quantity="one">Очищен элемент истории %d.</item>
+<item quantity="few">Очищены элементы истории %d.</item>
+<item quantity="many">Очищены элементы истории %d.</item>
 <item quantity="other">Очищены элементы истории %d.</item>
 </plurals>
 <plurals name="settings_saved_pages">
 <item quantity="one">%d сохраненная страница</item>
+<item quantity="few">Сохраненные страницы %d</item>
+<item quantity="many">Сохраненные страницы %d</item>
 <item quantity="other">Сохраненные страницы %d</item>
 </plurals>
 <string name="downloads_empty_status">Приложение пока не загружено.</string>
@@ -229,14 +235,20 @@
 <string name="downloads_clear_message">Это очистит список загрузок этого браузера. Он не удаляет загруженные файлы.</string>
 <plurals name="downloads_app_downloads_status">
 <item quantity="one">Загрузка приложения %d.</item>
+<item quantity="few">Загрузки приложения %d.</item>
+<item quantity="many">Загрузки приложения %d.</item>
 <item quantity="other">Загрузки приложения %d.</item>
 </plurals>
 <plurals name="downloads_cleared_records">
 <item quantity="one">Удалена запись загрузки %d.</item>
+<item quantity="few">Удалены записи загрузок %d.</item>
+<item quantity="many">Удалены записи загрузок %d.</item>
 <item quantity="other">Удалены записи загрузок %d.</item>
 </plurals>
 <plurals name="settings_app_queued_records">
 <item quantity="one">Запись в очереди приложения %d</item>
+<item quantity="few">Записи в очереди приложений %d</item>
+<item quantity="many">Записи в очереди приложений %d</item>
 <item quantity="other">Записи в очереди приложений %d</item>
 </plurals>
 <string name="cookie_deleted">Файлы cookie удалены</string>

@@ -197,15 +197,27 @@
     <string name="history_clear_message">يؤدي هذا إلى إزالة القائمة المحلية للتطبيق للصفحات التي تمت زيارتها مؤخرًا.</string>
     <string name="history_unknown_time">وقت غير معروف</string>
     <plurals name="history_recent_pages_status">
+        <item quantity="zero">الصفحات الأخيرة %d.</item>
         <item quantity="one">%d الصفحة الأخيرة.</item>
+        <item quantity="two">الصفحات الأخيرة %d.</item>
+        <item quantity="few">الصفحات الأخيرة %d.</item>
+        <item quantity="many">الصفحات الأخيرة %d.</item>
         <item quantity="other">الصفحات الأخيرة %d.</item>
     </plurals>
     <plurals name="history_cleared_items">
+        <item quantity="zero">تم مسح عناصر Regtest %d</item>
         <item quantity="one">تم مسح عنصر Regtest %d</item>
+        <item quantity="two">تم مسح عناصر Regtest %d</item>
+        <item quantity="few">تم مسح عناصر Regtest %d</item>
+        <item quantity="many">تم مسح عناصر Regtest %d</item>
         <item quantity="other">تم مسح عناصر Regtest %d</item>
     </plurals>
     <plurals name="settings_saved_pages">
+        <item quantity="zero">الصفحات المحفوظة %d</item>
         <item quantity="one">الصفحة المحفوظة %d</item>
+        <item quantity="two">الصفحات المحفوظة %d</item>
+        <item quantity="few">الصفحات المحفوظة %d</item>
+        <item quantity="many">الصفحات المحفوظة %d</item>
         <item quantity="other">الصفحات المحفوظة %d</item>
     </plurals>
     <string name="downloads_empty_status">لم يتم تنزيل التطبيق حتى الآن.</string>
@@ -228,15 +240,27 @@
     <string name="downloads_clear_title">هل تريد مسح Regtestات التنزيل؟</string>
     <string name="downloads_clear_message">يؤدي هذا إلى مسح قائمة تنزيل هذا المتصفح. ولا يحذف الملفات التي تم تنزيلها.</string>
     <plurals name="downloads_app_downloads_status">
+        <item quantity="zero">تنزيلات التطبيق %d.</item>
         <item quantity="one">تحميل تطبيق %d.</item>
+        <item quantity="two">تنزيلات التطبيق %d.</item>
+        <item quantity="few">تنزيلات التطبيق %d.</item>
+        <item quantity="many">تنزيلات التطبيق %d.</item>
         <item quantity="other">تنزيلات التطبيق %d.</item>
     </plurals>
     <plurals name="downloads_cleared_records">
+        <item quantity="zero">تم مسح Regtestات تنزيل %d</item>
         <item quantity="one">تم مسح Regtest تنزيل %d</item>
+        <item quantity="two">تم مسح Regtestات تنزيل %d</item>
+        <item quantity="few">تم مسح Regtestات تنزيل %d</item>
+        <item quantity="many">تم مسح Regtestات تنزيل %d</item>
         <item quantity="other">تم مسح Regtestات تنزيل %d</item>
     </plurals>
     <plurals name="settings_app_queued_records">
+        <item quantity="zero">Regtestات قائمة انتظار التطبيق %d</item>
         <item quantity="one">Regtest %d في قائمة انتظار التطبيق</item>
+        <item quantity="two">Regtestات قائمة انتظار التطبيق %d</item>
+        <item quantity="few">Regtestات قائمة انتظار التطبيق %d</item>
+        <item quantity="many">Regtestات قائمة انتظار التطبيق %d</item>
         <item quantity="other">Regtestات قائمة انتظار التطبيق %d</item>
     </plurals>
     <string name="cookie_deleted">تم حذف ملفات تعريف الارتباط</string>

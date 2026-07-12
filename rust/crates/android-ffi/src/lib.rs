@@ -16,23 +16,24 @@ use hns_dane::{
 };
 use hns_gateway::{Gateway, GatewayConfig, GatewayError, GatewayRequest, HnsHttpsMode};
 use hns_p2p::{
-    DnsSeedPeerSource, HeaderSyncSession, PeerConnection, SqlitePeerStore, StaticPeerSource,
-    VersionPacket,
+    DnsSeedPeerSource, HeaderSyncSession, PeerConnection, PeerSource, SqlitePeerStore,
+    StaticPeerSource, VersionPacket, is_allowed_peer_endpoint,
 };
 use hns_resolver::{
     AuthoritativeDnssecResolver, AuthoritativeDohEndpoint, CompositeResolver, DelegatedResolver,
-    DelegatingResolver, DnsTransport, HnsDelegation, HnsProofProvider, HnsResourceValueProvider,
-    NameClass, ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError,
-    ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier, UdpTcpDnsTransport,
-    classify_name,
+    DelegatingResolver, DnsEndpointPolicy, DnsTransport, HnsDelegation, HnsProofProvider,
+    HnsResourceValueProvider, NameClass, ProvenNameRecords, ResolutionAnswer, ResolutionRequest,
+    Resolver, ResolverError, ResourceValueAnchor, SqliteResourceValueProvider,
+    SystemDnssecVerifier, UdpTcpDnsTransport, classify_name,
 };
 use hns_sync::{
     HeaderSyncCoordinator, HeaderSyncRunner, HeaderSyncRunnerConfig, ProofScheduler, SyncError,
     TcpHeaderPeerConnector,
 };
 use hns_transport::{
-    OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport, ReadWrite,
-    TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaRecordSource, TransportError,
+    DEFAULT_MAX_REQUEST_BODY_BYTES, OriginProtocol, OriginRequest, OriginResponse,
+    OriginResponseHead, OriginTransport, ReadWrite, TcpHttpTransport, TlsCertificateInspection,
+    TlsValidation, TlsaRecordSource, TransportError,
 };
 use hns_urkel::UrkelProofVerifier;
 use jni::JNIEnv;
@@ -40,13 +41,13 @@ use jni::JavaVM;
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jbyteArray, jint, jstring};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -82,7 +83,8 @@ const HNS_DOH_PATH: &str = "/dns-query";
 const ICANN_DOH_HOST: &str = "cloudflare-dns.com";
 const ICANN_DOH_PATH: &str = "/dns-query";
 const HNS_GATEWAY_STRICT_MODE_HEADER: &str = "X-HNS-Browser-Strict-Mode";
-const HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER: &str = "X-HNS-Browser-Allow-Insecure-Resolution";
+const HNS_GATEWAY_ALLOW_INSECURE_RESOLUTION_HEADER: &str =
+    "X-HNS-Browser-Allow-Insecure-Resolution";
 const HNS_GATEWAY_DOH_RESOLVER_HEADER: &str = "X-HNS-Browser-DoH-Resolver";
 const HNS_GATEWAY_STATELESS_DANE_HEADER: &str = "X-HNS-Browser-Stateless-DANE";
 const HNS_GATEWAY_NETWORK_HEADER: &str = "X-HNS-Browser-Network";
@@ -91,6 +93,13 @@ const HNS_RESOLVER_MODE_HEADER: &str = "X-HNS-Resolver-Mode";
 const HNS_DOH_FALLBACK_HEADER: &str = "X-HNS-DoH-Fallback";
 const TUNNEL_COPY_BUFFER_BYTES: usize = 16 * 1024;
 const DOH_DNS_ID: u16 = 0;
+static SHARED_HTTP_TRANSPORT: OnceLock<TcpHttpTransport> = OnceLock::new();
+
+fn shared_http_transport() -> TcpHttpTransport {
+    SHARED_HTTP_TRANSPORT
+        .get_or_init(TcpHttpTransport::default)
+        .clone()
+}
 
 pub struct GatewayHttpRequestInput<'a> {
     pub data_dir: &'a str,
@@ -136,7 +145,9 @@ impl GatewayResolutionMode {
 }
 
 fn parse_network_kind(value: &str) -> Result<NetworkKind, String> {
-    NetworkKind::from_str(value).ok_or_else(|| format!("unsupported Handshake network: {value}"))
+    value
+        .parse()
+        .map_err(|_| format!("unsupported Handshake network: {value}"))
 }
 
 fn network_base_path(data_dir: &str, network: NetworkKind) -> PathBuf {
@@ -166,7 +177,12 @@ fn seed_peers_for_network(
 ) -> Result<usize, hns_p2p::P2pError> {
     if !network.dns_seeds.is_empty() {
         let source = DnsSeedPeerSource::from_network(network);
-        return peers.seed_from(&source);
+        let discovered = source.discover()?;
+        return Ok(peers.seed(
+            discovered
+                .into_iter()
+                .filter(|address| is_allowed_peer_endpoint(network, *address)),
+        ));
     }
 
     if network_kind == NetworkKind::Regtest {
@@ -174,10 +190,29 @@ fn seed_peers_for_network(
             SocketAddr::from((Ipv4Addr::LOCALHOST, network.port)),
             SocketAddr::from((Ipv6Addr::LOCALHOST, network.port)),
         ]);
-        return peers.seed_from(&source);
+        let discovered = source.discover()?;
+        return Ok(peers.seed(
+            discovered
+                .into_iter()
+                .filter(|address| is_allowed_peer_endpoint(network, *address)),
+        ));
     }
 
     Ok(0)
+}
+
+fn retain_allowed_peer_endpoints(
+    peers: &mut hns_p2p::PeerManager,
+    network: &hns_core::network::Network,
+) -> usize {
+    peers.retain(|peer| is_allowed_peer_endpoint(network, peer.address))
+}
+
+fn allowed_peer_count(peers: &hns_p2p::PeerManager, network: &hns_core::network::Network) -> usize {
+    peers
+        .iter()
+        .filter(|peer| is_allowed_peer_endpoint(network, peer.address))
+        .count()
 }
 
 fn sync_checkpoints_for_network(network: NetworkKind) -> Vec<hns_chain::HeaderCheckpoint> {
@@ -319,6 +354,22 @@ impl JavaOutputStream {
     }
 }
 
+fn checked_java_read_len(
+    read: jint,
+    requested: usize,
+    returned_bytes: usize,
+) -> std::io::Result<usize> {
+    let read = usize::try_from(read)
+        .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "negative Java read length"))?;
+    if read > requested || read > returned_bytes {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "Java InputStream returned an invalid byte count",
+        ));
+    }
+    Ok(read)
+}
+
 impl Read for JavaInputStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
@@ -349,7 +400,7 @@ impl Read for JavaInputStream {
         let bytes = env
             .convert_byte_array(&array)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
-        let read = read as usize;
+        let read = checked_java_read_len(read, length, bytes.len())?;
         buf[..read].copy_from_slice(&bytes[..read]);
         Ok(read)
     }
@@ -467,12 +518,14 @@ impl GatewayProofProvider {
         let mut peers = peer_store
             .load_manager()
             .map_err(|error| ResolverError::Storage(format!("load peer store: {error}")))?;
-        if self.seed_on_empty && peers.is_empty() {
+        retain_allowed_peer_endpoints(&mut peers, &network);
+        if self.seed_on_empty && allowed_peer_count(&peers, &network) == 0 {
             let _ = seed_peers_for_network(&mut peers, &network, self.network);
         }
 
         let now = now_unix_seconds();
-        let selected = select_live_proof_peers(&peers, self.preferred_peers, now, best.height);
+        let selected =
+            select_live_proof_peers(&peers, &network, self.preferred_peers, now, best.height);
         if selected.is_empty() {
             peer_store
                 .save_manager(&peers)
@@ -615,13 +668,17 @@ impl AndroidAuthoritativeDnsTransport {
     fn new(direct: UdpTcpDnsTransport, trace: DnsTraceRecorder) -> Self {
         Self {
             direct,
-            doh_http: Arc::new(TcpHttpTransport::default()),
+            doh_http: Arc::new(shared_http_transport()),
             trace,
         }
     }
 }
 
 impl DnsTransport for AndroidAuthoritativeDnsTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        self.direct.endpoint_policy
+    }
+
     fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
         let started = Instant::now();
         let result = self.direct.exchange_udp(server, query);
@@ -914,11 +971,20 @@ where
 struct HnsDohDnsTransport {
     endpoint: HnsDohEndpoint,
     trace: DnsTraceRecorder,
+    endpoint_policy: DnsEndpointPolicy,
 }
 
 impl HnsDohDnsTransport {
-    fn new(endpoint: HnsDohEndpoint, trace: DnsTraceRecorder) -> Self {
-        Self { endpoint, trace }
+    fn new(
+        endpoint: HnsDohEndpoint,
+        trace: DnsTraceRecorder,
+        endpoint_policy: DnsEndpointPolicy,
+    ) -> Self {
+        Self {
+            endpoint,
+            trace,
+            endpoint_policy,
+        }
     }
 
     fn exchange_doh(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
@@ -948,6 +1014,10 @@ impl HnsDohDnsTransport {
 }
 
 impl DnsTransport for HnsDohDnsTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        self.endpoint_policy
+    }
+
     fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
         self.exchange_doh(server, query)
     }
@@ -1085,7 +1155,7 @@ fn fetch_doh_message(
     endpoint: &HnsDohEndpoint,
     body: Vec<u8>,
 ) -> Result<OriginResponse, TransportError> {
-    TcpHttpTransport::default().fetch(&OriginRequest {
+    shared_http_transport().fetch(&OriginRequest {
         method: "POST".to_owned(),
         scheme: "https".to_owned(),
         host: endpoint.host.clone(),
@@ -1435,10 +1505,12 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
             hns_https_mode: HnsHttpsMode::Compatibility,
             allow_insecure_hns_origin_resolution: parsed_headers.allow_insecure_hns_resolution,
             stateless_dane,
+            allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
+            allow_unsafe_origin_ports: network == NetworkKind::Regtest,
             ..GatewayConfig::default()
         },
         resolver,
-        TcpHttpTransport::default(),
+        shared_http_transport(),
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -1546,10 +1618,12 @@ pub fn gateway_http_response_body_to_file(
             hns_https_mode: HnsHttpsMode::Compatibility,
             allow_insecure_hns_origin_resolution: parsed_headers.allow_insecure_hns_resolution,
             stateless_dane,
+            allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
+            allow_unsafe_origin_ports: network == NetworkKind::Regtest,
             ..GatewayConfig::default()
         },
         resolver,
-        TcpHttpTransport::default(),
+        shared_http_transport(),
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -1672,10 +1746,12 @@ pub fn gateway_http_upgrade_tunnel(
             hns_https_mode: HnsHttpsMode::Compatibility,
             allow_insecure_hns_origin_resolution: parsed_headers.allow_insecure_hns_resolution,
             stateless_dane,
+            allow_non_public_origin_addresses: network == NetworkKind::Regtest || cfg!(test),
+            allow_unsafe_origin_ports: network == NetworkKind::Regtest,
             ..GatewayConfig::default()
         },
         resolver,
-        TcpHttpTransport::default(),
+        shared_http_transport(),
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -1813,6 +1889,7 @@ fn gateway_request(
     headers: Vec<(String, String)>,
 ) -> GatewayRequest {
     GatewayRequest {
+        auth_token: None,
         origin: OriginRequest {
             method: input.method.to_owned(),
             scheme: input.scheme.to_ascii_lowercase(),
@@ -1887,7 +1964,9 @@ fn android_gateway_resolver(
     fallback_marker: FallbackMarker,
     dns_trace: DnsTraceRecorder,
 ) -> AndroidGatewayResolver {
-    let authoritative_dns_transport = android_authoritative_dns_transport(mode, dns_trace.clone());
+    let endpoint_policy = DnsEndpointPolicy::for_network(network);
+    let authoritative_dns_transport =
+        android_authoritative_dns_transport(mode, dns_trace.clone(), endpoint_policy);
     match mode {
         GatewayResolutionMode::Strict => {
             let primary = DelegatingResolver::new(
@@ -1905,7 +1984,7 @@ fn android_gateway_resolver(
                 AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
                     .with_authoritative_doh_preferred();
             let doh = AuthoritativeDnssecResolver::new(
-                HnsDohDnsTransport::new(doh_endpoint.clone(), dns_trace.clone()),
+                HnsDohDnsTransport::new(doh_endpoint.clone(), dns_trace.clone(), endpoint_policy),
                 SystemDnssecVerifier,
             );
             let delegated = FallbackDelegatedResolver::new(direct, doh, fallback_marker.clone());
@@ -1929,8 +2008,12 @@ fn android_gateway_resolver(
 fn android_authoritative_dns_transport(
     mode: GatewayResolutionMode,
     dns_trace: DnsTraceRecorder,
+    endpoint_policy: DnsEndpointPolicy,
 ) -> AndroidAuthoritativeDnsTransport {
-    let mut transport = UdpTcpDnsTransport::default();
+    let mut transport = UdpTcpDnsTransport {
+        endpoint_policy,
+        ..UdpTcpDnsTransport::default()
+    };
     if mode == GatewayResolutionMode::Compatibility {
         transport.timeout = ANDROID_COMPAT_AUTHORITATIVE_DNS_TIMEOUT;
     }
@@ -1958,7 +2041,9 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             || name
                 .bytes()
                 .any(|byte| byte.is_ascii_control() || byte == b' ' || byte == b':')
-            || value.bytes().any(|byte| byte == b'\r' || byte == b'\n')
+            || value
+                .bytes()
+                .any(|byte| byte != b'\t' && byte.is_ascii_control())
         {
             return Err("request header is invalid");
         }
@@ -1985,7 +2070,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
             continue;
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_NETWORK_HEADER) {
-            network = NetworkKind::from_str(value).ok_or("Handshake network is invalid")?;
+            network = value.parse().map_err(|_| "Handshake network is invalid")?;
             continue;
         }
         headers.push((name.to_owned(), value.to_owned()));
@@ -2076,17 +2161,35 @@ fn upgrade_response_head_with_resolver_policy_and_trace(
     let header_text = header_text.strip_suffix("\r\n\r\n").unwrap_or(&header_text);
     let mut lines = header_text.split("\r\n");
     let status_line = lines.next().unwrap_or("HTTP/1.1 101 Switching Protocols");
+    let header_lines = lines.filter(|line| !line.is_empty()).collect::<Vec<_>>();
+    let connection_nominated = header_lines
+        .iter()
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(name, _)| name.trim().eq_ignore_ascii_case("connection"))
+        .flat_map(|(_, value)| value.split(','))
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect::<HashSet<_>>();
     let mut out = format!("{status_line}\r\n").into_bytes();
-    for line in lines.filter(|line| !line.is_empty()) {
+    for line in header_lines {
         let Some((name, _)) = line.split_once(':') else {
             continue;
         };
-        if suppressed_origin_response_header(name.trim()) {
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("connection")
+            || name.eq_ignore_ascii_case("upgrade")
+            || connection_nominated.contains(&name.to_ascii_lowercase())
+            || suppressed_origin_response_header(name)
+        {
             continue;
         }
         out.extend(line.as_bytes());
         out.extend(b"\r\n");
     }
+    // The Android bridge validates the browser-visible WebSocket handshake itself. Preserve the
+    // required hop-by-hop pair in canonical form while stripping every other Connection-nominated
+    // field from the origin response.
+    out.extend(b"Upgrade: websocket\r\nConnection: Upgrade\r\n");
     if let Some(policy) = hns_tls_policy_header(decision) {
         out.extend(format!("X-HNS-TLS-Policy: {policy}\r\n").as_bytes());
     }
@@ -2125,6 +2228,9 @@ struct TlsTraceInput<'a> {
     inspection: Option<&'a TlsCertificateInspection>,
 }
 
+// The trace deliberately keeps its independent resolution, TLS, fallback, and DNS inputs
+// explicit so security diagnostics cannot silently inherit state from a mutable context object.
+#[allow(clippy::too_many_arguments)]
 fn resolution_trace_json(
     input: &GatewayHttpRequestInput<'_>,
     network: NetworkKind,
@@ -2543,9 +2649,14 @@ fn tlsa_blocked_by(error: Option<&GatewayError>) -> Option<&'static str> {
         | Some(GatewayError::Resolver(ResolverError::Storage(_))) => {
             Some("resolver_storage_failed")
         }
-        Some(GatewayError::NonLoopbackBind) => Some("gateway_bind_invalid"),
+        Some(GatewayError::NonLoopbackBind | GatewayError::EmptyAuthToken) => {
+            Some("gateway_configuration_invalid")
+        }
+        Some(GatewayError::Unauthorized) => Some("gateway_authentication_failed"),
         Some(GatewayError::InsecureResolution) => Some("insecure_resolution"),
         Some(GatewayError::NoResolvedAddress) => Some("origin_address_missing"),
+        Some(GatewayError::NonPublicOriginAddress) => Some("origin_address_blocked"),
+        Some(GatewayError::UnsafeOriginPort(_)) => Some("origin_port_blocked"),
         Some(GatewayError::InvalidSvcb(_)) | Some(GatewayError::UnsupportedSvcb) => {
             Some("https_service_unsupported")
         }
@@ -3200,6 +3311,16 @@ fn map_gateway_error_for_host(
                 "ICANN Origin Address Missing",
                 "Secure ICANN DNS resolution did not produce an origin A or AAAA address.",
             ),
+            GatewayError::NonPublicOriginAddress => (
+                403,
+                "ICANN Origin Address Blocked",
+                "Native gateway policy blocked a non-public origin address.",
+            ),
+            GatewayError::UnsafeOriginPort(_) => (
+                403,
+                "ICANN Origin Port Blocked",
+                "Native gateway policy blocked a browser-unsafe origin port.",
+            ),
             GatewayError::InvalidTlsa(_) | GatewayError::Transport(TransportError::DaneFailed) => (
                 502,
                 "ICANN DANE Validation Failed",
@@ -3373,6 +3494,21 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
             "HNS Origin Address Missing",
             "Secure HNS resolution did not produce an origin A or AAAA address.",
         ),
+        GatewayError::NonPublicOriginAddress => (
+            403,
+            "HNS Origin Address Blocked",
+            "Native gateway policy blocked a non-public origin address.",
+        ),
+        GatewayError::UnsafeOriginPort(_) => (
+            403,
+            "HNS Origin Port Blocked",
+            "Native gateway policy blocked a browser-unsafe origin port.",
+        ),
+        GatewayError::Unauthorized => (
+            403,
+            "HNS Gateway Authentication Failed",
+            "Local gateway authentication failed closed.",
+        ),
         GatewayError::InvalidTlsa(_) | GatewayError::Transport(TransportError::DaneFailed) => (
             502,
             "HNS DANE Validation Failed",
@@ -3456,7 +3592,8 @@ fn map_gateway_error(error: &GatewayError) -> (u16, &'static str, &'static str) 
         ),
         GatewayError::Resolver(ResolverError::CachePoisoned)
         | GatewayError::Resolver(ResolverError::Storage(_))
-        | GatewayError::NonLoopbackBind => (
+        | GatewayError::NonLoopbackBind
+        | GatewayError::EmptyAuthToken => (
             500,
             "HNS Gateway Storage Error",
             "Local HNS gateway state is unavailable.",
@@ -3693,9 +3830,15 @@ fn run_sync_once(
         .load_manager()
         .map_err(|error| format!("load peer store: {error}"))?;
     let network = network_kind.network();
+    let pruned_peers = retain_allowed_peer_endpoints(&mut peers, &network);
+    if pruned_peers > 0 {
+        peer_store
+            .save_manager(&peers)
+            .map_err(|error| format!("save pruned peer store: {error}"))?;
+    }
     let mut seed_error = None;
-    if seed_on_empty && peers.len() < ANDROID_MIN_PEER_TARGET {
-        let was_empty = peers.is_empty();
+    if seed_on_empty && allowed_peer_count(&peers, &network) < ANDROID_MIN_PEER_TARGET {
+        let was_empty = allowed_peer_count(&peers, &network) == 0;
         match seed_peers_for_network(&mut peers, &network, network_kind) {
             Ok(inserted) => {
                 if inserted > 0 {
@@ -4111,9 +4254,10 @@ fn local_chain_currentness(
         .map(|header| header.height.0);
     let peer_store = SqlitePeerStore::open(base.join("peers.sqlite"))
         .map_err(|error| ResolverError::Storage(format!("open peer store: {error}")))?;
-    let peers = peer_store
+    let mut peers = peer_store
         .load_manager()
         .map_err(|error| ResolverError::Storage(format!("load peer store: {error}")))?;
+    retain_allowed_peer_endpoints(&mut peers, &network.network());
     Ok(LocalChainCurrentness::new(
         best_height,
         best_peer_height(&peers),
@@ -4123,13 +4267,18 @@ fn local_chain_currentness(
 
 fn select_live_proof_peers(
     peers: &hns_p2p::PeerManager,
+    network: &hns_core::network::Network,
     preferred_count: usize,
     now: u64,
     proof_height: Height,
 ) -> Vec<SocketAddr> {
     let mut candidates = peers
         .iter()
-        .filter(|peer| !peer.is_banned(now) && peer.last_height >= proof_height)
+        .filter(|peer| {
+            !peer.is_banned(now)
+                && peer.last_height >= proof_height
+                && is_allowed_peer_endpoint(network, peer.address)
+        })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
         left.score
@@ -4155,9 +4304,10 @@ fn read_sync_status(data_dir: &str, network: NetworkKind) -> Result<NativeSyncSt
     let chain = open_initialized_header_chain(&base, network)?;
     let peer_store = SqlitePeerStore::open(base.join("peers.sqlite"))
         .map_err(|error| format!("open peer store: {error}"))?;
-    let peers = peer_store
+    let mut peers = peer_store
         .load_manager()
         .map_err(|error| format!("load peer store: {error}"))?;
+    retain_allowed_peer_endpoints(&mut peers, &network.network());
     let best = chain
         .best_header()
         .map_err(|error| format!("read best header: {error}"))?;
@@ -4611,6 +4761,15 @@ fn jni_gateway_http_response(
         .ok()?
         .to_string_lossy()
         .into_owned();
+    let body_len = usize::try_from(env.get_array_length(&input.body).ok()?).ok()?;
+    if body_len > DEFAULT_MAX_REQUEST_BODY_BYTES {
+        return Some(plain_response_with_address(
+            413,
+            "Origin Request Too Large",
+            "Origin request body exceeds the configured gateway limit.",
+            None,
+        ));
+    }
     let body = env.convert_byte_array(&input.body).ok()?;
     let port = u16::try_from(input.port).ok()?;
     Some(gateway_http_response(GatewayHttpRequestInput {
@@ -4665,6 +4824,17 @@ fn jni_gateway_http_response_body_to_file(
         .ok()?
         .to_string_lossy()
         .into_owned();
+    let body_len = usize::try_from(env.get_array_length(&input.body).ok()?).ok()?;
+    if body_len > DEFAULT_MAX_REQUEST_BODY_BYTES {
+        return plain_response_to_file_with_address(
+            413,
+            "Origin Request Too Large",
+            "Origin request body exceeds the configured gateway limit.",
+            None,
+            Path::new(&output_path),
+        )
+        .ok();
+    }
     let body = env.convert_byte_array(&input.body).ok()?;
     let port = u16::try_from(input.port).ok()?;
     gateway_http_response_body_to_file(
@@ -4944,6 +5114,19 @@ mod tests {
         assert_eq!(
             core_version(),
             concat!("hns-dane-browser-rust-core/", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn java_input_stream_rejects_invalid_read_count() {
+        assert_eq!(checked_java_read_len(4, 4, 4).unwrap(), 4);
+        assert_eq!(
+            checked_java_read_len(5, 4, 4).unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
+        assert_eq!(
+            checked_java_read_len(-2, 4, 4).unwrap_err().kind(),
+            ErrorKind::InvalidData
         );
     }
 
@@ -5234,15 +5417,18 @@ mod tests {
 
     #[test]
     fn live_proof_peer_selection_ignores_zero_height_failed_peers() {
-        let stale: SocketAddr = "127.0.0.2:12038".parse().unwrap();
-        let current: SocketAddr = "127.0.0.3:12038".parse().unwrap();
+        let stale: SocketAddr = "1.1.1.2:12038".parse().unwrap();
+        let current: SocketAddr = "1.1.1.3:12038".parse().unwrap();
+        let private: SocketAddr = "127.0.0.3:12038".parse().unwrap();
         let mut peers = PeerManager::default();
         for _ in 0..32 {
             peers.record_transient_failure(stale);
         }
         peers.record_success(current, Height(336_034), 1_000);
+        peers.record_success(private, Height(336_034), 1_000);
+        let network = hns_core::network::mainnet();
 
-        let selected = select_live_proof_peers(&peers, 8, 1_100, Height(336_034));
+        let selected = select_live_proof_peers(&peers, &network, 8, 1_100, Height(336_034));
 
         assert_eq!(selected, vec![current]);
     }
@@ -5546,6 +5732,27 @@ mod tests {
 
         assert!(!text.contains("X-HNS-TLS-Policy: origin\r\n"));
         assert!(text.contains("X-HNS-TLS-Policy: webpki-fallback\r\n"));
+    }
+
+    #[test]
+    fn upgrade_response_preserves_canonical_websocket_headers_only() {
+        let response = upgrade_response_head_with_resolver_policy_and_trace(
+            b"HTTP/1.1 101 Switching Protocols\r\n\
+              Connection: Upgrade, X-Hop\r\n\
+              Upgrade: websocket\r\n\
+              X-Hop: secret\r\n\
+              Sec-WebSocket-Accept: accepted\r\n\r\n",
+            &DaneDecision::NoTlsa,
+            None,
+            "{}",
+        );
+        let text = String::from_utf8(response).unwrap();
+
+        assert_eq!(text.matches("Connection: Upgrade\r\n").count(), 1);
+        assert_eq!(text.matches("Upgrade: websocket\r\n").count(), 1);
+        assert!(text.contains("Sec-WebSocket-Accept: accepted\r\n"));
+        assert!(!text.contains("X-Hop:"));
+        assert!(!text.contains("Connection: Upgrade, X-Hop"));
     }
 
     #[test]
@@ -6561,6 +6768,10 @@ mod tests {
 
         assert!(text.starts_with("HTTP/1.1 400 Bad Request\r\n"));
         assert!(text.ends_with("http://welcome/\n400 Bad Request\nrequest header is malformed\n"));
+        assert!(matches!(
+            parse_gateway_headers("X-Test: bad\0value\r\n"),
+            Err("request header is invalid")
+        ));
         cleanup_dir(&path);
     }
 
@@ -6885,7 +7096,7 @@ mod tests {
     #[test]
     fn gateway_response_fetches_live_proof_on_resource_cache_miss() {
         let path = temp_dir_path("gateway-live-proof");
-        let base = path.join("hns");
+        let base = path.join("hns-regtest");
         std::fs::create_dir_all(&base).unwrap();
 
         let root_name = "welcome".to_owned();
@@ -6893,7 +7104,8 @@ mod tests {
         let value = owner_glue4_resource(&root_name, [127, 0, 0, 1]);
         let name_state_value = name_state_value(&root_name, &value);
         let proof_root = urkel_value_root(name_hash.as_hash(), &name_state_value);
-        let proof_height = store_best_header_with_tree_root(&base, proof_root);
+        let proof_height =
+            store_best_header_for_network_with_tree_root(&base, NetworkKind::Regtest, proof_root);
         let remote_height = Height(proof_height.0 + 10);
 
         let proof_payload = urkel_exists_payload(&name_state_value);
@@ -6901,7 +7113,7 @@ mod tests {
         let proof_address = proof_listener.local_addr().unwrap();
         let proof_server = thread::spawn(move || {
             let (stream, _) = proof_listener.accept().unwrap();
-            let mut peer = PeerConnection::new(stream, hns_core::network::mainnet());
+            let mut peer = PeerConnection::new(stream, hns_core::network::regtest());
             assert!(matches!(peer.receive_packet().unwrap(), Packet::Version(_)));
             let version = VersionPacket {
                 height: remote_height,
@@ -6954,7 +7166,7 @@ mod tests {
             host: &root_name,
             port: origin_port,
             path_and_query: "/live",
-            header_text: "",
+            header_text: "X-HNS-Browser-Network: regtest\r\n",
             body: &[],
         });
         let text = String::from_utf8(response).unwrap();
@@ -7084,8 +7296,19 @@ mod tests {
             .unwrap()
     }
 
+    fn store_best_header_for_network_with_tree_root(
+        base: &std::path::Path,
+        network: NetworkKind,
+        tree_root: Hash,
+    ) -> Height {
+        store_canonical_headers_for_network_with_tree_roots(base, network, &[tree_root])
+            .last()
+            .copied()
+            .unwrap()
+    }
+
     fn store_peer_height(base: &std::path::Path, height: u32) {
-        let address = "127.0.0.1:8333".parse().unwrap();
+        let address = "1.1.1.1:12038".parse().unwrap();
         let peer_store = SqlitePeerStore::open(base.join("peers.sqlite")).unwrap();
         let mut peers = PeerManager::default();
         peers.seed([address]);
@@ -7097,7 +7320,15 @@ mod tests {
         base: &std::path::Path,
         tree_roots: &[Hash],
     ) -> Vec<Height> {
-        let genesis_header = BlockHeader::mainnet_genesis();
+        store_canonical_headers_for_network_with_tree_roots(base, NetworkKind::Mainnet, tree_roots)
+    }
+
+    fn store_canonical_headers_for_network_with_tree_roots(
+        base: &std::path::Path,
+        network: NetworkKind,
+        tree_roots: &[Hash],
+    ) -> Vec<Height> {
+        let genesis_header = BlockHeader::genesis_for_network(network);
         let genesis = StoredHeader {
             hash: genesis_header.hash(),
             chainwork: Chainwork::from_bits(genesis_header.bits).unwrap(),
@@ -7108,7 +7339,7 @@ mod tests {
         let mut previous = genesis;
         let mut heights = Vec::new();
         for (index, tree_root) in tree_roots.iter().copied().enumerate() {
-            let mut header = BlockHeader::mainnet_genesis();
+            let mut header = BlockHeader::genesis_for_network(network);
             header.prev_block = previous.hash;
             header.tree_root = tree_root;
             header.time = header.time.saturating_add((index as u64) + 1);

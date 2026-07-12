@@ -4,6 +4,9 @@ import android.content.Context
 import com.denuoweb.hnsdane.ui.HnsResolutionPreferences
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.zip.GZIPInputStream
 
 class BundledHeaderSyncBridge(
@@ -28,6 +31,7 @@ object HeaderSnapshotInstaller {
     private const val TEMP_NAME = "hns-headers-300000.snapshot"
     private const val PREFS_NAME = "hns_header_snapshot"
     private const val KEY_DISABLE_BUNDLED_SNAPSHOT = "disable_bundled_snapshot"
+    internal const val EXPECTED_SNAPSHOT_BYTES = 70_800_287L
 
     fun disableBundledSnapshot(context: Context, network: String = MAINNET) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -49,17 +53,16 @@ object HeaderSnapshotInstaller {
             return null
         }
 
-        val tempDir = File(context.cacheDir, "hns-header-snapshot").apply {
-            if (!exists()) {
-                mkdirs()
-            }
+        val tempDir = File(context.cacheDir, "hns-header-snapshot")
+        if (!tempDir.exists() && !tempDir.mkdirs()) {
+            return null
         }
         val tempFile = File(tempDir, TEMP_NAME)
         return runCatching {
             context.assets.open(ASSET_NAME).use { asset ->
                 GZIPInputStream(asset).use { gzip ->
                     FileOutputStream(tempFile).use { output ->
-                        gzip.copyTo(output)
+                        copySnapshotExactly(gzip, output, EXPECTED_SNAPSHOT_BYTES)
                     }
                 }
             }
@@ -79,4 +82,33 @@ object HeaderSnapshotInstaller {
         "${KEY_DISABLE_BUNDLED_SNAPSHOT}_${network.lowercase()}"
 
     private const val MAINNET = "mainnet"
+}
+
+@Throws(IOException::class)
+internal fun copySnapshotExactly(
+    input: InputStream,
+    output: OutputStream,
+    expectedBytes: Long,
+) {
+    require(expectedBytes >= 0) { "expectedBytes must not be negative" }
+    val buffer = ByteArray(16 * 1024)
+    var copied = 0L
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) {
+            break
+        }
+        if (read == 0) {
+            continue
+        }
+        val nextSize = copied + read
+        if (nextSize > expectedBytes) {
+            throw IOException("bundled HNS header snapshot exceeds expected size")
+        }
+        output.write(buffer, 0, read)
+        copied = nextSize
+    }
+    if (copied != expectedBytes) {
+        throw IOException("bundled HNS header snapshot has unexpected size")
+    }
 }

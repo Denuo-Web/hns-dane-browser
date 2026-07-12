@@ -74,7 +74,13 @@ data class LocalTlsCertificate(
 data class HnsGatewayFileResponse(
     val head: ByteArray,
     val bodyFile: File,
-)
+) {
+    fun openBodyStream(): InputStream = GatewayResponseBodyStore.openReleasing(bodyFile)
+
+    fun deleteBodyFile() {
+        GatewayResponseBodyStore.release(bodyFile)
+    }
+}
 
 object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvider {
     val isLoaded: Boolean = runCatching {
@@ -91,6 +97,10 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         nativeDiagnostics()
     } else {
         """{"core":"unavailable","version":"unavailable","features":[],"securityDefault":"fail-closed"}"""
+    }
+
+    fun pruneGatewayResponseBodyFiles(dataDir: String) {
+        GatewayResponseBodyStore.prune(dataDir)
     }
 
     @Synchronized
@@ -190,26 +200,22 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         if (!isLoaded) {
             return null
         }
-        val responseDir = File(dataDir, "hns/response-bodies")
-        if (!responseDir.exists() && !responseDir.mkdirs()) {
-            return null
-        }
-        val bodyFile = runCatching {
-            File.createTempFile("hns-gateway-", ".body", responseDir)
-        }.getOrNull() ?: return null
-        val head = nativeGatewayHttpResponseBodyToFile(
-            dataDir,
-            method,
-            scheme,
-            host,
-            port,
-            pathAndQuery,
-            serializeHeaders(headers),
-            body,
-            bodyFile.absolutePath,
-        )
-        if (head == null || !bodyFile.exists()) {
-            bodyFile.delete()
+        val bodyFile = GatewayResponseBodyStore.create(dataDir) ?: return null
+        val head = runCatching {
+            nativeGatewayHttpResponseBodyToFile(
+                dataDir,
+                method,
+                scheme,
+                host,
+                port,
+                pathAndQuery,
+                serializeHeaders(headers),
+                body,
+                bodyFile.absolutePath,
+            )
+        }.getOrNull()
+        if (head == null || !GatewayResponseBodyStore.retainCompleted(bodyFile)) {
+            GatewayResponseBodyStore.release(bodyFile)
             return null
         }
         return HnsGatewayFileResponse(head, bodyFile)

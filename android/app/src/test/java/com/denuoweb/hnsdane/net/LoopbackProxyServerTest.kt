@@ -5,6 +5,7 @@ import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import java.io.File
@@ -61,6 +62,108 @@ class LoopbackProxyServerTest {
                 assertTrue(socket.isConnected)
             }
         }
+    }
+
+    @Test
+    fun authenticatedGatewayRejectsMissingCapabilityAndStripsCredentialsUpstream() {
+        val bridge = RecordingGatewayBridge(
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                .toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        val authorization = LoopbackProxyAuthorization.createForTest("test-realm", "browser", "secret")
+        val dataDir = createTempDirectory("hns-proxy-auth-test").toFile()
+        LoopbackProxyServer(
+            0,
+            dataDir = dataDir,
+            hnsGatewayBridge = bridge,
+            proxyAuthorization = authorization,
+        ).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+
+            Socket("127.0.0.1", port).use { socket ->
+                socket.getOutputStream().write(
+                    "GET http://welcome/ HTTP/1.1\r\nHost: welcome\r\n\r\n"
+                        .toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 407 Proxy Authentication Required\r\n"))
+                assertTrue(response.contains("Proxy-Authenticate: Basic realm=\"test-realm\""))
+            }
+            assertTrue(bridge.calls.isEmpty())
+
+            Socket("127.0.0.1", port).use { socket ->
+                socket.getOutputStream().write(
+                    (
+                        "GET http://welcome/ HTTP/1.1\r\n" +
+                            "Host: welcome\r\n" +
+                            "Proxy-Authorization: ${authorization.authorizationHeaderValue()}\r\n\r\n"
+                        ).toByteArray(StandardCharsets.ISO_8859_1),
+                )
+                socket.getOutputStream().flush()
+                val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"))
+            }
+        }
+
+        assertFalse(bridge.calls.single().headers.any { it.first.equals("Proxy-Authorization", ignoreCase = true) })
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun malformedHeadersFailClosedBeforeNativeGateway() {
+        val bridge = RecordingGatewayBridge(ByteArray(0))
+        val dataDir = createTempDirectory("hns-proxy-malformed-header-test").toFile()
+        LoopbackProxyServer(0, dataDir = dataDir, hnsGatewayBridge = bridge).use { proxy ->
+            assertTrue(proxy.start())
+            val port = requireNotNull(proxy.boundPort())
+            for (badHeader in listOf("MissingColon", "Bad Header: value", "X-Test: ok\u0001bad")) {
+                Socket("127.0.0.1", port).use { socket ->
+                    socket.getOutputStream().write(
+                        ("GET http://welcome/ HTTP/1.1\r\nHost: welcome\r\n$badHeader\r\n\r\n")
+                            .toByteArray(StandardCharsets.ISO_8859_1),
+                    )
+                    socket.getOutputStream().flush()
+                    val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
+                    assertTrue(response.startsWith("HTTP/1.1 400 Bad Request Headers\r\n"))
+                }
+            }
+        }
+        assertTrue(bridge.calls.isEmpty())
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun closeForciblyClosesAcceptedClients() {
+        val proxy = LoopbackProxyServer(0, hnsGatewayBridge = RecordingGatewayBridge(ByteArray(0)))
+        assertTrue(proxy.start())
+        val socket = Socket("127.0.0.1", requireNotNull(proxy.boundPort()))
+        socket.getOutputStream().write('G'.code)
+        socket.getOutputStream().flush()
+        repeat(100) {
+            if (proxy.activeClientCount() > 0) return@repeat
+            Thread.sleep(5)
+        }
+        assertEquals(1, proxy.activeClientCount())
+
+        proxy.close()
+
+        repeat(100) {
+            if (proxy.activeClientCount() == 0) return@repeat
+            Thread.sleep(5)
+        }
+        assertEquals(0, proxy.activeClientCount())
+        socket.soTimeout = 1_000
+        val closed = runCatching { socket.getInputStream().read() }.fold({ it < 0 }, { true })
+        assertTrue(closed)
+        socket.close()
+    }
+
+    @Test
+    fun connectAuthorityRejectsInvalidPorts() {
+        assertThrows(IOException::class.java) { ConnectTarget.parse("welcome:0") }
+        assertThrows(IOException::class.java) { ConnectTarget.parse("welcome:65536") }
     }
 
     @Test
@@ -138,8 +241,13 @@ class LoopbackProxyServerTest {
         assertFalse(requiresHnsResolution("invalid"))
         assertFalse(requiresHnsResolution("local"))
         assertFalse(requiresHnsResolution("test"))
+        for (host in listOf("app.alt", "foo.example", "foo.internal", "foo.invalid", "foo.local", "foo.localhost", "foo.onion", "foo.test")) {
+            assertFalse(requiresHnsResolution(host))
+        }
         assertFalse(requiresHnsResolution("127.0.0.1"))
         assertFalse(requiresHnsResolution("[::1]"))
+        assertFalse(requiresHnsResolution("bad_host"))
+        assertFalse(requiresHnsResolution("-bad"))
     }
 
     @Test

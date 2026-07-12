@@ -3,6 +3,7 @@ pub mod dns;
 pub mod hash;
 pub mod header;
 pub mod network;
+pub mod network_policy;
 pub mod pow;
 pub mod resource;
 

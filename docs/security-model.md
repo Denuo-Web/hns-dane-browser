@@ -48,8 +48,8 @@ Applied WebView controls:
 
 The app follows the Android security checklist as a platform baseline:
 
-- Permissions are limited to network access, notification posting, and the foreground data-sync service needed for visible HNS header/proof sync. The manifest does not request contacts, location, SMS, camera, microphone, account, package-visibility, or broad file permissions.
-- Only the launcher activity is exported. Settings, diagnostics, history, downloads, proof/TLSA views, resolver trace, and the sync foreground service are explicitly non-exported.
+- Manifest permissions are limited to `INTERNET` and `ACCESS_NETWORK_STATE`. The app does not request notification, foreground-service, contacts, location, SMS, camera, microphone, account, package-visibility, or broad file permissions.
+- Only `LauncherActivity` is exported. The browser, settings, diagnostics, history, downloads, proof/TLSA views, and resolver trace activities are explicitly non-exported, and no Android service is declared.
 - App backup and device-transfer extraction are disabled for files, databases, shared preferences, root storage, and external app data. Browser history, download records, diagnostics, resolver cache, and sync/cache state remain app-local unless the user explicitly exports or shares data.
 - Normal browsing does not enable `file://` or `content://` WebView access. User-initiated downloads use Android DownloadManager into public Downloads, but the system-visible download description does not include the full URL.
 - Network Security Config denies cleartext by default and allows cleartext only for the loopback gateway. The gateway binds randomized `127.0.0.1` ports only while scoped HNS proxy support is needed.
@@ -61,11 +61,11 @@ The app follows the Android security checklist as a platform baseline:
 
 The app follows the Android privacy checklist as a platform baseline:
 
-- Runtime permission use is limited to `POST_NOTIFICATIONS` for the visible HNS sync foreground service. The permission prompt is preceded by an in-app rationale, shown after the browser UI is available, and recorded as shown so declined prompts are not repeated every launch.
+- The app requests no dangerous runtime permissions. Sync is activity-scoped, so there is no notification permission prompt or foreground-service notification.
 - The app does not request location, nearby device, camera, microphone, contacts, SMS, call log, account, advertising ID, all-files storage, or package-visibility permissions.
 - The app does not use background location, location foreground services, device serial numbers, IMEI, SSAID, Advertising ID, or an app-generated cross-install tracking identifier.
 - External storage use is limited to user-initiated downloads through Android DownloadManager into public Downloads; app metadata stays in private shared preferences or app-private files and is excluded from backup and device transfer.
-- Sensitive app-to-app sharing uses explicit user actions such as Android share/copy flows or DownloadManager. Internal diagnostics and sync broadcasts are package-scoped or non-exported.
+- Sensitive app-to-app sharing uses explicit user actions such as Android share/copy flows or DownloadManager. Sync snapshots stay in-process and internal diagnostic activities are non-exported.
 - Production Logcat output avoids browsing URLs, user-entered content, request/response bodies, and resolver secrets; default persisted diagnostics remain bounded and sanitized.
 - The Google Play Data safety and privacy policy drafts disclose local browsing data, user-initiated downloads, HNS peer/DNS/web requests, optional compatibility DoH, and local deletion controls.
 
@@ -140,7 +140,7 @@ The app follows the Android privacy checklist as a platform baseline:
 - No local gateway listener beyond loopback, no fixed browser proxy port in normal app startup, no broad proxy fallback when WebView cannot scope proxying to the active HNS host, no intentional ICANN browsing through the HNS proxy override, and no long-lived browser proxy listener while the main browser activity is stopped.
 - No dotted host under the vendored IANA root-zone TLD snapshot should be routed into HNS resolution; normal ICANN destinations such as `discord.gg` must stay on the WebView/ICANN path.
 - No origin fetch unless the gateway resolution name matches the requested origin host.
-- No intercepted HNS redirect should be followed unless the target remains inside HNS resolution policy and the redirect chain stays under the configured bound.
+- No intercepted HNS redirect should be followed unless the target has the same scheme, host, and effective port and the redirect chain stays under the configured bound.
 - No main-frame HNS gateway 4xx/5xx response should leave the toolbar in verified state.
 - No local gateway request flood should create unbounded worker tasks, HNS resolution calls, or per-host limiter state; excess requests fail closed with `429 Too Many Requests`.
 - No gateway diagnostic event should persist URL paths, query strings, request headers, request bodies, or response bodies; the app-private event store remains bounded to recent sanitized failures.

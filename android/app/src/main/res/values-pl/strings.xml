@@ -198,14 +198,20 @@
 <string name="history_unknown_time">Nieznany czas</string>
 <plurals name="history_recent_pages_status">
 <item quantity="one">Ostatnia strona %d.</item>
+<item quantity="few">Ostatnie strony %d.</item>
+<item quantity="many">Ostatnie strony %d.</item>
 <item quantity="other">Ostatnie strony %d.</item>
 </plurals>
 <plurals name="history_cleared_items">
 <item quantity="one">Wyczyszczono element historii %d</item>
+<item quantity="few">Wyczyszczone elementy historii %d</item>
+<item quantity="many">Wyczyszczone elementy historii %d</item>
 <item quantity="other">Wyczyszczone elementy historii %d</item>
 </plurals>
 <plurals name="settings_saved_pages">
 <item quantity="one">Strona zapisana w %d</item>
+<item quantity="few">%d zapisane strony</item>
+<item quantity="many">%d zapisane strony</item>
 <item quantity="other">%d zapisane strony</item>
 </plurals>
 <string name="downloads_empty_status">Nie pobrano jeszcze żadnych aplikacji.</string>
@@ -229,14 +235,20 @@
 <string name="downloads_clear_message">Spowoduje to wyczyszczenie listy pobierania tej przeglądarki. Nie usuwa pobranych plików.</string>
 <plurals name="downloads_app_downloads_status">
 <item quantity="one">Pobieranie aplikacji %d.</item>
+<item quantity="few">Pobieranie aplikacji %d.</item>
+<item quantity="many">Pobieranie aplikacji %d.</item>
 <item quantity="other">Pobieranie aplikacji %d.</item>
 </plurals>
 <plurals name="downloads_cleared_records">
 <item quantity="one">Wyczyszczono rekord pobierania %d</item>
+<item quantity="few">Wyczyszczono zapisy pobierania %d</item>
+<item quantity="many">Wyczyszczono zapisy pobierania %d</item>
 <item quantity="other">Wyczyszczono zapisy pobierania %d</item>
 </plurals>
 <plurals name="settings_app_queued_records">
 <item quantity="one">Rekord w kolejce aplikacji %d</item>
+<item quantity="few">Rekordy w kolejce aplikacji %d</item>
+<item quantity="many">Rekordy w kolejce aplikacji %d</item>
 <item quantity="other">Rekordy w kolejce aplikacji %d</item>
 </plurals>
 <string name="cookie_deleted">Pliki cookie usunięte</string>

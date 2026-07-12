@@ -7,7 +7,6 @@ import com.denuoweb.hnsdane.core.HnsPageResolverPolicy
 import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import java.io.ByteArrayInputStream
 import java.io.File
-import java.io.FileInputStream
 import java.io.InputStream
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -31,8 +30,21 @@ class HnsWebViewGatewayInterceptor(
             url = request.url.toString(),
             requestHeaders = request.requestHeaders.orEmpty(),
             isForMainFrame = request.isForMainFrame,
+            allowBodyRequestProxyFallback = allowProxyFallbackForBodyRequests(),
         )?.toWebResourceResponse()
     }
+
+    fun interceptServiceWorker(request: WebResourceRequest): WebResourceResponse? =
+        intercept(
+            method = request.method,
+            url = request.url.toString(),
+            requestHeaders = request.requestHeaders.orEmpty(),
+            isForMainFrame = false,
+            // Chromium cannot surface proxy-auth challenges for service-worker requests
+            // because they have no WebContents. Body-bearing HNS service-worker requests
+            // therefore fail closed instead of falling through to the authenticated proxy.
+            allowBodyRequestProxyFallback = false,
+        )?.toWebResourceResponse()
 
     internal fun intercept(
         method: String,
@@ -47,8 +59,9 @@ class HnsWebViewGatewayInterceptor(
         url: String,
         requestHeaders: Map<String, String>,
         isForMainFrame: Boolean,
+        allowBodyRequestProxyFallback: Boolean = allowProxyFallbackForBodyRequests(),
     ): HnsInterceptedResponse? {
-        val response = interceptInternal(method, url, requestHeaders, MAX_HNS_REDIRECTS)
+        val response = interceptInternal(method, url, requestHeaders, MAX_HNS_REDIRECTS, allowBodyRequestProxyFallback)
         if (response != null && (isForMainFrame || reportAllHnsStatuses)) {
             onMainFrameHnsStatus(
                 response.statusCode,
@@ -65,6 +78,7 @@ class HnsWebViewGatewayInterceptor(
         url: String,
         requestHeaders: Map<String, String>,
         redirectsRemaining: Int,
+        allowBodyRequestProxyFallback: Boolean,
     ): HnsInterceptedResponse? {
         val target = HnsWebViewTarget.parse(url) ?: return null
         if (!HnsHostPolicy.requiresNativeGatewayResolution(target.host)) {
@@ -73,7 +87,7 @@ class HnsWebViewGatewayInterceptor(
 
         val normalizedMethod = method.uppercase(Locale.US)
         if (normalizedMethod !in BODYLESS_METHODS) {
-            if (allowProxyFallbackForBodyRequests()) {
+            if (allowBodyRequestProxyFallback) {
                 return null
             }
             GatewayEventLog.record("webview_reject", target.host, 501, "HNS Method Unsupported")
@@ -98,7 +112,7 @@ class HnsWebViewGatewayInterceptor(
             parseGatewayHttpFileResponse(fileResponse.head, fileResponse.bodyFile)
                 ?.also { recordGatewayStatus(target.host, it, "webview_native_file_response") }
                 ?: run {
-                    fileResponse.bodyFile.delete()
+                    fileResponse.deleteBodyFile()
                     null
                 }
         } ?: run {
@@ -134,6 +148,7 @@ class HnsWebViewGatewayInterceptor(
             target = target,
             requestHeaders = requestHeaders,
             redirectsRemaining = redirectsRemaining,
+            allowBodyRequestProxyFallback = allowBodyRequestProxyFallback,
         )
     }
 
@@ -170,6 +185,7 @@ class HnsWebViewGatewayInterceptor(
         target: HnsWebViewTarget,
         requestHeaders: Map<String, String>,
         redirectsRemaining: Int,
+        allowBodyRequestProxyFallback: Boolean,
     ): HnsInterceptedResponse {
         if (statusCode !in REDIRECT_STATUS_CODES) {
             return this
@@ -207,12 +223,21 @@ class HnsWebViewGatewayInterceptor(
                 detail = "HNS WebView interception only follows redirects that stay inside HNS resolution policy.",
             )
         }
+        if (!target.sameOrigin(redirectTarget)) {
+            GatewayEventLog.record("webview_redirect", target.host, 502, "HNS Redirect Origin Changed")
+            return plainInterceptResponse(
+                statusCode = 502,
+                reason = "HNS Redirect Unsupported",
+                detail = "HNS WebView interception only follows same-origin redirects.",
+            )
+        }
 
         return interceptInternal(
             method = redirectedMethod(method, statusCode),
             url = redirectUrl,
             requestHeaders = requestHeaders,
             redirectsRemaining = redirectsRemaining - 1,
+            allowBodyRequestProxyFallback = allowBodyRequestProxyFallback,
         ) ?: plainInterceptResponse(
             statusCode = 502,
             reason = "HNS Redirect Unsupported",
@@ -262,10 +287,10 @@ internal data class HnsInterceptedResponse(
     }
 
     internal fun openBodyStream(): InputStream =
-        bodyFile?.let(::DeletingFileInputStream) ?: ByteArrayInputStream(body)
+        bodyFile?.let(GatewayResponseBodyStore::openReleasing) ?: ByteArrayInputStream(body)
 
     internal fun discardBodyFile() {
-        bodyFile?.delete()
+        bodyFile?.let(GatewayResponseBodyStore::release)
     }
 
     fun headerValue(name: String): String? =
@@ -312,18 +337,6 @@ internal data class HnsInterceptedResponse(
     }
 }
 
-private class DeletingFileInputStream(
-    private val file: File,
-) : FileInputStream(file) {
-    override fun close() {
-        try {
-            super.close()
-        } finally {
-            file.delete()
-        }
-    }
-}
-
 private data class HnsWebViewTarget(
     val scheme: String,
     val host: String,
@@ -338,10 +351,10 @@ private data class HnsWebViewTarget(
                 return null
             }
             val host = uri.httpAuthorityHost() ?: return null
-            val port = when {
-                uri.port > 0 -> uri.port
-                scheme == "https" -> 443
-                else -> 80
+            val port = when (val explicitPort = uri.port) {
+                -1 -> if (scheme == "https") 443 else 80
+                in 1..65535 -> explicitPort
+                else -> return null
             }
             val rawPath = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
             val pathAndQuery = if (uri.rawQuery == null) rawPath else "$rawPath?${uri.rawQuery}"
@@ -351,6 +364,9 @@ private data class HnsWebViewTarget(
 
     fun resolve(location: String): String? =
         runCatching { asUri().resolve(location).toString() }.getOrNull()
+
+    fun sameOrigin(other: HnsWebViewTarget): Boolean =
+        scheme == other.scheme && host.equals(other.host, ignoreCase = true) && port == other.port
 
     private fun asUri(): URI {
         val portPart = when {
@@ -484,7 +500,12 @@ private fun ByteArray.indexOfHeaderEnd(): Int {
 private fun isHopByHopOrSyntheticHeader(name: String): Boolean {
     return name.equals("Connection", ignoreCase = true) ||
         name.equals("Proxy-Connection", ignoreCase = true) ||
+        name.equals("Proxy-Authorization", ignoreCase = true) ||
         name.equals("Transfer-Encoding", ignoreCase = true) ||
+        name.equals("Keep-Alive", ignoreCase = true) ||
+        name.equals("TE", ignoreCase = true) ||
+        name.equals("Trailer", ignoreCase = true) ||
+        name.equals("Upgrade", ignoreCase = true) ||
         name.equals("Content-Length", ignoreCase = true) ||
         name.equals("Host", ignoreCase = true) ||
         name.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) ||

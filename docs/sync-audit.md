@@ -2,7 +2,7 @@
 
 ## Current First-Run Path
 
-- `MainActivity.onStart` starts `HnsSyncForegroundService` automatically, so first install no longer depends on opening Diagnostics and pressing `Run sync now`.
+- `MainActivity.onStart` creates and starts `HnsSyncScheduler` automatically, so first install no longer depends on opening Diagnostics and pressing `Run sync now`. `onStop` closes it, so sync is intentionally limited to time when the browser activity is visible.
 - `HnsSyncScheduler` runs immediately, then uses active polling while the local `bestHeight` is below the known or estimated target, retry polling for peer/seed discovery failures, and a 10-minute idle poll after the app is caught up.
 - The native Android sync tick requests up to 192 header batches per peer per run, which is enough to cover current mainnet-scale catch-up in one or a small number of foreground ticks when a healthy peer serves full batches.
 - Android native sync also prefetches one 2000-header page from published HSD mainnet checkpoint anchors at 50,000, 100,000, 160,000, 200,000, 225,000, and 258,026. These prefetched pages are staged only; they are inserted and counted after the local chain has validated the page's parent, so the optimization does not trust out-of-order peer data.
@@ -12,11 +12,11 @@
 ## User-Visible Progress
 
 - The main browser screen shows a horizontal sync progress bar directly under the omnibox toolbar.
-- The main browser screen polls lightweight native sync status while visible, so `bestHeight` and the progress bar move during long native header runs instead of waiting for the foreground-service tick to finish.
+- The main browser screen polls lightweight native sync status while visible, so `bestHeight` and the progress bar move during long native header runs instead of waiting for the scheduled native tick to finish.
 - The status line under the progress bar shows status, `bestHeight`, a single `target` height while syncing, peer count, and the latest accepted header count when present; `bestPeerHeight` is shown only after the known peer target has been reached.
 - A second horizontal loading bar sits below the block-sync info and tracks WebView page-load progress while HNS proof/DANE/origin work is running.
 - HNS gateway error bodies include the requested URL above the status line so repeated 502 pages can be distinguished at a glance.
-- The foreground notification uses the same parsed sync progress so Android’s persistent sync notification reflects catch-up progress instead of a generic running state.
+- There is no foreground-service notification or notification permission. Progress is shown only in the browser and HNS Sync screens, and catch-up resumes the next time `MainActivity` starts.
 
 ## Remaining Speed Bottlenecks
 

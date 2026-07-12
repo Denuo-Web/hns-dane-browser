@@ -198,14 +198,20 @@
 <string name="history_unknown_time">Невідомий час</string>
 <plurals name="history_recent_pages_status">
 <item quantity="one">Остання сторінка %d.</item>
+<item quantity="few">Останні сторінки %d.</item>
+<item quantity="many">Останні сторінки %d.</item>
 <item quantity="other">Останні сторінки %d.</item>
 </plurals>
 <plurals name="history_cleared_items">
 <item quantity="one">Очищено елемент історії %d</item>
+<item quantity="few">Очищено елементи історії %d</item>
+<item quantity="many">Очищено елементи історії %d</item>
 <item quantity="other">Очищено елементи історії %d</item>
 </plurals>
 <plurals name="settings_saved_pages">
 <item quantity="one">%d збережена сторінка</item>
+<item quantity="few">%d збережені сторінки</item>
+<item quantity="many">%d збережені сторінки</item>
 <item quantity="other">%d збережені сторінки</item>
 </plurals>
 <string name="downloads_empty_status">Ще немає завантажень програми.</string>
@@ -229,14 +235,20 @@
 <string name="downloads_clear_message">Це очищає список завантажень цього браузера. Він не видаляє завантажені файли.</string>
 <plurals name="downloads_app_downloads_status">
 <item quantity="one">Завантаження програми %d.</item>
+<item quantity="few">Завантаження програми %d.</item>
+<item quantity="many">Завантаження програми %d.</item>
 <item quantity="other">Завантаження програми %d.</item>
 </plurals>
 <plurals name="downloads_cleared_records">
 <item quantity="one">Запис завантаження %d видалено</item>
+<item quantity="few">Очищено записи про завантаження %d</item>
+<item quantity="many">Очищено записи про завантаження %d</item>
 <item quantity="other">Очищено записи про завантаження %d</item>
 </plurals>
 <plurals name="settings_app_queued_records">
 <item quantity="one">Запис програми в черзі %d</item>
+<item quantity="few">Записи в черзі програми %d</item>
+<item quantity="many">Записи в черзі програми %d</item>
 <item quantity="other">Записи в черзі програми %d</item>
 </plurals>
 <string name="cookie_deleted">Файли cookie видалено</string>

@@ -566,7 +566,13 @@ impl<S: HeaderStore> HeaderChain<S> {
             .get_header(header.prev_block)
             .ok_or(ChainError::UnknownParent)?;
         let hash = header.hash();
-        let height = Height(parent.height.0 + 1);
+        let height = Height(
+            parent
+                .height
+                .0
+                .checked_add(1)
+                .ok_or(ChainError::InvalidDifficultyWindow)?,
+        );
         self.validate_difficulty_bits(&header, &parent)?;
         if !verify_pow(hash, header.bits)? {
             return Err(ChainError::InvalidProofOfWork);
@@ -627,7 +633,13 @@ impl<S: HeaderStore> HeaderChain<S> {
             if !verify_pow(hash, header.bits)? {
                 return Err(ChainError::InvalidProofOfWork);
             }
-            let height = Height(parent.height.0 + 1);
+            let height = Height(
+                parent
+                    .height
+                    .0
+                    .checked_add(1)
+                    .ok_or(ChainError::InvalidDifficultyWindow)?,
+            );
             self.validate_checkpoint(height, hash)?;
             let header_work = match chainwork_by_bits.get(&header.bits) {
                 Some(work) => work,
@@ -635,7 +647,7 @@ impl<S: HeaderStore> HeaderChain<S> {
                     chainwork_by_bits.insert(header.bits, Chainwork::from_bits(header.bits)?);
                     chainwork_by_bits
                         .get(&header.bits)
-                        .expect("cached chainwork must exist")
+                        .ok_or(ChainError::InvalidDifficultyWindow)?
                 }
             };
             let chainwork = parent.chainwork.checked_add(header_work);
@@ -870,12 +882,15 @@ impl<S: HeaderStore> HeaderChain<S> {
         header: &StoredHeader,
         pending: &HashMap<Hash, StoredHeader>,
     ) -> Result<StoredHeader, ChainError> {
-        if let Some(previous) = pending.get(&header.header.prev_block) {
-            return Ok(previous.clone());
+        let previous = pending
+            .get(&header.header.prev_block)
+            .cloned()
+            .or_else(|| self.store.get_header(header.header.prev_block))
+            .ok_or(ChainError::UnknownParent)?;
+        if previous.height.0.checked_add(1) != Some(header.height.0) {
+            return Err(ChainError::InvalidDifficultyWindow);
         }
-        self.store
-            .get_header(header.header.prev_block)
-            .ok_or(ChainError::UnknownParent)
+        Ok(previous)
     }
 
     fn canonical_chain_to(&self, hash: Hash) -> Result<Vec<StoredHeader>, ChainError> {
@@ -886,10 +901,14 @@ impl<S: HeaderStore> HeaderChain<S> {
         let mut headers = vec![current.clone()];
 
         while current.height.0 > 0 {
-            current = self
+            let previous = self
                 .store
                 .get_header(current.header.prev_block)
                 .ok_or(ChainError::UnknownParent)?;
+            if previous.height.0.checked_add(1) != Some(current.height.0) {
+                return Err(ChainError::InvalidDifficultyWindow);
+            }
+            current = previous;
             headers.push(current.clone());
         }
 
@@ -920,6 +939,29 @@ mod tests {
         assert_eq!(
             chain.insert_header(header).unwrap_err(),
             ChainError::UnknownParent,
+        );
+    }
+
+    #[test]
+    fn rejects_height_overflow_from_corrupt_store() {
+        let mut store = MemoryHeaderStore::default();
+        let parent_header = BlockHeader::mainnet_genesis();
+        let parent = StoredHeader {
+            hash: parent_header.hash(),
+            header: parent_header,
+            height: Height(u32::MAX),
+            chainwork: Chainwork::zero(),
+        };
+        store.put_header(parent.clone()).unwrap();
+        store.promote_canonical_tip(&parent).unwrap();
+        let mut child = BlockHeader::mainnet_genesis();
+        child.prev_block = parent.hash;
+        child.bits = 0x207f_ffff;
+        let mut chain = permissive_chain(store);
+
+        assert_eq!(
+            chain.insert_header(child).unwrap_err(),
+            ChainError::InvalidDifficultyWindow
         );
     }
 

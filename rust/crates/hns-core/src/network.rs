@@ -1,4 +1,5 @@
 use crate::hash::Hash;
+use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkKind {
@@ -24,7 +25,7 @@ pub const TESTNET_DNS_SEEDS: &[&str] = &["hs-testnet.bcoin.ninja"];
 pub const REGTEST_DNS_SEEDS: &[&str] = &[];
 
 impl NetworkKind {
-    pub fn from_str(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "main" | "mainnet" => Some(Self::Mainnet),
             "test" | "testnet" => Some(Self::Testnet),
@@ -47,6 +48,14 @@ impl NetworkKind {
             Self::Testnet => testnet(),
             Self::Regtest => regtest(),
         }
+    }
+}
+
+impl FromStr for NetworkKind {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value).ok_or(())
     }
 }
 
@@ -121,5 +130,13 @@ mod tests {
         assert_eq!(network.magic, 2_922_943_951);
         assert_eq!(network.port, 14_038);
         assert_eq!(network.genesis_hash, BlockHeader::regtest_genesis().hash());
+    }
+
+    #[test]
+    fn parses_network_kind_aliases() {
+        assert_eq!("main".parse(), Ok(NetworkKind::Mainnet));
+        assert_eq!(" TESTNET ".parse(), Ok(NetworkKind::Testnet));
+        assert_eq!("reg".parse(), Ok(NetworkKind::Regtest));
+        assert!("unknown".parse::<NetworkKind>().is_err());
     }
 }

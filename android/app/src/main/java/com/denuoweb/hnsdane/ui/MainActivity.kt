@@ -21,6 +21,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.HttpAuthHandler
 import android.webkit.WebChromeClient
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
@@ -54,6 +55,7 @@ import com.denuoweb.hnsdane.core.HnsPageResolverPolicy
 import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import com.denuoweb.hnsdane.core.SecurityState
 import com.denuoweb.hnsdane.net.BundledHeaderSyncBridge
+import com.denuoweb.hnsdane.net.DisabledServiceWorkerClient
 import com.denuoweb.hnsdane.net.GatewayEventLog
 import com.denuoweb.hnsdane.net.HnsProxyController
 import com.denuoweb.hnsdane.net.HnsServiceWorkerGatewayClient
@@ -66,10 +68,13 @@ import com.denuoweb.hnsdane.net.HnsWebSocketShim
 import com.denuoweb.hnsdane.net.HnsWebViewGatewayInterceptor
 import com.denuoweb.hnsdane.net.HnsWebViewSslErrorPolicy
 import com.denuoweb.hnsdane.net.LoopbackProxyServer
+import com.denuoweb.hnsdane.net.LoopbackProxyAuthorization
 import com.denuoweb.hnsdane.net.NativeBridge
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.ByteArrayInputStream
+import java.lang.ref.WeakReference
 import java.util.Locale
 import java.util.concurrent.Executors
 
@@ -95,6 +100,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var proxyController: HnsProxyController
     private lateinit var hnsWebSocketBridge: HnsWebSocketBridge
     private var loopbackProxyServer: LoopbackProxyServer? = null
+    private var loopbackProxyAuthorization: LoopbackProxyAuthorization? = null
     private lateinit var assetLoader: WebViewAssetLoader
     private lateinit var webViewGatewayInterceptor: HnsWebViewGatewayInterceptor
     private var proxyAvailable: Boolean = false
@@ -107,6 +113,8 @@ class MainActivity : ComponentActivity() {
     private var lastSyncSnapshot: HnsSyncSnapshot? = null
     private var activeSyncScheduler: HnsSyncScheduler? = null
     private var activityStarted: Boolean = false
+    @Volatile
+    private var gatewayInterceptionEnabled: Boolean = true
     private var activityDestroyed: Boolean = false
     private var proxyOverrideApplied: Boolean = false
     private var proxyOverrideClearing: Boolean = false
@@ -124,6 +132,8 @@ class MainActivity : ComponentActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         GatewayEventLog.configureAppStorage(filesDir)
+        NativeBridge.pruneGatewayResponseBodyFiles(filesDir.absolutePath)
+        HnsNativeDownloadFetcher.pruneStaging(filesDir)
         proxyController = HnsProxyController(this)
         hnsWebSocketBridge = HnsWebSocketBridge(
             dataDir = filesDir,
@@ -133,6 +143,7 @@ class MainActivity : ComponentActivity() {
             dohResolverUrl = { HnsResolutionPreferences.dohResolverUrl(this) },
             statelessDaneCertificates = { HnsResolutionPreferences.statelessDaneCertificates(this) },
             handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
+            enabled = { gatewayInterceptionEnabled },
             callbackHandler = mainHandler,
         )
         webViewGatewayInterceptor = HnsWebViewGatewayInterceptor(
@@ -291,6 +302,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         activityStarted = true
+        gatewayInterceptionEnabled = true
         BrowserCookiePreferences.applyTo(webView)
         startLoopbackGateway()
         lastSyncSnapshot = HnsSyncSnapshot(
@@ -308,6 +320,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         activityStarted = false
+        gatewayInterceptionEnabled = false
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+        }
+        hnsWebSocketBridge.closeAll(reason = "browser backgrounded")
         stopSyncStatusPolling()
         stopActiveSync()
         stopLoopbackGateway()
@@ -316,16 +333,24 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         activityDestroyed = true
+        gatewayInterceptionEnabled = false
         stopActiveSync()
         stopLoopbackGateway()
         hnsWebSocketBridge.close()
+        disableServiceWorkerInterception()
+        if (::webView.isInitialized) {
+            webView.stopLoading()
+            webView.destroy()
+        }
         syncStatusExecutor.shutdownNow()
         downloadExecutor.shutdownNow()
         super.onDestroy()
     }
 
-    private fun createLoopbackGateway(): LoopbackProxyServer =
-        LoopbackProxyServer(
+    private fun createLoopbackGateway(): LoopbackProxyServer {
+        val authorization = LoopbackProxyAuthorization.create()
+        loopbackProxyAuthorization = authorization
+        return LoopbackProxyServer(
             EPHEMERAL_GATEWAY_PORT,
             filesDir,
             strictHnsMode = { HnsResolutionPreferences.strictHnsMode(this) },
@@ -335,6 +360,7 @@ class MainActivity : ComponentActivity() {
             handshakeNetwork = { HnsResolutionPreferences.handshakeNetworkId(this) },
             enforceHnsHostScope = true,
             scopedHnsHost = { currentHnsProxyHost() },
+            proxyAuthorization = authorization,
             onHnsStatus = { host, statusCode, tlsPolicy, resolverPolicy, traceJson ->
                 runOnUiThread {
                     if (isActiveMainFrameHost(host) && mainFrameHnsStatusCode == null) {
@@ -343,6 +369,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+    }
 
     private fun startLoopbackGateway() {
         if (activityDestroyed) {
@@ -374,6 +401,7 @@ class MainActivity : ComponentActivity() {
             proxyAvailable = false
             proxyGatewayPort = null
             proxyScopedHost = null
+            loopbackProxyAuthorization = null
             gateway.close()
             refreshSecurityState()
         }
@@ -423,12 +451,14 @@ class MainActivity : ComponentActivity() {
             proxyAvailable = false
             proxyGatewayPort = null
             proxyScopedHost = null
+            loopbackProxyAuthorization = null
             gateway.close()
             refreshSecurityState()
         } else {
             proxyAvailable = false
             proxyGatewayPort = null
             proxyScopedHost = null
+            loopbackProxyAuthorization = null
         }
 
         if (!shouldClearProxy) {
@@ -473,8 +503,17 @@ class MainActivity : ComponentActivity() {
             serviceWorkerSettings.allowFileAccess = false
         }
         serviceWorkerController.setServiceWorkerClient(
-            HnsServiceWorkerGatewayClient(webViewGatewayInterceptor),
+            HnsServiceWorkerGatewayClient(webViewGatewayInterceptor) { gatewayInterceptionEnabled },
         )
+    }
+
+    private fun disableServiceWorkerInterception() {
+        if (
+            WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
+        ) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(DisabledServiceWorkerClient)
+        }
     }
 
     private fun configureHnsWebSocketBridge() {
@@ -567,20 +606,23 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val appContext = applicationContext
+        val activity = WeakReference(this)
         val scheduler = HnsSyncScheduler(
             filesDir,
-            bridge = BundledHeaderSyncBridge(this),
-            network = { HnsResolutionPreferences.handshakeNetworkId(this) },
+            bridge = BundledHeaderSyncBridge(appContext),
+            network = { HnsResolutionPreferences.handshakeNetworkId(appContext) },
         )
         activeSyncScheduler = scheduler
-        scheduler.start { snapshot ->
-            mainHandler.post {
-                if (activeSyncScheduler !== scheduler || activityDestroyed) {
+        scheduler.start snapshotCallback@{ snapshot ->
+            val owner = activity.get() ?: return@snapshotCallback
+            owner.mainHandler.post {
+                if (owner.activeSyncScheduler !== scheduler || owner.activityDestroyed) {
                     return@post
                 }
-                lastSyncSnapshot = snapshot
-                refreshSecurityState()
-                refreshSyncProgress()
+                owner.lastSyncSnapshot = snapshot
+                owner.refreshSecurityState()
+                owner.refreshSyncProgress()
             }
         }
     }
@@ -886,6 +928,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private inner class BrowserClient : WebViewClient() {
+        override fun onReceivedHttpAuthRequest(
+            view: WebView,
+            handler: HttpAuthHandler,
+            host: String,
+            realm: String,
+        ) {
+            val authorization = loopbackProxyAuthorization
+            if (authorization != null && authorization.matchesChallenge(host, realm)) {
+                handler.proceed(authorization.username, authorization.password)
+            } else {
+                handler.cancel()
+            }
+        }
+
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             hnsWebSocketBridge.closeAll()
             pageIsLoading = true
@@ -902,15 +958,25 @@ class MainActivity : ComponentActivity() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val requestUrl = request.url.toString()
             val scheme = request.url.scheme?.lowercase(Locale.US)
+            if (isBlockedLoopbackHost(request.url.host)) {
+                if (request.isForMainFrame) {
+                    Toast.makeText(this@MainActivity, getString(R.string.toast_link_not_supported), Toast.LENGTH_SHORT).show()
+                }
+                return true
+            }
             if (!request.isForMainFrame) {
                 return scheme != null && scheme !in SUBFRAME_ALLOWED_SCHEMES
             }
             if (scheme !in WEB_NAVIGATION_SCHEMES) {
-                return handleExternalMainFrameNavigation(request.url)
+                return handleExternalMainFrameNavigation(request.url, request.hasGesture())
             }
 
-            activeMainFrameUrl = requestUrl
             val target = classifier.classify(requestUrl)
+            if (target.kind == BrowserTargetKind.Search) {
+                Toast.makeText(this@MainActivity, getString(R.string.toast_link_not_supported), Toast.LENGTH_SHORT).show()
+                return true
+            }
+            activeMainFrameUrl = requestUrl
             currentTargetKind = target.kind
             clearMainFrameHnsStatus()
             refreshLoopbackProxyScope()
@@ -923,6 +989,17 @@ class MainActivity : ComponentActivity() {
             request: WebResourceRequest,
         ): WebResourceResponse? {
             assetLoader.shouldInterceptRequest(request.url)?.let { return it }
+            if (isBlockedLoopbackHost(request.url.host)) {
+                val body = "403 Local Network Request Blocked\n".toByteArray(Charsets.UTF_8)
+                return WebResourceResponse(
+                    "text/plain",
+                    "utf-8",
+                    403,
+                    "Local Network Request Blocked",
+                    mapOf("Cache-Control" to "no-store"),
+                    ByteArrayInputStream(body),
+                )
+            }
             val requestUrl = request.url.toString()
             val isMainFrame = request.isForMainFrame || isActiveMainFrameRequest(requestUrl)
             return webViewGatewayInterceptor.intercept(
@@ -995,14 +1072,14 @@ class MainActivity : ComponentActivity() {
         startActivity(intent)
     }
 
-    private fun handleExternalMainFrameNavigation(uri: Uri): Boolean {
+    private fun handleExternalMainFrameNavigation(uri: Uri, hasUserGesture: Boolean): Boolean {
         val scheme = uri.scheme?.lowercase(Locale.US)
         if (scheme == "about" && uri.toString() == "about:blank") {
             activeMainFrameUrl = uri.toString()
             currentTargetKind = BrowserTargetKind.ExactUrl
             return false
         }
-        if (scheme in EXTERNAL_VIEW_SCHEMES) {
+        if (canLaunchExternalNavigation(scheme, hasUserGesture)) {
             val intent = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
             try {
                 startActivity(intent)
@@ -1037,7 +1114,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val fileName = URLUtil.guessFileName(downloadUrl, contentDisposition, mimeType)
+        val fileName = safeDownloadFileName(URLUtil.guessFileName(downloadUrl, contentDisposition, mimeType))
         val request = DownloadManager.Request(Uri.parse(downloadUrl))
             .setTitle(fileName)
             .setDescription(getString(R.string.app_name))
@@ -1120,10 +1197,13 @@ class MainActivity : ComponentActivity() {
                     )
                     fileName
                 } finally {
-                    response.bodyFile.delete()
+                    response.deleteBodyFile()
                 }
             }
             mainHandler.post {
+                if (activityDestroyed) {
+                    return@post
+                }
                 result
                     .onSuccess { fileName ->
                         Toast.makeText(this, getString(R.string.toast_download_saved, fileName), Toast.LENGTH_SHORT).show()
@@ -1258,7 +1338,6 @@ class MainActivity : ComponentActivity() {
         private const val MAX_DOWNLOAD_FILE_NAME_CHARS = 120
         private val UNSAFE_DOWNLOAD_FILE_CHARS = Regex("[\\\\/:*?\"<>|\\p{Cntrl}]")
         private val WEB_NAVIGATION_SCHEMES = setOf("http", "https")
-        private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
         private val SUBFRAME_ALLOWED_SCHEMES = setOf("http", "https", "about", "data", "blob")
         private val NATIVE_GATEWAY_TARGET_KINDS = setOf(
             BrowserTargetKind.HnsName,
@@ -1266,6 +1345,114 @@ class MainActivity : ComponentActivity() {
         )
     }
 }
+
+private val EXTERNAL_VIEW_SCHEMES = setOf("mailto", "tel", "sms", "geo")
+
+internal fun canLaunchExternalNavigation(scheme: String?, hasUserGesture: Boolean): Boolean =
+    hasUserGesture && scheme?.lowercase(Locale.US) in EXTERNAL_VIEW_SCHEMES
+
+internal fun isBlockedLoopbackHost(host: String?): Boolean {
+    val normalized = host
+        ?.trim()
+        ?.removeSurrounding("[", "]")
+        ?.trimEnd('.')
+        ?.lowercase(Locale.US)
+        ?: return false
+    if (normalized.length > MAX_NUMERIC_HOST_CHARS) {
+        return false
+    }
+    if (
+        normalized == "localhost" ||
+        normalized.endsWith(".localhost")
+    ) {
+        return true
+    }
+
+    parseIpv4Literal(normalized)?.let { return isBlockedIpv4(it) }
+    val ipv6 = parseIpv6Literal(normalized) ?: return false
+    if (ipv6.all { it == 0 } || (ipv6.take(7).all { it == 0 } && ipv6[7] == 1)) {
+        return true
+    }
+
+    // Cover both IPv4-compatible (::127.0.0.1) and IPv4-mapped
+    // (::ffff:127.0.0.1) forms without asking the platform DNS resolver.
+    val compatible = ipv6.take(6).all { it == 0 }
+    val mapped = ipv6.take(5).all { it == 0 } && ipv6[5] == 0xffff
+    if (compatible || mapped) {
+        val ipv4 = (ipv6[6].toLong() shl 16) or ipv6[7].toLong()
+        return isBlockedIpv4(ipv4)
+    }
+    return false
+}
+
+private fun isBlockedIpv4(address: Long): Boolean {
+    val firstOctet = ((address ushr 24) and 0xff).toInt()
+    // 0/8 is the current-host network and 127/8 is loopback. Neither should
+    // ever be reachable from web content in this browser process.
+    return firstOctet == 0 || firstOctet == 127
+}
+
+private fun parseIpv4Literal(value: String): Long? {
+    if (value.isEmpty()) return null
+    val pieces = value.split('.')
+    if (pieces.size !in 1..4 || pieces.any(String::isEmpty)) return null
+    val numbers = pieces.map { piece -> parseIpv4Number(piece) ?: return null }
+    if (numbers.dropLast(1).any { it > 255 }) return null
+    val lastBits = 8 * (5 - numbers.size)
+    val lastMaximum = (1L shl lastBits) - 1L
+    if (numbers.last() > lastMaximum) return null
+
+    var address = numbers.last()
+    numbers.dropLast(1).forEachIndexed { index, number ->
+        address = address or (number shl (8 * (3 - index)))
+    }
+    return address
+}
+
+private fun parseIpv4Number(piece: String): Long? {
+    val (digits, radix) = when {
+        piece.startsWith("0x", ignoreCase = true) && piece.length > 2 -> piece.drop(2) to 16
+        piece.length > 1 && piece.startsWith('0') -> piece.drop(1) to 8
+        else -> piece to 10
+    }
+    if (digits.isEmpty() || digits.length > 10) return null
+    return digits.toLongOrNull(radix)?.takeIf { it in 0..0xffff_ffffL }
+}
+
+private fun parseIpv6Literal(value: String): IntArray? {
+    if (!value.contains(':') || value.any { it !in "0123456789abcdef:." }) return null
+    var expanded = value
+    if (expanded.contains('.')) {
+        val separator = expanded.lastIndexOf(':')
+        if (separator < 0) return null
+        val ipv4 = parseIpv4Literal(expanded.substring(separator + 1)) ?: return null
+        expanded = expanded.substring(0, separator) +
+            ":${((ipv4 ushr 16) and 0xffff).toString(16)}:${(ipv4 and 0xffff).toString(16)}"
+    }
+
+    val compression = expanded.indexOf("::")
+    if (compression >= 0 && expanded.indexOf("::", compression + 2) >= 0) return null
+    val leftText = if (compression >= 0) expanded.substring(0, compression) else expanded
+    val rightText = if (compression >= 0) expanded.substring(compression + 2) else ""
+    val left = parseIpv6Words(leftText) ?: return null
+    val right = parseIpv6Words(rightText) ?: return null
+    val words = when {
+        compression < 0 && left.size == 8 -> left
+        compression >= 0 && left.size + right.size < 8 ->
+            left + List(8 - left.size - right.size) { 0 } + right
+        else -> return null
+    }
+    return words.toIntArray()
+}
+
+private fun parseIpv6Words(value: String): List<Int>? {
+    if (value.isEmpty()) return emptyList()
+    val words = value.split(':')
+    if (words.any { it.isEmpty() || it.length > 4 }) return null
+    return words.map { word -> word.toIntOrNull(16) ?: return null }
+}
+
+private const val MAX_NUMERIC_HOST_CHARS = 255
 
 internal data class OmniboxEditorDecision(
     val submit: Boolean,

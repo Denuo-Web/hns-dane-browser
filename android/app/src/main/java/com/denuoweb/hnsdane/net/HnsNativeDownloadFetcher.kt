@@ -30,15 +30,19 @@ internal class HnsNativeDownloadFetcher(
             if (response.statusCode in REDIRECT_STATUS_CODES) {
                 val location = response.headerValue("Location")
                     ?: run {
-                        response.bodyFile.delete()
+                        response.deleteBodyFile()
                         throw HnsNativeDownloadException("HNS download redirect did not include a Location header.")
                     }
                 val redirectedUrl = target.resolve(location)
-                response.bodyFile.delete()
+                response.deleteBodyFile()
                 currentUrl = redirectedUrl
                     ?: throw HnsNativeDownloadException("HNS download redirect target is invalid.")
-                if (HnsNativeDownloadTarget.parse(currentUrl) == null) {
+                val redirectedTarget = HnsNativeDownloadTarget.parse(currentUrl)
+                if (redirectedTarget == null) {
                     throw HnsNativeDownloadException("HNS download redirect left native HNS resolution scope.")
+                }
+                if (target.scheme == "https" && redirectedTarget.scheme == "http") {
+                    throw HnsNativeDownloadException("HNS download redirect attempted a secure transport downgrade.")
                 }
                 if (redirectIndex == MAX_HNS_DOWNLOAD_REDIRECTS) {
                     throw HnsNativeDownloadException("HNS download exceeded the redirect limit.")
@@ -47,7 +51,7 @@ internal class HnsNativeDownloadFetcher(
             }
 
             if (response.statusCode !in 200..299) {
-                response.bodyFile.delete()
+                response.deleteBodyFile()
                 throw HnsNativeDownloadException("HNS gateway returned HTTP ${response.statusCode} ${response.reason}.")
             }
             return response
@@ -88,8 +92,17 @@ internal class HnsNativeDownloadFetcher(
 
         val parsed = parseDownloadGatewayHttpResponseHead(bytes)
             ?: throw HnsNativeDownloadException("Native HNS gateway returned a malformed response.")
+        val responseBodyBytes = bytes.size - parsed.bodyStart
+        if (responseBodyBytes > MAX_HNS_DOWNLOAD_BODY_BYTES) {
+            throw HnsNativeDownloadException("HNS download response is too large.")
+        }
         val bodyFile = createBodyFile()
-        bodyFile.writeBytes(bytes.copyOfRange(parsed.bodyStart, bytes.size))
+        try {
+            bodyFile.writeBytes(bytes.copyOfRange(parsed.bodyStart, bytes.size))
+        } catch (error: Exception) {
+            bodyFile.delete()
+            throw error
+        }
         return HnsNativeDownloadResponse(
             finalUrl = finalUrl,
             statusCode = parsed.statusCode,
@@ -106,7 +119,7 @@ internal class HnsNativeDownloadFetcher(
     ): HnsNativeDownloadResponse {
         val parsed = parseDownloadGatewayHttpResponseHead(fileResponse.head)
             ?: run {
-                fileResponse.bodyFile.delete()
+                fileResponse.deleteBodyFile()
                 throw HnsNativeDownloadException("Native HNS gateway returned a malformed response.")
             }
         return HnsNativeDownloadResponse(
@@ -141,18 +154,72 @@ internal class HnsNativeDownloadFetcher(
     }
 
     private fun createBodyFile(): File {
-        val downloadDir = File(dataDir, "hns/downloads")
-        if (!downloadDir.exists() && !downloadDir.mkdirs()) {
-            throw HnsNativeDownloadException("Could not create HNS download staging directory.")
-        }
-        return File.createTempFile("hns-download-", ".body", downloadDir)
+        return HnsDownloadStagingStore.create(dataDir)
+            ?: throw HnsNativeDownloadException("Could not create HNS download staging file.")
     }
 
-    private companion object {
-        const val MAX_HNS_DOWNLOAD_REDIRECTS = 5
-        const val DEFAULT_NETWORK = "mainnet"
-        val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
+    companion object {
+        private const val MAX_HNS_DOWNLOAD_REDIRECTS = 5
+        internal const val MAX_HNS_DOWNLOAD_BODY_BYTES = 8 * 1024 * 1024
+        private const val DEFAULT_NETWORK = "mainnet"
+        private val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
+
+        internal fun pruneStaging(dataDir: File) {
+            HnsDownloadStagingStore.prune(dataDir)
+        }
     }
+}
+
+private object HnsDownloadStagingStore {
+    private const val PREFIX = "hns-download-"
+    private const val SUFFIX = ".body"
+    private const val MAX_FILES = 32
+    private const val MAX_TOTAL_BYTES = 256L * 1024 * 1024
+    private const val MAX_AGE_MILLIS = 24L * 60 * 60 * 1_000
+
+    @Synchronized
+    fun create(dataDir: File): File? {
+        val directory = File(dataDir, "hns/downloads")
+        if (!directory.exists() && !directory.mkdirs()) {
+            return null
+        }
+        pruneDirectory(directory)
+        val files = matchingFiles(directory)
+        if (
+            files.size >= MAX_FILES ||
+            files.sumOf { it.length() } > MAX_TOTAL_BYTES - HnsNativeDownloadFetcher.MAX_HNS_DOWNLOAD_BODY_BYTES
+        ) {
+            return null
+        }
+        return runCatching { File.createTempFile(PREFIX, SUFFIX, directory) }.getOrNull()
+    }
+
+    @Synchronized
+    fun prune(dataDir: File) {
+        pruneDirectory(File(dataDir, "hns/downloads"))
+    }
+
+    private fun pruneDirectory(directory: File, nowMillis: Long = System.currentTimeMillis()) {
+        if (!directory.isDirectory) return
+        var retained = 0
+        var retainedBytes = 0L
+        matchingFiles(directory).sortedByDescending(File::lastModified).forEach { file ->
+            val size = file.length()
+            val expired = nowMillis - file.lastModified() > MAX_AGE_MILLIS
+            val overBudget = retained >= MAX_FILES || retainedBytes > MAX_TOTAL_BYTES - size
+            if (expired || overBudget) {
+                file.delete()
+            } else if (file.isFile) {
+                retained += 1
+                retainedBytes += size
+            }
+        }
+    }
+
+    private fun matchingFiles(directory: File): List<File> =
+        directory.listFiles().orEmpty().filter {
+            it.isFile && it.name.startsWith(PREFIX) && it.name.endsWith(SUFFIX)
+        }
 }
 
 internal data class HnsNativeDownloadResponse(
@@ -165,6 +232,10 @@ internal data class HnsNativeDownloadResponse(
 ) {
     fun headerValue(name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+    fun deleteBodyFile() {
+        GatewayResponseBodyStore.release(bodyFile)
+    }
 }
 
 internal class HnsNativeDownloadException(message: String) : IOException(message)
@@ -186,10 +257,10 @@ private data class HnsNativeDownloadTarget(
             if (!HnsHostPolicy.requiresNativeGatewayResolution(host)) {
                 return null
             }
-            val port = when {
-                uri.port > 0 -> uri.port
-                scheme == "https" -> 443
-                else -> 80
+            val port = when (val explicitPort = uri.port) {
+                -1 -> if (scheme == "https") 443 else 80
+                in 1..65535 -> explicitPort
+                else -> return null
             }
             val rawPath = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
             val pathAndQuery = if (uri.rawQuery == null) rawPath else "$rawPath?${uri.rawQuery}"

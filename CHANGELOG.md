@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Security
+
+- Blocked native origin, authoritative DNS/DoH, and advertised P2P connections to non-public endpoints on mainnet/testnet, enforced the browser unsafe-port policy, and kept explicit regtest-only development exceptions.
+- Authenticated the randomized loopback proxy, limited it to the active HNS origin, blocked alternate loopback literals, made exported launcher input extra-blind, and required a user gesture before external-scheme intents.
+- Enforced same-origin redirect following, strict WebSocket handshake/frame/close validation, bounded WebSocket sessions and queues, bounded response/download/cache stores, and fail-closed Service Worker behavior when proxy authentication is unavailable.
+- Pinned and verified Rust, Gradle, Android, CI Action, dependency, and release-signing inputs; added read-only CI, Dependabot coverage, secret checks, strict lockfiles, and cryptographic AAB signer verification.
+
+### Fixed
+
+- Fixed native WebSocket upgrade headers and clean-close handling, HTTP/1 informational/framing/trailer parsing, HTTP/2 and HTTP/3 body/header limits and timeouts, unsafe pooled-request replay, and caller header normalization.
+- Fixed unchecked header-height arithmetic, JNI request/read length validation, stale or unbounded transport state, delegated DNS source validation, and complete current IANA/special-use name classification including `.internal`.
+- Fixed Android lifecycle leaks and sync/cache races, unbounded browser history/download fields, staged-file cleanup, oversized header-snapshot extraction, and release lint failures for experimental API opt-in and locale plural resources.
+
 ### Changed
 
 - Removed the ICANN DANE TXT-shadow compatibility fallback. The hardcoded ICANN DANE test host now uses native DNSSEC TLSA only, while delegated HNS authoritative DoH continues to use RFC 9461 `_dns.<nameserver>` SVCB discovery.

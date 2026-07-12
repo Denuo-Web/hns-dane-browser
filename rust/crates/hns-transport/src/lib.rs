@@ -13,8 +13,9 @@ use rustls::{
     ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, SignatureScheme,
 };
 use rustls::{Error as RustlsError, StreamOwned};
-use std::collections::{HashMap, VecDeque};
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::Hash;
 use std::io::{Read, Write};
 use std::net::{Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
@@ -23,8 +24,17 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const MAX_HTTP11_POOL_PER_ORIGIN: usize = 2;
+const MAX_HTTP11_POOL_ORIGINS: usize = 64;
+const MAX_TLS_POLICY_CACHE_ENTRIES: usize = 256;
+const MAX_ALT_SVC_CACHE_ENTRIES: usize = 256;
+const MAX_TLS_CAPTURE_ENTRIES: usize = 256;
+const MAX_INFORMATIONAL_RESPONSES: usize = 8;
+const MAX_HTTP_TRAILER_FIELDS: usize = 128;
 const MAX_ALT_SVC_AGE_SECS: u64 = 24 * 60 * 60;
 const TUNNEL_READ_TIMEOUT: Duration = Duration::from_millis(250);
+pub const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
+pub const DEFAULT_MAX_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OriginProtocol {
@@ -149,6 +159,29 @@ pub trait ReadWrite: Read + Write + Send {}
 
 impl<T: Read + Write + Send> ReadWrite for T {}
 
+struct CountingWriter<'a> {
+    inner: &'a mut dyn Write,
+    written: usize,
+}
+
+impl<'a> CountingWriter<'a> {
+    fn new(inner: &'a mut dyn Write) -> Self {
+        Self { inner, written: 0 }
+    }
+}
+
+impl Write for CountingWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.written = self.written.saturating_add(written);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 pub struct OriginTunnel {
     pub response_head: Vec<u8>,
     pub stream: Box<dyn ReadWrite>,
@@ -208,12 +241,26 @@ struct AltSvcEndpoint {
     expires_at: Instant,
 }
 
+type ParsedHttp11HeaderBlock = (String, u16, Vec<(String, String)>);
+
+fn evict_one_if_at_capacity<K, V>(map: &mut HashMap<K, V>, capacity: usize)
+where
+    K: Clone + Eq + Hash,
+{
+    if map.len() < capacity {
+        return;
+    }
+    if let Some(key) = map.keys().next().cloned() {
+        map.remove(&key);
+    }
+}
+
 impl Default for TransportLimits {
     fn default() -> Self {
         Self {
-            max_request_body_bytes: 1024 * 1024,
-            max_response_header_bytes: 64 * 1024,
-            max_response_body_bytes: 8 * 1024 * 1024,
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            max_response_header_bytes: DEFAULT_MAX_RESPONSE_HEADER_BYTES,
+            max_response_body_bytes: DEFAULT_MAX_RESPONSE_BODY_BYTES,
         }
     }
 }
@@ -328,13 +375,22 @@ impl TcpHttpTransport {
     ) -> Result<OriginResponseHead, TransportError> {
         validate_request(request, self.limits)?;
         let key = self.http11_pool_key(request);
-        if let Some(PooledHttp11Connection::Plain(mut stream)) = self.take_http11_connection(&key)
-            && let Ok((head, reusable)) = self.send_plain_http11(&mut stream, request, body)
-        {
-            if reusable {
-                self.put_http11_connection(key, PooledHttp11Connection::Plain(stream));
+        if let Some(PooledHttp11Connection::Plain(mut stream)) = self.take_http11_connection(&key) {
+            let mut attempted_body = CountingWriter::new(body);
+            match self.send_plain_http11(&mut stream, request, &mut attempted_body) {
+                Ok((head, reusable)) => {
+                    if reusable {
+                        self.put_http11_connection(key, PooledHttp11Connection::Plain(stream));
+                    }
+                    return Ok(head);
+                }
+                Err(error)
+                    if attempted_body.written > 0 || !is_safe_retry_method(&request.method) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => {}
             }
-            return Ok(head);
         }
 
         let connection_host = request.connect_host.as_deref().unwrap_or(&request.host);
@@ -380,21 +436,31 @@ impl TcpHttpTransport {
             dane_decision,
             tls_inspection,
         }) = self.take_http11_connection(&key)
-            && let Ok((mut head, reusable)) = self.send_tls_http11(stream.as_mut(), request, body)
         {
-            head.dane_decision = dane_decision.clone();
-            head.tls_inspection = tls_inspection.clone();
-            if reusable {
-                self.put_http11_connection(
-                    key,
-                    PooledHttp11Connection::Tls {
-                        stream,
-                        dane_decision,
-                        tls_inspection,
-                    },
-                );
+            let mut attempted_body = CountingWriter::new(body);
+            match self.send_tls_http11(stream.as_mut(), request, &mut attempted_body) {
+                Ok((mut head, reusable)) => {
+                    head.dane_decision = dane_decision.clone();
+                    head.tls_inspection = tls_inspection.clone();
+                    if reusable {
+                        self.put_http11_connection(
+                            key,
+                            PooledHttp11Connection::Tls {
+                                stream,
+                                dane_decision,
+                                tls_inspection,
+                            },
+                        );
+                    }
+                    return Ok(head);
+                }
+                Err(error)
+                    if attempted_body.written > 0 || !is_safe_retry_method(&request.method) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => {}
             }
-            return Ok(head);
         }
 
         let connection_host = request.connect_host.as_deref().unwrap_or(&request.host);
@@ -490,7 +556,11 @@ impl TcpHttpTransport {
             return Err(TransportError::UnsupportedTransport);
         }
 
-        let (mut sender, connection) = h2::client::handshake(tls_stream).await.map_err(h2_error)?;
+        let mut h2_builder = h2::client::Builder::new();
+        h2_builder.max_header_list_size(
+            self.limits.max_response_header_bytes.min(u32::MAX as usize) as u32,
+        );
+        let (mut sender, connection) = h2_builder.handshake(tls_stream).await.map_err(h2_error)?;
         let connection_task = tokio::spawn(connection);
         let h2_request = build_http2_request(request)?;
         let end_stream = request.body.is_empty();
@@ -505,13 +575,16 @@ impl TcpHttpTransport {
 
         let response = response.await.map_err(h2_error)?;
         let status = response.status().as_u16();
-        let headers = http2_response_headers(response.headers())?;
+        let headers =
+            http2_response_headers(response.headers(), self.limits.max_response_header_bytes)?;
         if transfer_encoding(&headers)?.is_some() {
             return Err(TransportError::MalformedResponse);
         }
         let expected_body_len = content_length(&headers)?;
         let mut response_body = response.into_body();
-        let body_len = if response_has_no_body(&request.method, status) {
+        let no_body = response_has_no_body(&request.method, status);
+        let body_len = if no_body {
+            ensure_http2_body_empty(&mut response_body).await?;
             0
         } else {
             read_http2_body_to_writer(
@@ -521,7 +594,7 @@ impl TcpHttpTransport {
             )
             .await?
         };
-        if expected_body_len.is_some_and(|expected| expected != body_len) {
+        if !no_body && expected_body_len.is_some_and(|expected| expected != body_len) {
             return Err(TransportError::MalformedResponse);
         }
         connection_task.abort();
@@ -635,12 +708,20 @@ impl TcpHttpTransport {
         .await?
         .map_err(h3_stream_error)?;
         let status = response.status().as_u16();
-        let headers = http2_response_headers(response.headers())?;
+        let headers =
+            http2_response_headers(response.headers(), self.limits.max_response_header_bytes)?;
         if transfer_encoding(&headers)?.is_some() {
             return Err(TransportError::MalformedResponse);
         }
         let expected_body_len = content_length(&headers)?;
-        let body_len = if response_has_no_body(&request.method, status) {
+        let no_body = response_has_no_body(&request.method, status);
+        let body_len = if no_body {
+            http3_timeout(
+                self.read_timeout,
+                "receive empty response body",
+                ensure_http3_body_empty(&mut request_stream),
+            )
+            .await??;
             0
         } else {
             http3_timeout(
@@ -654,7 +735,7 @@ impl TcpHttpTransport {
             )
             .await??
         };
-        if expected_body_len.is_some_and(|expected| expected != body_len) {
+        if !no_body && expected_body_len.is_some_and(|expected| expected != body_len) {
             return Err(TransportError::MalformedResponse);
         }
 
@@ -699,6 +780,9 @@ impl TcpHttpTransport {
             .set_write_timeout(Some(self.read_timeout))
             .map_err(io_error)?;
         let response_head = self.send_http11_upgrade(&mut stream, request)?;
+        stream
+            .set_read_timeout(Some(TUNNEL_READ_TIMEOUT))
+            .map_err(io_error)?;
         Ok(OriginTunnel {
             response_head,
             stream: Box::new(stream),
@@ -780,6 +864,9 @@ impl TcpHttpTransport {
         .build()
         .map_err(|error| TransportError::Tls(error.to_string()))?;
         let verifier = Arc::new(DaneServerCertVerifier::new(webpki, tls));
+        if !state.tls_verifiers.contains_key(tls_key) {
+            evict_one_if_at_capacity(&mut state.tls_verifiers, MAX_TLS_POLICY_CACHE_ENTRIES);
+        }
         state
             .tls_verifiers
             .insert(tls_key.to_owned(), Arc::clone(&verifier));
@@ -796,6 +883,9 @@ impl TcpHttpTransport {
             .state
             .lock()
             .map_err(|_| TransportError::Tls("transport state lock is poisoned".to_owned()))?;
+        if !state.tls_resumption.contains_key(&key) {
+            evict_one_if_at_capacity(&mut state.tls_resumption, MAX_TLS_POLICY_CACHE_ENTRIES);
+        }
         Ok(state
             .tls_resumption
             .entry(key)
@@ -818,16 +908,19 @@ impl TcpHttpTransport {
     }
 
     fn take_http11_connection(&self, key: &Http11PoolKey) -> Option<PooledHttp11Connection> {
-        self.state
-            .lock()
-            .ok()?
-            .http11_pool
-            .get_mut(key)
-            .and_then(VecDeque::pop_front)
+        let mut state = self.state.lock().ok()?;
+        let connection = state.http11_pool.get_mut(key).and_then(VecDeque::pop_front);
+        if state.http11_pool.get(key).is_some_and(VecDeque::is_empty) {
+            state.http11_pool.remove(key);
+        }
+        connection
     }
 
     fn put_http11_connection(&self, key: Http11PoolKey, connection: PooledHttp11Connection) {
         if let Ok(mut state) = self.state.lock() {
+            if !state.http11_pool.contains_key(&key) {
+                evict_one_if_at_capacity(&mut state.http11_pool, MAX_HTTP11_POOL_ORIGINS);
+            }
             let pool = state.http11_pool.entry(key).or_default();
             if pool.len() >= MAX_HTTP11_POOL_PER_ORIGIN {
                 pool.pop_front();
@@ -847,15 +940,16 @@ impl TcpHttpTransport {
             host: request.host.to_ascii_lowercase(),
             port: request.port,
         };
-        let Some(endpoint) = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|state| state.alt_svc.get(&key).cloned())
-        else {
+        let now = Instant::now();
+        let Some(endpoint) = self.state.lock().ok().and_then(|mut state| {
+            state
+                .alt_svc
+                .retain(|_, endpoint| endpoint.expires_at > now);
+            state.alt_svc.get(&key).cloned()
+        }) else {
             return request.clone();
         };
-        if endpoint.expires_at <= Instant::now() || endpoint.port != request.port {
+        if endpoint.port != request.port {
             return request.clone();
         }
         let mut promoted = request.clone();
@@ -893,6 +987,13 @@ impl TcpHttpTransport {
             return;
         };
         if let Ok(mut state) = self.state.lock() {
+            let now = Instant::now();
+            state
+                .alt_svc
+                .retain(|_, endpoint| endpoint.expires_at > now);
+            if !state.alt_svc.contains_key(&key) {
+                evict_one_if_at_capacity(&mut state.alt_svc, MAX_ALT_SVC_CACHE_ENTRIES);
+            }
             state.alt_svc.insert(key, endpoint);
         }
     }
@@ -1015,8 +1116,12 @@ impl DaneServerCertVerifier {
 
     fn begin_handshake(&self, server_name: &str) {
         if let Ok(mut handshakes) = self.handshakes.lock() {
+            let thread_id = std::thread::current().id();
+            if !handshakes.contains_key(&thread_id) {
+                evict_one_if_at_capacity(&mut handshakes, MAX_TLS_CAPTURE_ENTRIES);
+            }
             handshakes.insert(
-                std::thread::current().id(),
+                thread_id,
                 HandshakeCapture {
                     server_name: server_name.to_ascii_lowercase(),
                     ..HandshakeCapture::default()
@@ -1076,6 +1181,9 @@ impl DaneServerCertVerifier {
             .lock()
             .map_err(|_| RustlsError::General("TLS handshake cache lock is poisoned".to_owned()))?;
         if !capture.server_name.is_empty() {
+            if !last_success.contains_key(&capture.server_name) {
+                evict_one_if_at_capacity(&mut last_success, MAX_TLS_CAPTURE_ENTRIES);
+            }
             last_success.insert(capture.server_name.clone(), capture);
         }
         Ok(())
@@ -1236,6 +1344,7 @@ async fn resolve_socket_addr_async(host: &str, port: u16) -> Result<SocketAddr, 
 }
 
 fn build_http2_request(request: &OriginRequest) -> Result<Http2Request<()>, TransportError> {
+    let nominated_headers = connection_nominated_headers(&request.headers)?;
     let authority = host_header(&request.host, request.port, &request.scheme);
     let uri = format!(
         "{}://{}{}",
@@ -1250,11 +1359,14 @@ fn build_http2_request(request: &OriginRequest) -> Result<Http2Request<()>, Tran
         .map_err(|_| TransportError::InvalidRequest)?;
     {
         let headers = h2_request.headers_mut();
-        headers.insert(
-            HeaderName::from_static("user-agent"),
-            HeaderValue::from_static(concat!("hns-dane-browser/", env!("CARGO_PKG_VERSION"))),
-        );
-        if !has_header(&request.headers, "accept") {
+        if !has_header(&request.headers, "user-agent") && !nominated_headers.contains("user-agent")
+        {
+            headers.insert(
+                HeaderName::from_static("user-agent"),
+                HeaderValue::from_static(concat!("hns-dane-browser/", env!("CARGO_PKG_VERSION"))),
+            );
+        }
+        if !has_header(&request.headers, "accept") && !nominated_headers.contains("accept") {
             headers.insert(
                 HeaderName::from_static("accept"),
                 HeaderValue::from_static("*/*"),
@@ -1262,6 +1374,7 @@ fn build_http2_request(request: &OriginRequest) -> Result<Http2Request<()>, Tran
         }
         for (name, value) in &request.headers {
             if is_hop_by_hop_header(name)
+                || nominated_headers.contains(&name.to_ascii_lowercase())
                 || name.eq_ignore_ascii_case("host")
                 || name.eq_ignore_ascii_case("content-length")
             {
@@ -1278,19 +1391,27 @@ fn build_http2_request(request: &OriginRequest) -> Result<Http2Request<()>, Tran
 
 fn http2_response_headers(
     headers: &http::HeaderMap<HeaderValue>,
+    limit: usize,
 ) -> Result<Vec<(String, String)>, TransportError> {
-    headers
-        .iter()
-        .map(|(name, value)| {
-            Ok((
-                name.as_str().to_owned(),
-                value
-                    .to_str()
-                    .map_err(|_| TransportError::MalformedResponse)?
-                    .to_owned(),
-            ))
-        })
-        .collect()
+    let mut total = 0usize;
+    let mut parsed = Vec::with_capacity(headers.len());
+    for (name, value) in headers {
+        // RFC 9113's field section size includes 32 bytes of per-field overhead.
+        total = total
+            .checked_add(name.as_str().len())
+            .and_then(|size| size.checked_add(value.as_bytes().len()))
+            .and_then(|size| size.checked_add(32))
+            .filter(|size| *size <= limit)
+            .ok_or(TransportError::ResponseTooLarge)?;
+        let value = value
+            .to_str()
+            .map_err(|_| TransportError::MalformedResponse)?;
+        if !is_valid_http_field_value(value) {
+            return Err(TransportError::MalformedResponse);
+        }
+        parsed.push((name.as_str().to_owned(), value.to_owned()));
+    }
+    Ok(parsed)
 }
 
 async fn read_http2_body_to_writer(
@@ -1311,6 +1432,21 @@ async fn read_http2_body_to_writer(
     Ok(total)
 }
 
+async fn ensure_http2_body_empty(stream: &mut h2::RecvStream) -> Result<(), TransportError> {
+    while let Some(chunk) = stream.data().await {
+        let chunk = chunk.map_err(h2_error)?;
+        let chunk_len = chunk.len();
+        stream
+            .flow_control()
+            .release_capacity(chunk_len)
+            .map_err(h2_error)?;
+        if chunk_len != 0 {
+            return Err(TransportError::MalformedResponse);
+        }
+    }
+    Ok(())
+}
+
 async fn read_http3_body_to_writer<S>(
     stream: &mut h3::client::RequestStream<S, Bytes>,
     limit: usize,
@@ -1327,6 +1463,20 @@ where
         body.write_all(&bytes).map_err(io_error)?;
     }
     Ok(total)
+}
+
+async fn ensure_http3_body_empty<S>(
+    stream: &mut h3::client::RequestStream<S, Bytes>,
+) -> Result<(), TransportError>
+where
+    S: h3::quic::RecvStream,
+{
+    while let Some(chunk) = stream.recv_data().await.map_err(h3_stream_error)? {
+        if chunk.remaining() != 0 {
+            return Err(TransportError::MalformedResponse);
+        }
+    }
+    Ok(())
 }
 
 async fn http3_timeout<T>(
@@ -1393,10 +1543,20 @@ fn validate_request_common(
     }
 
     for (name, value) in &request.headers {
-        if !is_http_token(name) || value.bytes().any(|byte| byte == b'\r' || byte == b'\n') {
+        if !is_http_token(name) || !is_valid_http_field_value(value) {
             return Err(TransportError::InvalidRequest);
         }
     }
+    if request
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+        .count()
+        > 1
+    {
+        return Err(TransportError::InvalidRequest);
+    }
+    connection_nominated_headers(&request.headers)?;
 
     Ok(())
 }
@@ -1413,25 +1573,33 @@ fn build_http_request(
     request: &OriginRequest,
     keep_alive: bool,
 ) -> Result<Vec<u8>, TransportError> {
+    let nominated_headers = connection_nominated_headers(&request.headers)?;
     let mut out = Vec::new();
     write!(
         out,
-        concat!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: hns-dane-browser/",
-            env!("CARGO_PKG_VERSION"),
-            "\r\n",
-        ),
+        "{} {} HTTP/1.1\r\nHost: {}\r\n",
         request.method.to_ascii_uppercase(),
         request.path_and_query,
         host_header(&request.host, request.port, &request.scheme),
     )
     .map_err(io_error)?;
-    if !has_header(&request.headers, "accept") {
+    if !has_header(&request.headers, "user-agent") && !nominated_headers.contains("user-agent") {
+        out.extend_from_slice(
+            concat!(
+                "User-Agent: hns-dane-browser/",
+                env!("CARGO_PKG_VERSION"),
+                "\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if !has_header(&request.headers, "accept") && !nominated_headers.contains("accept") {
         out.extend(b"Accept: */*\r\n");
     }
 
     for (name, value) in &request.headers {
         if is_hop_by_hop_header(name)
+            || nominated_headers.contains(&name.to_ascii_lowercase())
             || name.eq_ignore_ascii_case("host")
             || name.eq_ignore_ascii_case("content-length")
         {
@@ -1457,20 +1625,27 @@ fn build_http_request(
 }
 
 fn build_http_upgrade_request(request: &OriginRequest) -> Result<Vec<u8>, TransportError> {
+    let nominated_headers = connection_nominated_headers(&request.headers)?;
     let mut out = Vec::new();
     write!(
         out,
-        concat!(
-            "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: hns-dane-browser/",
-            env!("CARGO_PKG_VERSION"),
-            "\r\n",
-        ),
+        "{} {} HTTP/1.1\r\nHost: {}\r\n",
         request.method.to_ascii_uppercase(),
         request.path_and_query,
         host_header(&request.host, request.port, &request.scheme),
     )
     .map_err(io_error)?;
-    if !has_header(&request.headers, "accept") {
+    if !has_header(&request.headers, "user-agent") && !nominated_headers.contains("user-agent") {
+        out.extend_from_slice(
+            concat!(
+                "User-Agent: hns-dane-browser/",
+                env!("CARGO_PKG_VERSION"),
+                "\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if !has_header(&request.headers, "accept") && !nominated_headers.contains("accept") {
         out.extend(b"Accept: */*\r\n");
     }
 
@@ -1480,6 +1655,11 @@ fn build_http_upgrade_request(request: &OriginRequest) -> Result<Vec<u8>, Transp
         if name.eq_ignore_ascii_case("host")
             || name.eq_ignore_ascii_case("content-length")
             || name.eq_ignore_ascii_case("proxy-connection")
+            || (is_hop_by_hop_header(name)
+                && !name.eq_ignore_ascii_case("connection")
+                && !name.eq_ignore_ascii_case("upgrade"))
+            || (nominated_headers.contains(&name.to_ascii_lowercase())
+                && !name.eq_ignore_ascii_case("upgrade"))
         {
             continue;
         }
@@ -1526,36 +1706,46 @@ fn parse_http_response_to_writer_reusable(
     request_method: &str,
     body: &mut dyn Write,
 ) -> Result<(OriginResponseHead, bool), TransportError> {
-    let header_bytes = read_header_bytes(stream, limits.max_response_header_bytes)?;
-    let header_text =
-        std::str::from_utf8(&header_bytes).map_err(|_| TransportError::MalformedResponse)?;
-    let mut lines = header_text.split("\r\n");
-    let status_line = lines.next().ok_or(TransportError::MalformedResponse)?;
-    let mut status_parts = status_line.splitn(3, ' ');
-    let version = status_parts
-        .next()
-        .ok_or(TransportError::MalformedResponse)?;
-    let status = status_parts
-        .next()
-        .ok_or(TransportError::MalformedResponse)?
-        .parse::<u16>()
-        .map_err(|_| TransportError::MalformedResponse)?;
-    if !version.starts_with("HTTP/") || !(100..=999).contains(&status) {
-        return Err(TransportError::MalformedResponse);
-    }
-
-    let mut headers = Vec::new();
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or(TransportError::MalformedResponse)?;
-        let name = name.trim().to_owned();
-        let value = value.trim().to_owned();
-        if !is_http_token(&name) {
-            return Err(TransportError::MalformedResponse);
+    let mut remaining_header_bytes = limits.max_response_header_bytes;
+    let mut informational_count = 0usize;
+    let (version, status, headers) = loop {
+        let header_bytes = read_header_bytes(stream, remaining_header_bytes)?;
+        remaining_header_bytes = remaining_header_bytes
+            .checked_sub(
+                header_bytes
+                    .len()
+                    .checked_add(4)
+                    .ok_or(TransportError::ResponseTooLarge)?,
+            )
+            .ok_or(TransportError::ResponseTooLarge)?;
+        let (version, status, headers) = parse_http11_header_block(&header_bytes)?;
+        if (100..200).contains(&status) {
+            if status == 101 {
+                return Err(TransportError::UnsupportedUpgrade);
+            }
+            if remaining_header_bytes == 0 {
+                return Err(TransportError::ResponseTooLarge);
+            }
+            if headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
+            {
+                return Err(TransportError::MalformedResponse);
+            }
+            if headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            {
+                return Err(TransportError::MalformedResponse);
+            }
+            informational_count = informational_count.saturating_add(1);
+            if informational_count > MAX_INFORMATIONAL_RESPONSES {
+                return Err(TransportError::MalformedResponse);
+            }
+            continue;
         }
-        headers.push((name, value));
-    }
+        break (version, status, headers);
+    };
 
     let mut self_delimited = response_has_no_body(request_method, status);
     let body_len = if self_delimited {
@@ -1568,7 +1758,12 @@ fn parse_http_response_to_writer_reusable(
             return Err(TransportError::UnsupportedTransferEncoding);
         }
         self_delimited = true;
-        read_chunked_body_to_writer(stream, limits.max_response_body_bytes, body)?
+        read_chunked_body_to_writer(
+            stream,
+            limits.max_response_body_bytes,
+            remaining_header_bytes,
+            body,
+        )?
     } else if let Some(length) = content_length(&headers)? {
         self_delimited = true;
         read_fixed_body_to_writer(stream, length, limits.max_response_body_bytes, body)?
@@ -1590,11 +1785,60 @@ fn parse_http_response_to_writer_reusable(
     ))
 }
 
+fn parse_http11_header_block(
+    header_bytes: &[u8],
+) -> Result<ParsedHttp11HeaderBlock, TransportError> {
+    let header_text =
+        std::str::from_utf8(header_bytes).map_err(|_| TransportError::MalformedResponse)?;
+    let mut lines = header_text.split("\r\n");
+    let status_line = lines.next().ok_or(TransportError::MalformedResponse)?;
+    let mut status_parts = status_line.splitn(3, ' ');
+    let version = status_parts
+        .next()
+        .ok_or(TransportError::MalformedResponse)?;
+    let status = status_parts
+        .next()
+        .ok_or(TransportError::MalformedResponse)?
+        .parse::<u16>()
+        .map_err(|_| TransportError::MalformedResponse)?;
+    if !matches!(version, "HTTP/1.0" | "HTTP/1.1") || !(100..=999).contains(&status) {
+        return Err(TransportError::MalformedResponse);
+    }
+
+    let mut headers = Vec::new();
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or(TransportError::MalformedResponse)?;
+        if name != name.trim() {
+            return Err(TransportError::MalformedResponse);
+        }
+        let name = name.to_owned();
+        let value = value.trim().to_owned();
+        if !is_http_token(&name) || !is_valid_http_field_value(&value) {
+            return Err(TransportError::MalformedResponse);
+        }
+        headers.push((name, value));
+    }
+
+    Ok((version.to_owned(), status, headers))
+}
+
 fn response_has_no_body(request_method: &str, status: u16) -> bool {
     request_method.eq_ignore_ascii_case("HEAD")
         || (100..200).contains(&status)
         || status == 204
         || status == 304
+}
+
+fn is_safe_retry_method(method: &str) -> bool {
+    matches_ignore_ascii_case(method, &["GET", "HEAD", "OPTIONS", "TRACE"])
+}
+
+fn matches_ignore_ascii_case(value: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
 fn read_header_bytes(stream: &mut impl Read, limit: usize) -> Result<Vec<u8>, TransportError> {
@@ -1654,7 +1898,7 @@ fn validate_upgrade_response_head(response_head: &[u8]) -> Result<(), TransportE
         .ok_or(TransportError::MalformedResponse)?
         .parse::<u16>()
         .map_err(|_| TransportError::MalformedResponse)?;
-    if !version.starts_with("HTTP/") || status != 101 {
+    if !matches!(version, "HTTP/1.0" | "HTTP/1.1") || status != 101 {
         return Err(TransportError::MalformedResponse);
     }
 
@@ -1663,7 +1907,14 @@ fn validate_upgrade_response_head(response_head: &[u8]) -> Result<(), TransportE
         let (name, value) = line
             .split_once(':')
             .ok_or(TransportError::MalformedResponse)?;
-        headers.push((name.trim().to_owned(), value.trim().to_owned()));
+        if name != name.trim() {
+            return Err(TransportError::MalformedResponse);
+        }
+        let value = value.trim();
+        if !is_http_token(name) || !is_valid_http_field_value(value) {
+            return Err(TransportError::MalformedResponse);
+        }
+        headers.push((name.to_owned(), value.to_owned()));
     }
     if !headers.iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("connection") && has_header_token(value, "upgrade")
@@ -1710,6 +1961,7 @@ fn read_until_eof_to_writer(
 fn read_chunked_body_to_writer(
     stream: &mut impl Read,
     limit: usize,
+    trailer_limit: usize,
     body: &mut dyn Write,
 ) -> Result<usize, TransportError> {
     let mut total = 0usize;
@@ -1725,7 +1977,7 @@ fn read_chunked_body_to_writer(
             usize::from_str_radix(size_text, 16).map_err(|_| TransportError::MalformedResponse)?;
 
         if size == 0 {
-            read_trailers(stream)?;
+            read_trailers(stream, trailer_limit)?;
             return Ok(total);
         }
 
@@ -1761,10 +2013,37 @@ fn checked_body_len(current: usize, chunk: usize, limit: usize) -> Result<usize,
         .ok_or(TransportError::ResponseTooLarge)
 }
 
-fn read_trailers(stream: &mut impl Read) -> Result<(), TransportError> {
+fn read_trailers(stream: &mut impl Read, limit: usize) -> Result<(), TransportError> {
+    let mut remaining = limit;
+    let mut fields = 0usize;
     loop {
-        if read_crlf_line(stream, 8192)?.is_empty() {
+        let line = read_crlf_line(stream, remaining)?;
+        remaining = remaining
+            .checked_sub(
+                line.len()
+                    .checked_add(2)
+                    .ok_or(TransportError::ResponseTooLarge)?,
+            )
+            .ok_or(TransportError::ResponseTooLarge)?;
+        if line.is_empty() {
             return Ok(());
+        }
+        fields = fields.saturating_add(1);
+        if fields > MAX_HTTP_TRAILER_FIELDS {
+            return Err(TransportError::ResponseTooLarge);
+        }
+        let (name, value) = line
+            .split_once(':')
+            .ok_or(TransportError::MalformedResponse)?;
+        if name != name.trim()
+            || !is_http_token(name)
+            || !is_valid_http_field_value(value.trim())
+            || matches!(
+                name.to_ascii_lowercase().as_str(),
+                "content-length" | "transfer-encoding" | "trailer"
+            )
+        {
+            return Err(TransportError::MalformedResponse);
         }
     }
 }
@@ -1860,6 +2139,24 @@ fn is_hop_by_hop_header(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+fn connection_nominated_headers(
+    headers: &[(String, String)],
+) -> Result<HashSet<String>, TransportError> {
+    let mut nominated = HashSet::new();
+    for (_, value) in headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("connection"))
+    {
+        for token in value.split(',').map(str::trim) {
+            if token.is_empty() || !is_http_token(token) {
+                return Err(TransportError::InvalidRequest);
+            }
+            nominated.insert(token.to_ascii_lowercase());
+        }
+    }
+    Ok(nominated)
 }
 
 fn is_protocol_upgrade(headers: &[(String, String)]) -> bool {
@@ -1981,9 +2278,11 @@ fn tls_validation_key(tls: &TlsValidation) -> String {
 }
 
 fn append_hash_hex(out: &mut String, bytes: &[u8]) {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    out.push_str(&format!("{:016x}", hasher.finish()));
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in Sha256::digest(bytes) {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
 }
 
 fn alpn_key(alpn_protocols: &[Vec<u8>]) -> String {
@@ -2016,6 +2315,12 @@ fn is_http_token(value: &str) -> bool {
                         | b'~'
                 )
         })
+}
+
+fn is_valid_http_field_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || byte >= b' ' && byte != 0x7f)
 }
 
 fn is_valid_host(host: &str) -> bool {
@@ -2139,6 +2444,41 @@ mod tests {
     }
 
     #[test]
+    fn consumes_informational_responses_before_final_response() {
+        let server = TestServer::start(
+            b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
+                .to_vec(),
+        );
+        let transport = TcpHttpTransport::default();
+
+        let response = transport.fetch(&request(server.address)).unwrap();
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"ok");
+    }
+
+    #[test]
+    fn rejects_trailers_exceeding_remaining_header_budget() {
+        let server = TestServer::start(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX-Long: 123456789012345678901234567890\r\n\r\n"
+                .to_vec(),
+        );
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits {
+                max_response_header_bytes: 64,
+                ..TransportLimits::default()
+            },
+        );
+
+        assert_eq!(
+            transport.fetch(&request(server.address)).unwrap_err(),
+            TransportError::ResponseTooLarge
+        );
+    }
+
+    #[test]
     fn streams_response_body_to_writer() {
         let body = vec![b'a'; 128 * 1024];
         let mut response = format!(
@@ -2195,6 +2535,109 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert!(requests[0].contains("Connection: keep-alive\r\n"));
         assert!(requests[1].contains("Connection: keep-alive\r\n"));
+    }
+
+    #[test]
+    fn does_not_retry_a_partial_response_from_a_pooled_connection() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (retry_tx, retry_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_test_http_head(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            stream.flush().unwrap();
+
+            let _ = read_test_http_head(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n4\r\ncd",
+                )
+                .unwrap();
+            stream.flush().unwrap();
+            drop(stream);
+
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(400);
+            let mut retried = false;
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((_stream, _)) => {
+                        retried = true;
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("retry listener failed: {error}"),
+                }
+            }
+            retry_tx.send(retried).unwrap();
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+
+        assert_eq!(transport.fetch(&request(address)).unwrap().body, b"ok");
+        let mut streamed = Vec::new();
+        assert!(
+            transport
+                .fetch_to_writer(&request(address), &mut streamed)
+                .is_err()
+        );
+
+        assert_eq!(streamed, b"ab");
+        assert!(!retry_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+    }
+
+    #[test]
+    fn does_not_replay_an_unsafe_method_after_a_stale_pooled_connection() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (retry_tx, retry_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_test_http_head(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .unwrap();
+            stream.flush().unwrap();
+            drop(stream);
+
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(400);
+            let mut retried = false;
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((_stream, _)) => {
+                        retried = true;
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("retry listener failed: {error}"),
+                }
+            }
+            retry_tx.send(retried).unwrap();
+        });
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+
+        assert_eq!(transport.fetch(&request(address)).unwrap().body, b"ok");
+        let mut post = request(address);
+        post.method = "POST".to_owned();
+        post.body = b"state change".to_vec();
+        assert!(transport.fetch(&post).is_err());
+
+        assert!(!retry_rx.recv_timeout(Duration::from_secs(1)).unwrap());
     }
 
     #[test]
@@ -2371,6 +2814,78 @@ mod tests {
     }
 
     #[test]
+    fn caller_user_agent_replaces_transport_default() {
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        request
+            .headers
+            .push(("User-Agent".to_owned(), "Browser-UA/1".to_owned()));
+
+        let http11 = String::from_utf8(build_http_request(&request, false).unwrap()).unwrap();
+        assert_eq!(http11.matches("User-Agent:").count(), 1);
+        assert!(http11.contains("User-Agent: Browser-UA/1\r\n"));
+        assert!(!http11.contains("User-Agent: hns-dane-browser/"));
+
+        request.scheme = "https".to_owned();
+        request.port = 443;
+        let http2 = build_http2_request(&request).unwrap();
+        let user_agents = http2
+            .headers()
+            .get_all("user-agent")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(user_agents, vec!["Browser-UA/1"]);
+    }
+
+    #[test]
+    fn strips_fields_nominated_by_connection_header() {
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        request.headers.extend([
+            ("Connection".to_owned(), "close, X-Internal".to_owned()),
+            ("X-Internal".to_owned(), "secret".to_owned()),
+            ("X-End-To-End".to_owned(), "visible".to_owned()),
+        ]);
+
+        let http11 = String::from_utf8(build_http_request(&request, false).unwrap()).unwrap();
+        assert!(!http11.contains("X-Internal:"));
+        assert!(http11.contains("X-End-To-End: visible\r\n"));
+
+        request.scheme = "https".to_owned();
+        request.port = 443;
+        let http2 = build_http2_request(&request).unwrap();
+        assert!(!http2.headers().contains_key("x-internal"));
+        assert_eq!(http2.headers()["x-end-to-end"], "visible");
+    }
+
+    #[test]
+    fn upgrade_keeps_required_headers_but_strips_other_nominated_fields() {
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        request.headers.extend([
+            ("Connection".to_owned(), "Upgrade, X-Internal".to_owned()),
+            ("Upgrade".to_owned(), "websocket".to_owned()),
+            ("X-Internal".to_owned(), "secret".to_owned()),
+        ]);
+
+        let text = String::from_utf8(build_http_upgrade_request(&request).unwrap()).unwrap();
+        assert!(text.contains("Connection: Upgrade, X-Internal\r\n"));
+        assert!(text.contains("Upgrade: websocket\r\n"));
+        assert!(!text.contains("X-Internal: secret\r\n"));
+    }
+
+    #[test]
+    fn rejects_malformed_connection_header_tokens() {
+        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        request
+            .headers
+            .push(("Connection".to_owned(), "close, bad token".to_owned()));
+
+        assert_eq!(
+            validate_request(&request, TransportLimits::default()).unwrap_err(),
+            TransportError::InvalidRequest,
+        );
+    }
+
+    #[test]
     fn rejects_protocol_upgrade_before_stripping_hop_by_hop_headers() {
         let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
         request
@@ -2484,6 +2999,27 @@ mod tests {
     }
 
     #[test]
+    fn accepts_http2_head_content_length_without_response_data() {
+        let server = TlsTestServer::start_h2();
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            TransportLimits::default(),
+        );
+        let mut request = request(server.address);
+        request.method = "HEAD".to_owned();
+        request.scheme = "https".to_owned();
+        request.protocol = OriginProtocol::Http2;
+        request.tls = TlsValidation::hns_strict(true, vec![tlsa_spki_exact(&server.cert_der)]);
+
+        let response = transport.fetch(&request).unwrap();
+
+        assert_eq!(response.status, 200);
+        assert!(response.body.is_empty());
+        assert!(server.request().starts_with("HEAD https://example.com:"));
+    }
+
+    #[test]
     fn fetches_https_http3_with_dnssec_tlsa_match() {
         let server = TlsTestServer::start_h3();
         let transport = TcpHttpTransport::new(
@@ -2507,6 +3043,27 @@ mod tests {
         let request_text = server.request();
         assert!(request_text.starts_with("GET https://example.com:"));
         assert!(request_text.ends_with("/path?q=1"));
+    }
+
+    #[test]
+    fn accepts_http3_head_content_length_without_response_data() {
+        let server = TlsTestServer::start_h3();
+        let transport = TcpHttpTransport::new(
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            TransportLimits::default(),
+        );
+        let mut request = request(server.address);
+        request.method = "HEAD".to_owned();
+        request.scheme = "https".to_owned();
+        request.protocol = OriginProtocol::Http3;
+        request.tls = TlsValidation::hns_strict(true, vec![tlsa_spki_exact(&server.cert_der)]);
+
+        let response = transport.fetch(&request).unwrap();
+
+        assert_eq!(response.status, 200);
+        assert!(response.body.is_empty());
+        assert!(server.request().starts_with("HEAD https://example.com:"));
     }
 
     #[test]
@@ -2578,15 +3135,51 @@ mod tests {
     #[test]
     fn rejects_invalid_request_header() {
         let transport = TcpHttpTransport::default();
-        let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
-        request
+        let mut invalid_name_request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+        invalid_name_request
             .headers
             .push(("Bad\r\nHeader".to_owned(), "x".to_owned()));
 
         assert_eq!(
-            transport.fetch(&request).unwrap_err(),
+            transport.fetch(&invalid_name_request).unwrap_err(),
             TransportError::InvalidRequest,
         );
+
+        for value in ["safe\0smuggled", "safe\u{7f}smuggled", "safe\u{1f}smuggled"] {
+            let mut request = request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)));
+            request
+                .headers
+                .push(("X-Test".to_owned(), value.to_owned()));
+            assert_eq!(
+                transport.fetch(&request).unwrap_err(),
+                TransportError::InvalidRequest,
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_http11_response_header_value() {
+        let server = TestServer::start(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Test: bad\0value\r\n\r\nok".to_vec(),
+        );
+        let transport = TcpHttpTransport::default();
+
+        assert_eq!(
+            transport.fetch(&request(server.address)).unwrap_err(),
+            TransportError::MalformedResponse,
+        );
+    }
+
+    #[test]
+    fn enforces_decoded_http2_header_section_limit() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-test", HeaderValue::from_static("12345678"));
+
+        assert_eq!(
+            http2_response_headers(&headers, 45).unwrap_err(),
+            TransportError::ResponseTooLarge,
+        );
+        assert_eq!(http2_response_headers(&headers, 46).unwrap().len(), 1);
     }
 
     #[test]
@@ -2595,6 +3188,43 @@ mod tests {
             FailClosedTransport.fetch(&request(SocketAddr::from((Ipv4Addr::LOCALHOST, 80)))),
             Err(TransportError::UnsupportedTransport),
         );
+    }
+
+    #[test]
+    fn tls_policy_cache_key_uses_collision_resistant_policy_digest() {
+        let first = TlsValidation::hns_strict(
+            true,
+            vec![TlsaRecord {
+                usage: TlsaUsage::DaneEe,
+                selector: TlsaSelector::SubjectPublicKeyInfo,
+                matching: TlsaMatching::Exact,
+                association_data: b"first association".to_vec(),
+            }],
+        );
+        let second = TlsValidation::hns_strict(
+            true,
+            vec![TlsaRecord {
+                association_data: b"second association".to_vec(),
+                ..first.tlsa_records[0].clone()
+            }],
+        );
+
+        let first_key = tls_validation_key(&first);
+        let second_key = tls_validation_key(&second);
+        let mut expected_digest = String::new();
+        append_hash_hex(&mut expected_digest, b"first association");
+        assert_ne!(first_key, second_key);
+        assert!(first_key.contains(&expected_digest));
+    }
+
+    #[test]
+    fn state_maps_are_evicted_at_capacity() {
+        let mut map = HashMap::new();
+        for value in 0..(MAX_TLS_POLICY_CACHE_ENTRIES + 10) {
+            evict_one_if_at_capacity(&mut map, MAX_TLS_POLICY_CACHE_ENTRIES);
+            map.insert(value, value);
+        }
+        assert_eq!(map.len(), MAX_TLS_POLICY_CACHE_ENTRIES);
     }
 
     fn request(address: SocketAddr) -> OriginRequest {
@@ -2829,6 +3459,7 @@ mod tests {
                     let mut connection = h2::server::handshake(stream).await.unwrap();
                     if let Some(request) = connection.accept().await {
                         let (request, mut respond) = request.unwrap();
+                        let is_head = request.method() == http::Method::HEAD;
                         request_tx
                             .send(format!("{} {}", request.method(), request.uri()))
                             .unwrap();
@@ -2838,8 +3469,10 @@ mod tests {
                             .header("x-test", "h2")
                             .body(())
                             .unwrap();
-                        let mut send = respond.send_response(response, false).unwrap();
-                        send.send_data(Bytes::from_static(b"ok"), true).unwrap();
+                        let mut send = respond.send_response(response, is_head).unwrap();
+                        if !is_head {
+                            send.send_data(Bytes::from_static(b"ok"), true).unwrap();
+                        }
                         connection.graceful_shutdown();
                         let _ =
                             tokio::time::timeout(Duration::from_millis(100), connection.accept())
@@ -2898,6 +3531,7 @@ mod tests {
                     if let Some(request) = connection.accept().await.unwrap() {
                         let handler = tokio::spawn(async move {
                             let (request, mut stream) = request.resolve_request().await.unwrap();
+                            let is_head = request.method() == http::Method::HEAD;
                             request_tx
                                 .send(format!("{} {}", request.method(), request.uri()))
                                 .unwrap();
@@ -2908,7 +3542,9 @@ mod tests {
                                 .body(())
                                 .unwrap();
                             stream.send_response(response).await.unwrap();
-                            stream.send_data(Bytes::from_static(b"ok")).await.unwrap();
+                            if !is_head {
+                                stream.send_data(Bytes::from_static(b"ok")).await.unwrap();
+                            }
                             stream.finish().await.unwrap();
                         });
                         let _ = tokio::time::timeout(Duration::from_secs(1), async {

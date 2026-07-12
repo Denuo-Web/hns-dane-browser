@@ -1,6 +1,6 @@
 # Google Play Readiness Checklist
 
-Last audited: 2026-07-07
+Last audited: 2026-07-12
 
 This checklist maps HNS DANE Browser to current Google Play release requirements and identifies the Play Console fields that must be completed outside the repository.
 
@@ -12,7 +12,7 @@ This checklist maps HNS DANE Browser to current Google Play release requirements
 | Android App Bundle | Rebuild required | Package identity is `com.denuoweb.hnsdane`; create a new upload AAB such as `dist/play-store/hns-dane-browser-v0.3.7-play-upload-signed.aab`. |
 | 64-bit native code | Gate ready | `verifyPlayReleaseBundle` checks `arm64-v8a` and `x86_64` `libhns_dane_browser_ffi.so`; no 32-bit ABI is shipped. |
 | Restricted permissions | Ready | Manifest does not request location, contacts, SMS, call logs, camera, microphone, all-files, package visibility, or account permissions. |
-| Foreground service | Console copy ready | App uses `dataSync` foreground service for visible HNS header/proof sync. Use the declaration text and demo script below. |
+| Foreground service | Not used | Sync is owned by `MainActivity` and stops in `onStop`. The manifest declares no service and requests none of `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, or `FOREGROUND_SERVICE_DATA_SYNC`; mark foreground-service use as not applicable and remove stale `dataSync` drafts. |
 | Privacy policy | Console URL ready | Use `https://denuoweb.com/work/hns-dane-browser/privacy`; verify the hosted static HTML page is live immediately before Play submission. |
 | Data safety form | Console copy ready | No ads/analytics/accounts. Disclose user-requested browsing/HNS network sharing and local browsing/download records. |
 | Ads declaration | Ready | Declare “No ads.” Donations do not unlock features. |
@@ -33,7 +33,18 @@ export HNS_DANE_BROWSER_UPLOAD_STORE_FILE=/absolute/path/to/upload-keystore.jks
 export HNS_DANE_BROWSER_UPLOAD_STORE_PASSWORD='...'
 export HNS_DANE_BROWSER_UPLOAD_KEY_ALIAS='...'
 export HNS_DANE_BROWSER_UPLOAD_KEY_PASSWORD='...'
+export HNS_DANE_BROWSER_UPLOAD_CERTIFICATE_SHA256='AA:BB:...'
 ```
+
+The certificate fingerprint is not secret. Obtain it from the upload keystore without putting the password on the command line:
+
+```sh
+keytool -list -v \
+  -keystore "$HNS_DANE_BROWSER_UPLOAD_STORE_FILE" \
+  -alias "$HNS_DANE_BROWSER_UPLOAD_KEY_ALIAS"
+```
+
+Copy the `SHA256` certificate fingerprint into `HNS_DANE_BROWSER_UPLOAD_CERTIFICATE_SHA256`; colon-separated or plain hexadecimal is accepted.
 
 Then run:
 
@@ -43,7 +54,7 @@ Then run:
   :app:verifyPlayReleaseBundle
 ```
 
-`verifyPlayReleaseBundle` builds `android/app/build/outputs/bundle/release/app-release.aab`, verifies that upload signing is configured, verifies the bundle has a jar signature, and checks required 64-bit native libraries. Copy the verified output to `dist/play-store/hns-dane-browser-v0.3.7-play-upload-signed.aab` before uploading.
+`verifyPlayReleaseBundle` builds `android/app/build/outputs/bundle/release/app-release.aab`, reads every non-signature-metadata entry so Java cryptographically verifies its digest, rejects unsigned or mixed-signer content, requires every content entry to use the expected certificate fingerprint, and checks required 64-bit native libraries. Copy the verified output to `dist/play-store/hns-dane-browser-v0.3.7-play-upload-signed.aab` before uploading.
 
 ## Google Play Developer API
 
@@ -71,30 +82,9 @@ PLAY_TRACK=alpha \
 
 Use these exact values for the first production-track readiness pass. Re-check the Console UI labels before submission because Google can rename form fields without changing app behavior.
 
-### Foreground Service Declaration
+### Foreground Services
 
-Type: `dataSync`
-
-Use case: `Network transfer: Upload or download` or the closest available `dataSync` network-transfer option.
-
-Suggested feature description:
-
-> HNS DANE Browser uses a visible foreground data sync service to keep Handshake block headers, peer state, and proof cache data current while the user is using the browser. This enables local HNS proof verification and reduces resolver failures during browsing.
-
-Suggested user impact if deferred/interrupted:
-
-> If sync is deferred or interrupted, HNS names may fail closed or use stale local proof data until the app can catch up. The browser remains usable for normal WebPKI sites, but HNS verification quality is reduced.
-
-Suggested demo video content:
-
-1. Launch HNS DANE Browser.
-2. Show the sync notification and main-page sync progress.
-3. Open Diagnostics and show `bestHeight`, `bestPeerHeight`, and sync status.
-4. Stop/restart sync from the visible notification or app flow if needed.
-
-Reviewer note:
-
-> The foreground service starts only while the browser is in use so HNS headers, peer state, and proof cache state stay current for local HNS resolution. The notification is visible and includes a stop action.
+The current APK does not declare an Android service or request notification/foreground-service permissions. Header sync starts from `MainActivity.onStart`, publishes progress in-process, and is stopped by `onStop`. In Play Console, answer that the app does not use foreground service types. A foreground-service declaration, notification demo, or `dataSync` reviewer note would describe a removed implementation and must not be submitted for this build.
 
 ### Data Safety Draft
 
@@ -137,7 +127,7 @@ Use this sequence when the Play Console app record exists:
 2. Upload to the standard closed testing track. For API upload, use `PLAY_TRACK=alpha` unless the Console app has a custom closed testing track ID.
 3. Add at least 12 opted-in testers if the account is subject to the personal-account production-access rule.
 4. Keep closed testing active for 14 continuous days before requesting production access.
-5. Use tester feedback to verify first-run sync, HNS browsing, HNS downloads, notification-denied behavior, and Diagnostics export.
+5. Use tester feedback to verify first-run sync, background/foreground interruption and resume, HNS browsing, HNS downloads, and Diagnostics export.
 
 ## Store Listing Draft
 
@@ -176,6 +166,5 @@ Full description draft:
 - 64-bit native code: <https://developer.android.com/google/play/requirements/64-bit>
 - Data safety form: <https://support.google.com/googleplay/android-developer/answer/10787469>
 - User data and privacy policy: <https://support.google.com/googleplay/android-developer/answer/17105854>
-- Foreground service declarations: <https://support.google.com/googleplay/android-developer/answer/13392821>
 - Closed testing for new personal accounts: <https://support.google.com/googleplay/android-developer/answer/14151465>
 - Store listing preview assets: <https://support.google.com/googleplay/android-developer/answer/9866151>

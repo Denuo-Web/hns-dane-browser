@@ -43,5 +43,11 @@ class HnsResolutionPreferencesTest {
         assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("http://resolver.example/dns-query"))
         assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://user@resolver.example/dns-query"))
         assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example/dns-query#frag"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example:0/dns-query"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example:65536/dns-query"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example:25/dns-query"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example:6667/dns-query"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://[::1]/dns-query"))
+        assertNull(HnsResolutionPreferences.normalizeDohResolverUrl("https://resolver.example/" + "x".repeat(5_000)))
     }
 }

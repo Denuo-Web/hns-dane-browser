@@ -3,10 +3,12 @@ package com.denuoweb.hnsdane.ui
 import android.annotation.SuppressLint
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.annotation.OptIn
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 
 internal object BrowserWebViewHardening {
+    @OptIn(markerClass = [WebSettingsCompat.ExperimentalSpeculativeLoading::class])
     @SuppressLint("SetJavaScriptEnabled")
     @Suppress("DEPRECATION")
     fun applyTo(webView: WebView, allowJavaScript: Boolean) {
@@ -22,6 +24,7 @@ internal object BrowserWebViewHardening {
             allowFileAccess = false
             allowContentAccess = false
             javaScriptCanOpenWindowsAutomatically = false
+            setGeolocationEnabled(false)
             setSupportMultipleWindows(false)
 
             if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {

@@ -4,6 +4,9 @@ import com.denuoweb.hnsdane.core.HostnameAscii
 import java.net.URI
 
 internal fun URI.httpAuthorityHost(): String? {
+    if (rawUserInfo != null) {
+        return null
+    }
     host?.let { return HostnameAscii.toAscii(it) }
 
     val authority = rawAuthority ?: return null
@@ -46,5 +49,8 @@ internal fun URI.httpAuthorityHost(): String? {
 }
 
 private fun isValidPortSuffix(value: String): Boolean {
-    return value.length > 1 && value[0] == ':' && value.drop(1).all(Char::isDigit)
+    return value.length > 1 &&
+        value[0] == ':' &&
+        value.drop(1).all(Char::isDigit) &&
+        value.drop(1).toIntOrNull()?.let { it in 1..65535 } == true
 }

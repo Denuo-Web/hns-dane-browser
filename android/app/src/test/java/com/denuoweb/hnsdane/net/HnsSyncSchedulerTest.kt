@@ -2,6 +2,7 @@ package com.denuoweb.hnsdane.net
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
 
@@ -111,6 +112,22 @@ class HnsSyncSchedulerTest {
             ),
         )
         scheduler.close()
+    }
+
+    @Test
+    fun singleFlightRejectsOverlappingNativeWorkWithoutBlocking() {
+        val gate = HnsSyncSingleFlight()
+        var nestedRan = false
+
+        val outer = gate.tryRun {
+            val nested = gate.tryRun { nestedRan = true }
+            assertNull(nested)
+            "done"
+        }
+
+        assertEquals("done", outer)
+        assertEquals(false, nestedRan)
+        assertEquals(false, gate.isRunning())
     }
 
     private class RecordingSyncBridge(

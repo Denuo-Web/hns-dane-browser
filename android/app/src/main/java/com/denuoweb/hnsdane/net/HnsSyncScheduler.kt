@@ -22,6 +22,7 @@ class HnsSyncScheduler(
     private val retryIntervalMs: Long = DEFAULT_RETRY_INTERVAL_MS,
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor(),
     private val clock: () -> Long = System::currentTimeMillis,
+    private val singleFlight: HnsSyncSingleFlight = ProcessHnsSyncSingleFlight,
 ) : Closeable {
     private val running = AtomicBoolean(false)
     private var future: ScheduledFuture<*>? = null
@@ -43,21 +44,25 @@ class HnsSyncScheduler(
             return
         }
 
-        val snapshot = runOnce(onSnapshot)
+        val snapshot = runOnceIfIdle(onSnapshot)
         if (running.get()) {
-            scheduleNext(nextDelayMs(snapshot), onSnapshot)
+            scheduleNext(snapshot?.let(::nextDelayMs) ?: activeIntervalMs, onSnapshot)
         }
     }
 
-    internal fun runOnce(onSnapshot: (HnsSyncSnapshot) -> Unit): HnsSyncSnapshot {
-        val snapshot = HnsSyncSnapshot(
-            statusJson = bridge.syncOnce(dataDir.absolutePath, network()),
-            updatedAtMillis = clock(),
-        )
-        lastSnapshot = snapshot
-        onSnapshot(snapshot)
-        return snapshot
-    }
+    internal fun runOnce(onSnapshot: (HnsSyncSnapshot) -> Unit): HnsSyncSnapshot =
+        checkNotNull(runOnceIfIdle(onSnapshot)) { "another HNS sync operation is already running" }
+
+    private fun runOnceIfIdle(onSnapshot: (HnsSyncSnapshot) -> Unit): HnsSyncSnapshot? =
+        singleFlight.tryRun {
+            val snapshot = HnsSyncSnapshot(
+                statusJson = bridge.syncOnce(dataDir.absolutePath, network()),
+                updatedAtMillis = clock(),
+            )
+            lastSnapshot = snapshot
+            onSnapshot(snapshot)
+            snapshot
+        }
 
     internal fun nextDelayMs(snapshot: HnsSyncSnapshot): Long {
         val progress = HnsSyncProgress.fromJson(snapshot.statusJson)
@@ -89,3 +94,22 @@ class HnsSyncScheduler(
         private const val DEFAULT_NETWORK = "mainnet"
     }
 }
+
+class HnsSyncSingleFlight {
+    private val running = AtomicBoolean(false)
+
+    fun <T> tryRun(operation: () -> T): T? {
+        if (!running.compareAndSet(false, true)) {
+            return null
+        }
+        return try {
+            operation()
+        } finally {
+            running.set(false)
+        }
+    }
+
+    fun isRunning(): Boolean = running.get()
+}
+
+internal val ProcessHnsSyncSingleFlight = HnsSyncSingleFlight()

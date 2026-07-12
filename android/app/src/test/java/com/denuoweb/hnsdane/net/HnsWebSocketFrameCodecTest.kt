@@ -37,19 +37,15 @@ class HnsWebSocketFrameCodecTest {
     }
 
     @Test
-    fun parserUnmasksClientStyleFramesForTests() {
-        val frames = mutableListOf<HnsWebSocketFrame>()
-        val parser = HnsWebSocketFrameParser { frames += it }
+    fun parserRejectsMaskedServerFrames() {
+        val parser = HnsWebSocketFrameParser {}
         val encoded = HnsWebSocketFrameCodec.encodeClientFrame(
             HnsWebSocketFrameCodec.OPCODE_TEXT,
             "masked".toByteArray(),
             mask = byteArrayOf(1, 2, 3, 4),
         )
 
-        parser.append(encoded)
-
-        assertEquals(1, frames.size)
-        assertEquals("masked", frames.single().payload.toString(Charsets.UTF_8))
+        assertThrows(IOException::class.java) { parser.append(encoded) }
     }
 
     @Test
@@ -90,6 +86,43 @@ class HnsWebSocketFrameCodecTest {
     }
 
     @Test
+    fun parserRejectsReservedBitsAndNonMinimalLengths() {
+        val parser = HnsWebSocketFrameParser {}
+        assertThrows(IOException::class.java) {
+            parser.append(byteArrayOf(0xC1.toByte(), 0x00))
+        }
+
+        val nonMinimal = byteArrayOf(0x81.toByte(), 126, 0, 1, 'x'.code.toByte())
+        assertThrows(IOException::class.java) { HnsWebSocketFrameParser {}.append(nonMinimal) }
+    }
+
+    @Test
+    fun assemblerRejectsMalformedUtf8Text() {
+        val failures = mutableListOf<String>()
+        val assembler = HnsWebSocketMessageAssembler(
+            onMessage = { _, _ -> throw AssertionError("invalid text must not be emitted") },
+            onFailure = { failures += it },
+        )
+
+        assembler.accept(HnsWebSocketFrame(true, HnsWebSocketFrameCodec.OPCODE_TEXT, byteArrayOf(0xC3.toByte(), 0x28)))
+
+        assertEquals(listOf("websocket text message is not valid UTF-8"), failures)
+    }
+
+    @Test
+    fun closePayloadRejectsInvalidCodeAndOversizedReason() {
+        assertThrows(IllegalArgumentException::class.java) {
+            HnsWebSocketFrameCodec.closePayload(1006, "reserved")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HnsWebSocketFrameCodec.closePayload(1000, "x".repeat(124))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HnsWebSocketFrameCodec.validateClosePayload(byteArrayOf(0))
+        }
+    }
+
+    @Test
     fun messageAssemblerRejectsOversizedFragmentedMessage() {
         val messages = mutableListOf<Pair<Int, ByteArray>>()
         val failures = mutableListOf<String>()
@@ -122,6 +155,22 @@ class HnsWebSocketFrameCodecTest {
         assertTrue(failures.isEmpty())
         assertEquals(HnsWebSocketFrameCodec.OPCODE_TEXT, messages.single().first)
         assertEquals("hello", messages.single().second.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun assemblerRejectsNewDataFrameDuringFragmentation() {
+        val messages = mutableListOf<Pair<Int, ByteArray>>()
+        val failures = mutableListOf<String>()
+        val assembler = HnsWebSocketMessageAssembler(
+            onMessage = { opcode, payload -> messages += opcode to payload },
+            onFailure = { failures += it },
+        )
+
+        assembler.accept(HnsWebSocketFrame(false, HnsWebSocketFrameCodec.OPCODE_TEXT, "part".toByteArray()))
+        assembler.accept(HnsWebSocketFrame(true, HnsWebSocketFrameCodec.OPCODE_TEXT, "other".toByteArray()))
+
+        assertTrue(messages.isEmpty())
+        assertEquals(listOf("websocket data frame arrived during a fragmented message"), failures)
     }
 
     private fun serverFrame(fin: Boolean, opcode: Int, payload: ByteArray): ByteArray {

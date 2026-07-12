@@ -5,7 +5,6 @@ import com.denuoweb.hnsdane.core.HnsPageResolverPolicy
 import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import java.io.Closeable
 import java.io.File
-import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -15,10 +14,15 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -34,6 +38,7 @@ class LoopbackProxyServer(
     private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
     private val enforceHnsHostScope: Boolean = false,
     private val scopedHnsHost: () -> String? = { null },
+    private val proxyAuthorization: LoopbackProxyAuthorization? = null,
     private val onHnsStatus: (String, Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, String?) -> Unit = { _, _, _, _, _ -> },
     private val executor: ExecutorService = Executors.newCachedThreadPool(),
     private val rateLimiter: LoopbackGatewayRateLimiter = LoopbackGatewayRateLimiter(),
@@ -41,6 +46,7 @@ class LoopbackProxyServer(
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private var acceptLoop: Future<*>? = null
+    private val activeClients = ConcurrentHashMap.newKeySet<Socket>()
 
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) {
@@ -63,12 +69,25 @@ class LoopbackProxyServer(
                         rejectClient(client, 429, "Too Many Requests")
                         continue
                     }
-                    executor.submit {
-                        try {
-                            handleClient(client)
-                        } finally {
-                            rateLimiter.releaseClient()
+                    if (!running.get()) {
+                        rateLimiter.releaseClient()
+                        runCatching { client.close() }
+                        continue
+                    }
+                    activeClients += client
+                    try {
+                        executor.submit {
+                            try {
+                                handleClient(client)
+                            } finally {
+                                activeClients -= client
+                                rateLimiter.releaseClient()
+                            }
                         }
+                    } catch (_: RejectedExecutionException) {
+                        activeClients -= client
+                        rateLimiter.releaseClient()
+                        runCatching { client.close() }
                     }
                 }
             }
@@ -82,11 +101,16 @@ class LoopbackProxyServer(
     override fun close() {
         running.set(false)
         runCatching { serverSocket?.close() }
+        activeClients.toList().forEach { client -> runCatching { client.close() } }
+        activeClients.clear()
         acceptLoop?.cancel(true)
         executor.shutdownNow()
+        (hnsConnectTerminator as? Closeable)?.close()
     }
 
     fun boundPort(): Int? = serverSocket?.localPort
+
+    internal fun activeClientCount(): Int = activeClients.size
 
     private fun rejectClient(client: Socket, status: Int, reason: String) {
         client.use { clientSocket ->
@@ -100,8 +124,14 @@ class LoopbackProxyServer(
     private fun handleClient(client: Socket) {
         client.use { clientSocket ->
             runCatching {
-                clientSocket.soTimeout = SOCKET_TIMEOUT_MS
+                clientSocket.soTimeout = REQUEST_HEADER_TIMEOUT_MS
                 val request = readProxyRequest(clientSocket.getInputStream())
+                val authorization = proxyAuthorization
+                if (authorization != null && !authorization.isAuthorized(request.headers)) {
+                    writeProxyAuthenticationRequired(clientSocket.getOutputStream(), authorization.realm)
+                    return@runCatching
+                }
+                clientSocket.soTimeout = SOCKET_TIMEOUT_MS
                 request.validatedContentLength()
                 when (request.line.method.uppercase(Locale.US)) {
                     "CONNECT" -> handleConnect(clientSocket, request)
@@ -312,12 +342,12 @@ class LoopbackProxyServer(
     private fun writeGatewayFileResponse(output: OutputStream, response: HnsGatewayFileResponse) {
         try {
             output.write(response.head)
-            FileInputStream(response.bodyFile).use { body ->
+            response.openBodyStream().use { body ->
                 copy(body, output)
             }
             output.flush()
         } finally {
-            response.bodyFile.delete()
+            response.deleteBodyFile()
         }
     }
 
@@ -357,11 +387,21 @@ class LoopbackProxyServer(
         val requestLine = ProxyRequestLine.parse(lines.first())
         val headers = lines.drop(1)
             .takeWhile { it.isNotEmpty() }
-            .mapNotNull { line ->
-                val index = line.indexOf(':')
-                if (index <= 0) null else line.substring(0, index).trim() to line.substring(index + 1).trim()
-            }
+            .map(::parseProxyHeader)
         return ProxyRequest(requestLine, headers)
+    }
+
+    private fun parseProxyHeader(line: String): Pair<String, String> {
+        val separator = line.indexOf(':')
+        if (separator <= 0) {
+            throw ProxyHttpException(400, "Bad Request Headers")
+        }
+        val name = line.substring(0, separator)
+        val value = line.substring(separator + 1).trim()
+        if (!name.all(::isHttpTokenCharacter) || value.any(::isInvalidHeaderValueCharacter)) {
+            throw ProxyHttpException(400, "Bad Request Headers")
+        }
+        return name to value
     }
 
     private fun copy(input: InputStream, output: OutputStream) {
@@ -387,6 +427,9 @@ class LoopbackProxyServer(
             val sizeLine = readAsciiLine(input, MAX_CHUNK_LINE_BYTES)
             val sizeText = sizeLine.substringBefore(';').trim()
             if (sizeText.isEmpty()) {
+                throw ProxyHttpException(400, "Bad Chunked Body")
+            }
+            if (!sizeText.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
                 throw ProxyHttpException(400, "Bad Chunked Body")
             }
             val size = sizeText.toLongOrNull(16)
@@ -458,6 +501,21 @@ class LoopbackProxyServer(
         output.flush()
     }
 
+    private fun writeProxyAuthenticationRequired(output: OutputStream, realm: String) {
+        val body = "407 Proxy Authentication Required\n".toByteArray(StandardCharsets.UTF_8)
+        output.write(
+            (
+                "HTTP/1.1 407 Proxy Authentication Required\r\n" +
+                    "Proxy-Authenticate: Basic realm=\"$realm\"\r\n" +
+                    "Connection: close\r\n" +
+                    "Content-Type: text/plain; charset=utf-8\r\n" +
+                    "Content-Length: ${body.size}\r\n\r\n"
+                ).toByteArray(StandardCharsets.ISO_8859_1),
+        )
+        output.write(body)
+        output.flush()
+    }
+
     private fun requireHnsHostInScope(host: String) {
         if (!enforceHnsHostScope) {
             return
@@ -481,9 +539,16 @@ class LoopbackProxyServer(
         private const val MAX_CHUNK_TRAILER_BYTES = 64 * 1024
         private const val COPY_BUFFER_BYTES = 16 * 1024
         private const val SOCKET_TIMEOUT_MS = 30_000
+        private const val REQUEST_HEADER_TIMEOUT_MS = 5_000
         private val HEADER_END = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
         private val CONNECT_OK = "HTTP/1.1 200 Connection Established\r\nProxy-Agent: HNS DANE Browser\r\n\r\n"
             .toByteArray(StandardCharsets.ISO_8859_1)
+
+        private fun isHttpTokenCharacter(char: Char): Boolean =
+            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' || char in "!#$%&'*+-.^_`|~"
+
+        private fun isInvalidHeaderValueCharacter(char: Char): Boolean =
+            char != '\t' && (char.code < 0x20 || char.code == 0x7f)
     }
 }
 
@@ -491,6 +556,54 @@ private class ProxyHttpException(
     val status: Int,
     val reason: String,
 ) : IOException(reason)
+
+class LoopbackProxyAuthorization private constructor(
+    val realm: String,
+    val username: String,
+    val password: String,
+) {
+    private val expectedCredentials = "$username:$password".toByteArray(StandardCharsets.UTF_8)
+
+    fun isAuthorized(headers: List<Pair<String, String>>): Boolean {
+        val values = headers
+            .filter { it.first.equals("Proxy-Authorization", ignoreCase = true) }
+            .map { it.second }
+        if (values.size != 1) {
+            return false
+        }
+        val parts = values.single().trim().split(Regex("\\s+"), limit = 2)
+        if (parts.size != 2 || !parts[0].equals("Basic", ignoreCase = true)) {
+            return false
+        }
+        val supplied = runCatching { Base64.getDecoder().decode(parts[1]) }.getOrNull() ?: return false
+        return MessageDigest.isEqual(expectedCredentials, supplied)
+    }
+
+    fun authorizationHeaderValue(): String =
+        "Basic " + Base64.getEncoder().encodeToString(expectedCredentials)
+
+    fun matchesChallenge(host: String, challengeRealm: String): Boolean =
+        host.trim().removeSurrounding("[", "]").equals(LOOPBACK, ignoreCase = true) && challengeRealm == realm
+
+    companion object {
+        private const val LOOPBACK = "127.0.0.1"
+        private const val USERNAME = "hns-browser"
+        private val random = SecureRandom()
+
+        fun create(): LoopbackProxyAuthorization =
+            LoopbackProxyAuthorization(
+                realm = "hns-loopback-${randomToken(12)}",
+                username = USERNAME,
+                password = randomToken(32),
+            )
+
+        internal fun createForTest(realm: String, username: String, password: String): LoopbackProxyAuthorization =
+            LoopbackProxyAuthorization(realm, username, password)
+
+        private fun randomToken(bytes: Int): String =
+            ByteArray(bytes).also(random::nextBytes).let(Base64.getUrlEncoder().withoutPadding()::encodeToString)
+    }
+}
 
 class LoopbackGatewayRateLimiter(
     private val maxActiveClients: Int = DEFAULT_MAX_ACTIVE_CLIENTS,
@@ -635,7 +748,8 @@ internal data class ProxyRequest(
         }
 
         val parsed = values.map { value ->
-            value.toLongOrNull()
+            value.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+                ?.toLongOrNull()
                 ?.takeIf { it >= 0 }
                 ?: throw ProxyHttpException(400, "Bad Content-Length")
         }
@@ -672,6 +786,7 @@ internal data class ProxyRequest(
         handshakeNetwork: String = DEFAULT_NETWORK,
     ): List<Pair<String, String>> {
         val sanitized = headers
+            .filterNot { it.first.equals("Proxy-Authorization", ignoreCase = true) }
             .filterNot { it.first.equals("Transfer-Encoding", ignoreCase = true) }
             .filterNot { it.first.equals("Trailer", ignoreCase = true) }
             .filterNot { hasTransferEncoding() && it.first.equals("Content-Length", ignoreCase = true) }
@@ -708,7 +823,7 @@ internal data class ProxyRequest(
             append(line.version)
             append("\r\n")
             headers
-                .filterNot { isHopByHopProxyHeader(it.first) }
+                .filterNot { isHopByHopProxyHeader(it.first) || it.first.equals("Proxy-Authorization", ignoreCase = true) }
                 .forEach { (name, value) ->
                     append(name)
                     append(": ")
@@ -733,6 +848,7 @@ internal data class ProxyRequest(
             append("\r\n")
             headers
                 .filterNot { it.first.equals("Proxy-Connection", ignoreCase = true) }
+                .filterNot { it.first.equals("Proxy-Authorization", ignoreCase = true) }
                 .filterNot { it.first.equals("Host", ignoreCase = true) }
                 .filterNot { it.first.equals("Content-Length", ignoreCase = true) }
                 .forEach { (name, value) ->
@@ -789,11 +905,14 @@ internal data class ProxyRequestLine(
     fun toHttpTarget(): HttpTarget {
         val uri = URI(target)
         val scheme = uri.scheme?.lowercase(Locale.US) ?: "http"
+        if (scheme !in setOf("http", "https", "ws", "wss") || uri.rawFragment != null) {
+            throw IOException("unsupported absolute-form request target")
+        }
         val host = uri.httpAuthorityHost() ?: throw IOException("absolute-form request target is required")
-        val port = when {
-            uri.port > 0 -> uri.port
-            scheme == "https" || scheme == "wss" -> 443
-            else -> 80
+        val port = when (val explicitPort = uri.port) {
+            -1 -> if (scheme == "https" || scheme == "wss") 443 else 80
+            in 1..65535 -> explicitPort
+            else -> throw IOException("invalid absolute-form request port")
         }
         val rawPath = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
         val pathAndQuery = if (uri.rawQuery == null) rawPath else "$rawPath?${uri.rawQuery}"
@@ -829,7 +948,16 @@ internal data class ProxyRequestLine(
     companion object {
         fun parse(line: String): ProxyRequestLine {
             val parts = line.split(' ', limit = 3)
-            if (parts.size != 3 || !parts[2].startsWith("HTTP/")) {
+            if (
+                parts.size != 3 ||
+                parts[0].isEmpty() ||
+                !parts[0].all {
+                    it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "!#$%&'*+-.^_`|~"
+                } ||
+                parts[1].isEmpty() ||
+                parts[1].any { it.isWhitespace() || it.code < 0x20 || it.code == 0x7f } ||
+                parts[2] !in setOf("HTTP/1.0", "HTTP/1.1")
+            ) {
                 throw IOException("invalid request line")
             }
             return ProxyRequestLine(parts[0], parts[1], parts[2])
@@ -915,16 +1043,26 @@ data class ConnectTarget(
                     if (!suffix.startsWith(":")) throw IOException("invalid authority")
                     suffix.drop(1).toIntOrNull() ?: throw IOException("invalid port")
                 }
-                return ConnectTarget(host, port)
+                return validatedConnectTarget(host, port)
             }
 
             val separator = authority.lastIndexOf(':')
             if (separator < 0 || authority.indexOf(':') != separator) {
-                return ConnectTarget(authority, 443)
+                return validatedConnectTarget(authority, 443)
             }
 
             val host = authority.substring(0, separator)
             val port = authority.substring(separator + 1).toIntOrNull() ?: throw IOException("invalid port")
+            return validatedConnectTarget(host, port)
+        }
+
+        private fun validatedConnectTarget(host: String, port: Int): ConnectTarget {
+            if (
+                host.isBlank() || host.length > 253 || port !in 1..65535 ||
+                host.any { it.isWhitespace() || it in "/?#@" || it.code < 0x20 || it.code == 0x7f }
+            ) {
+                throw IOException("invalid CONNECT authority")
+            }
             return ConnectTarget(host, port)
         }
     }

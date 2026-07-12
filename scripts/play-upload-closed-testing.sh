@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 if [[ $# -gt 1 ]]; then
   echo "usage: $0 [signed-release.aab]" >&2
@@ -12,6 +13,22 @@ release_status="${PLAY_RELEASE_STATUS:-completed}"
 aab_path="${1:-dist/play-store/hns-dane-browser-v0.3.7-play-upload-signed.aab}"
 release_name="${PLAY_RELEASE_NAME:-HNS DANE Browser 0.3.7}"
 release_notes="${PLAY_RELEASE_NOTES:-Disables spellcheck, suggestions, and personalized learning for the browser omnibar while preserving the HNS sync UI refinements.}"
+
+if [[ ! "$package_name" =~ ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$ ]]; then
+  echo "Invalid Play package name: $package_name" >&2
+  exit 2
+fi
+if [[ ! "$track_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Invalid Play track name: $track_name" >&2
+  exit 2
+fi
+case "$release_status" in
+  draft|halted|completed) ;;
+  *)
+    echo "PLAY_RELEASE_STATUS must be draft, halted, or completed." >&2
+    exit 2
+    ;;
+esac
 
 if [[ ! -f "$aab_path" ]]; then
   echo "AAB not found: $aab_path" >&2
@@ -26,12 +43,19 @@ else
   echo "Set PLAY_ACCESS_TOKEN or install/login with gcloud." >&2
   exit 1
 fi
+if [[ "$access_token" == *$'\r'* || "$access_token" == *$'\n'* ]]; then
+  echo "Play access token contains an invalid line break." >&2
+  exit 1
+fi
 
 api_base="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${package_name}"
 upload_base="https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications/${package_name}"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+auth_header="$tmpdir/authorization.txt"
+printf 'Authorization: Bearer %s\n' "$access_token" >"$auth_header"
+unset access_token PLAY_ACCESS_TOKEN
 
 json_get() {
   python3 - "$1" "$2" <<'PY'
@@ -73,8 +97,9 @@ request() {
   local output="$3"
   shift 3
   local http
-  http="$(curl -sS -o "$output" -w '%{http_code}' -X "$method" \
-    -H "Authorization: Bearer ${access_token}" \
+  http="$(curl --proto '=https' --tlsv1.2 --connect-timeout 30 --max-time 600 \
+    -sS -o "$output" -w '%{http_code}' -X "$method" \
+    -H "@$auth_header" \
     "$@" \
     "$url")"
   if [[ "$http" -lt 200 || "$http" -gt 299 ]]; then

@@ -157,7 +157,10 @@ class BrowserUrlClassifierTest {
 
     @Test
     fun reservedSingleLabelsUseNormalWebMode() {
-        for (host in listOf("localhost", "example", "invalid", "local", "test")) {
+        for (host in listOf(
+            "localhost", "example", "invalid", "local", "test",
+            "app.alt", "foo.example", "foo.internal", "foo.invalid", "foo.local", "foo.localhost", "foo.onion", "foo.test",
+        )) {
             val target = classifier.classify(host)
 
             assertEquals(host, BrowserTargetKind.ExactUrl, target.kind)

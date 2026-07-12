@@ -74,7 +74,7 @@ class LegalActivity : ComponentActivity() {
 
     private fun openLink(uri: Uri, copyLabel: String, copyText: String) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
         } catch (_: ActivityNotFoundException) {
             getSystemService(ClipboardManager::class.java)
                 .setPrimaryClip(ClipData.newPlainText(copyLabel, copyText))

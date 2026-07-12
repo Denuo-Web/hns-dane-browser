@@ -198,14 +198,17 @@
     <string name="history_unknown_time">זמן לא ידוע</string>
     <plurals name="history_recent_pages_status">
         <item quantity="one">%d הדף האחרון.</item>
+        <item quantity="two">%d דפים אחרונים.</item>
         <item quantity="other">%d דפים אחרונים.</item>
     </plurals>
     <plurals name="history_cleared_items">
         <item quantity="one">ניקה פריט היסטוריה %d</item>
+        <item quantity="two">ניקה פריטי היסטוריה של %d</item>
         <item quantity="other">ניקה פריטי היסטוריה של %d</item>
     </plurals>
     <plurals name="settings_saved_pages">
         <item quantity="one">דף שמור %d</item>
+        <item quantity="two">%d דפים שמורים</item>
         <item quantity="other">%d דפים שמורים</item>
     </plurals>
     <string name="downloads_empty_status">עדיין אין הורדות של אפליקציה.</string>
@@ -229,14 +232,17 @@
     <string name="downloads_clear_message">זה מנקה את רשימת ההורדות של הדפדפן הזה. זה לא מוחק קבצים שהורדו.</string>
     <plurals name="downloads_app_downloads_status">
         <item quantity="one">הורדת אפליקציית %d.</item>
+        <item quantity="two">הורדות האפליקציה %d.</item>
         <item quantity="other">הורדות האפליקציה %d.</item>
     </plurals>
     <plurals name="downloads_cleared_records">
         <item quantity="one">ניקה את רשומת ההורדה של %d</item>
+        <item quantity="two">ניקה את רשומות ההורדות של %d</item>
         <item quantity="other">ניקה את רשומות ההורדות של %d</item>
     </plurals>
     <plurals name="settings_app_queued_records">
         <item quantity="one">רשומה בתור אפליקציה %d</item>
+        <item quantity="two">%d רשומות בתור אפליקציה</item>
         <item quantity="other">%d רשומות בתור אפליקציה</item>
     </plurals>
     <string name="cookie_deleted">קובצי Cookie נמחקו</string>

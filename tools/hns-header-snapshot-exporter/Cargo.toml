@@ -2,6 +2,7 @@
 name = "hns-header-snapshot-exporter"
 version = "0.1.0"
 edition = "2024"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace]
 

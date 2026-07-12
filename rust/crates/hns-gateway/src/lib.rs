@@ -3,10 +3,10 @@ use hns_core::dns::{
     DnsName, RecordType, ResourceRecord, SVCB_PARAM_ALPN, SVCB_PARAM_MANDATORY,
     SVCB_PARAM_NO_DEFAULT_ALPN, SVCB_PARAM_PORT, SvcbRecord,
 };
+use hns_core::network_policy::{is_browser_blocked_port, is_publicly_routable};
 use hns_dane::{DaneError, DomainTrustMode, StatelessDaneConfig, TlsaRecord};
 use hns_resolver::{
     NameClass, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError, classify_name,
-    hns_root_label,
 };
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport,
@@ -14,14 +14,17 @@ use hns_transport::{
 };
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const MAX_CNAME_CHAIN_LEN: usize = 8;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct GatewayConfig {
     pub bind: SocketAddr,
     pub auth_token: Option<String>,
+    pub allow_non_public_origin_addresses: bool,
+    pub allow_unsafe_origin_ports: bool,
     pub allow_insecure_hns_origin_resolution: bool,
     pub require_secure_resolution: bool,
     pub hns_https_mode: HnsHttpsMode,
@@ -42,8 +45,9 @@ pub struct ResolvedTlsaRecords {
     pub source: Option<TlsaRecordSource>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct GatewayRequest {
+    pub auth_token: Option<String>,
     pub origin: OriginRequest,
     pub resolution: ResolutionRequest,
 }
@@ -72,12 +76,20 @@ pub struct GatewayTunnel {
 pub enum GatewayError {
     #[error("gateway must bind to loopback")]
     NonLoopbackBind,
+    #[error("gateway authentication token must not be empty")]
+    EmptyAuthToken,
+    #[error("gateway authentication failed")]
+    Unauthorized,
     #[error("origin host does not match resolution name")]
     HostResolutionMismatch,
     #[error("resolution is not cryptographically secure")]
     InsecureResolution,
-    #[error("HNS resolution did not provide an origin address")]
+    #[error("resolution did not provide an origin address")]
     NoResolvedAddress,
+    #[error("origin address is not publicly routable")]
+    NonPublicOriginAddress,
+    #[error("origin port {0} is blocked by browser network policy")]
+    UnsafeOriginPort(u16),
     #[error("TLSA record is invalid: {0}")]
     InvalidTlsa(#[from] DaneError),
     #[error("HTTPS/SVCB record is invalid: {0}")]
@@ -101,6 +113,8 @@ impl Default for GatewayConfig {
         Self {
             bind: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 15_353),
             auth_token: None,
+            allow_non_public_origin_addresses: false,
+            allow_unsafe_origin_ports: false,
             allow_insecure_hns_origin_resolution: false,
             require_secure_resolution: true,
             hns_https_mode: HnsHttpsMode::Strict,
@@ -114,13 +128,58 @@ impl Default for GatewayConfig {
     }
 }
 
+impl std::fmt::Debug for GatewayConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GatewayConfig")
+            .field("bind", &self.bind)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "allow_non_public_origin_addresses",
+                &self.allow_non_public_origin_addresses,
+            )
+            .field("allow_unsafe_origin_ports", &self.allow_unsafe_origin_ports)
+            .field(
+                "allow_insecure_hns_origin_resolution",
+                &self.allow_insecure_hns_origin_resolution,
+            )
+            .field("require_secure_resolution", &self.require_secure_resolution)
+            .field("hns_https_mode", &self.hns_https_mode)
+            .field(
+                "supported_origin_protocols",
+                &self.supported_origin_protocols,
+            )
+            .field("stateless_dane", &self.stateless_dane)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GatewayRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GatewayRequest")
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("origin", &self.origin)
+            .field("resolution", &self.resolution)
+            .finish()
+    }
+}
+
 impl GatewayConfig {
     pub fn validate(&self) -> Result<(), GatewayError> {
-        if self.bind.ip().is_loopback() {
-            Ok(())
-        } else {
-            Err(GatewayError::NonLoopbackBind)
+        if !self.bind.ip().is_loopback() {
+            return Err(GatewayError::NonLoopbackBind);
         }
+        if self.auth_token.as_ref().is_some_and(String::is_empty) {
+            return Err(GatewayError::EmptyAuthToken);
+        }
+        Ok(())
     }
 }
 
@@ -139,6 +198,7 @@ where
     }
 
     pub fn handle(&self, request: &GatewayRequest) -> Result<GatewayResponse, GatewayError> {
+        self.authorize(request)?;
         let (resolution, origin_request) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
         let origin = self.transport.fetch(&origin_request)?;
@@ -154,6 +214,7 @@ where
         request: &GatewayRequest,
         body: &mut dyn Write,
     ) -> Result<GatewayResponseHead, GatewayError> {
+        self.authorize(request)?;
         let (resolution, origin_request) =
             self.resolve_origin_request(request, &self.config.supported_origin_protocols)?;
         let origin = self.transport.fetch_to_writer(&origin_request, body)?;
@@ -165,6 +226,7 @@ where
     }
 
     pub fn handle_tunnel(&self, request: &GatewayRequest) -> Result<GatewayTunnel, GatewayError> {
+        self.authorize(request)?;
         let (resolution, origin_request) =
             self.resolve_origin_request(request, &[OriginProtocol::Http11])?;
         let origin = self.transport.open_tunnel(&origin_request)?;
@@ -183,6 +245,20 @@ where
         &self.transport
     }
 
+    fn authorize(&self, request: &GatewayRequest) -> Result<(), GatewayError> {
+        let Some(expected) = self.config.auth_token.as_deref() else {
+            return Ok(());
+        };
+        let Some(provided) = request.auth_token.as_deref() else {
+            return Err(GatewayError::Unauthorized);
+        };
+        if bool::from(expected.as_bytes().ct_eq(provided.as_bytes())) {
+            Ok(())
+        } else {
+            Err(GatewayError::Unauthorized)
+        }
+    }
+
     fn resolve_origin_request(
         &self,
         request: &GatewayRequest,
@@ -191,6 +267,7 @@ where
         if !hosts_match(&request.origin.host, &request.resolution.qname) {
             return Err(GatewayError::HostResolutionMismatch);
         }
+        self.validate_origin_port(request.origin.port)?;
 
         let resolution = self.resolver.resolve(&request.resolution)?;
         if !resolution.secure && !self.allows_insecure_hns_origin_resolution(&request.origin.host) {
@@ -198,20 +275,18 @@ where
         }
 
         let mut origin_request = request.origin.clone();
+        // Never trust a caller-supplied connection override. The native transport bypasses the
+        // browser DNS stack, so the connection address must come from this validated resolution.
+        origin_request.connect_host =
+            first_resolved_address(&resolution.records, &origin_request.host);
         if origin_request.connect_host.is_none() {
-            origin_request.connect_host =
-                first_resolved_address(&resolution.records, &origin_request.host);
-            if origin_request.connect_host.is_none()
-                && hns_root_label(&request.resolution.qname).is_ok()
-            {
-                origin_request.connect_host = self.resolve_origin_address(&origin_request.host)?;
-            }
-            if origin_request.connect_host.is_none()
-                && hns_root_label(&request.resolution.qname).is_ok()
-            {
-                return Err(GatewayError::NoResolvedAddress);
-            }
+            origin_request.connect_host = self.resolve_origin_address(&origin_request.host)?;
         }
+        let connect_host = origin_request
+            .connect_host
+            .as_deref()
+            .ok_or(GatewayError::NoResolvedAddress)?;
+        self.validate_origin_address(connect_host)?;
         if is_tls_origin_scheme(&origin_request.scheme) {
             origin_request.tls.mode =
                 domain_trust_mode_for_host(&origin_request.host, self.config.hns_https_mode);
@@ -238,8 +313,32 @@ where
             origin_request.tls.tlsa_records = resolved_tlsa.records;
             origin_request.tls.tlsa_source = resolved_tlsa.source;
         }
+        self.validate_origin_port(origin_request.port)?;
 
         Ok((resolution, origin_request))
+    }
+
+    fn validate_origin_address(&self, address: &str) -> Result<(), GatewayError> {
+        let address = address
+            .parse::<IpAddr>()
+            .map_err(|_| GatewayError::NonPublicOriginAddress)?;
+        if self.config.allow_non_public_origin_addresses || is_publicly_routable(address) {
+            Ok(())
+        } else {
+            Err(GatewayError::NonPublicOriginAddress)
+        }
+    }
+
+    fn validate_origin_port(&self, port: u16) -> Result<(), GatewayError> {
+        if self.config.allow_unsafe_origin_ports || !is_browser_blocked_port(port) {
+            Ok(())
+        } else {
+            Err(GatewayError::UnsafeOriginPort(port))
+        }
+    }
+
+    fn allows_insecure_hns_origin_resolution(&self, host: &str) -> bool {
+        self.config.allow_insecure_hns_origin_resolution && classify_name(host) == NameClass::Hns
     }
 
     fn resolve_tlsa_records(
@@ -256,10 +355,6 @@ where
         };
 
         self.resolve_native_tlsa_records(&request)
-    }
-
-    fn allows_insecure_hns_origin_resolution(&self, host: &str) -> bool {
-        self.config.allow_insecure_hns_origin_resolution && classify_name(host) == NameClass::Hns
     }
 
     fn resolve_native_tlsa_records(
@@ -646,6 +741,139 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_gateway_auth_token() {
+        let config = GatewayConfig {
+            auth_token: Some(String::new()),
+            ..GatewayConfig::default()
+        };
+
+        assert_eq!(config.validate().unwrap_err(), GatewayError::EmptyAuthToken);
+    }
+
+    #[test]
+    fn configured_gateway_authentication_is_enforced() {
+        let config = GatewayConfig {
+            auth_token: Some("correct horse battery staple".to_owned()),
+            ..GatewayConfig::default()
+        };
+        assert!(!format!("{config:?}").contains("correct horse"));
+        let gateway = Gateway::new(
+            config,
+            StaticResolver::secure_with_address(),
+            StaticTransport,
+        )
+        .unwrap();
+        let mut request = request("name", "name");
+
+        assert_eq!(
+            gateway.handle(&request).unwrap_err(),
+            GatewayError::Unauthorized
+        );
+        request.auth_token = Some("wrong".to_owned());
+        assert_eq!(
+            gateway.handle(&request).unwrap_err(),
+            GatewayError::Unauthorized
+        );
+        request.auth_token = Some("correct horse battery staple".to_owned());
+        assert_eq!(gateway.handle(&request).unwrap().origin.status, 200);
+    }
+
+    #[test]
+    fn rejects_non_public_origin_address_by_default() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            StaticResolver {
+                secure: true,
+                records: vec![ResourceRecord {
+                    name: DnsName::from_ascii("name").unwrap(),
+                    record_type: RecordType::A,
+                    class: 1,
+                    ttl: 60,
+                    rdata: vec![169, 254, 169, 254],
+                }],
+            },
+            StaticTransport,
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway.handle(&request("name", "name")).unwrap_err(),
+            GatewayError::NonPublicOriginAddress
+        );
+    }
+
+    #[test]
+    fn non_public_origin_address_requires_explicit_opt_in() {
+        let gateway = Gateway::new(
+            GatewayConfig {
+                allow_non_public_origin_addresses: true,
+                ..GatewayConfig::default()
+            },
+            StaticResolver {
+                secure: true,
+                records: vec![ResourceRecord {
+                    name: DnsName::from_ascii("name").unwrap(),
+                    record_type: RecordType::A,
+                    class: 1,
+                    ttl: 60,
+                    rdata: vec![1, 1, 1, 1],
+                }],
+            },
+            StaticTransport,
+        )
+        .unwrap();
+
+        assert_eq!(
+            gateway
+                .handle(&request("name", "name"))
+                .unwrap()
+                .origin
+                .status,
+            200
+        );
+    }
+
+    #[test]
+    fn ignores_untrusted_connection_override() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            StaticResolver::secure_with_address(),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+        let mut request = request("name", "name");
+        request.origin.connect_host = Some("127.0.0.1".to_owned());
+
+        gateway.handle(&request).unwrap();
+
+        let captured = gateway
+            .transport()
+            .last_request
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap();
+        assert_eq!(captured.connect_host, Some("1.1.1.1".to_owned()));
+    }
+
+    #[test]
+    fn rejects_browser_blocked_origin_port() {
+        let gateway = Gateway::new(
+            GatewayConfig::default(),
+            StaticResolver::secure_with_address(),
+            StaticTransport,
+        )
+        .unwrap();
+        let mut request = request("name", "name");
+        request.origin.port = 22;
+
+        assert_eq!(
+            gateway.handle(&request).unwrap_err(),
+            GatewayError::UnsafeOriginPort(22)
+        );
+    }
+
+    #[test]
     fn rejects_host_resolution_mismatch() {
         let gateway = Gateway::new(
             GatewayConfig::default(),
@@ -788,7 +1016,7 @@ mod tests {
                     record_type: RecordType::A,
                     class: 1,
                     ttl: 60,
-                    rdata: vec![127, 0, 0, 1],
+                    rdata: vec![1, 1, 1, 1],
                 }],
             },
             CapturingTransport::default(),
@@ -805,7 +1033,7 @@ mod tests {
             .clone()
             .unwrap();
         assert_eq!(captured.host, "name");
-        assert_eq!(captured.connect_host, Some("127.0.0.1".to_owned()));
+        assert_eq!(captured.connect_host, Some("1.1.1.1".to_owned()));
     }
 
     #[test]
@@ -842,7 +1070,7 @@ mod tests {
             .unwrap()
             .clone()
             .unwrap();
-        assert_eq!(captured.connect_host, Some("127.0.0.1".to_owned()));
+        assert_eq!(captured.connect_host, Some("1.1.1.1".to_owned()));
         assert_eq!(
             *requests.lock().unwrap(),
             vec![
@@ -901,7 +1129,10 @@ mod tests {
             .unwrap()
             .clone()
             .unwrap();
-        assert_eq!(captured.connect_host, Some("::1".to_owned()));
+        assert_eq!(
+            captured.connect_host,
+            Some("2606:4700:4700::1111".to_owned())
+        );
         assert_eq!(
             requests
                 .lock()
@@ -932,7 +1163,7 @@ mod tests {
                         record_type: RecordType::A,
                         class: 1,
                         ttl: 60,
-                        rdata: vec![127, 0, 0, 1],
+                        rdata: vec![1, 1, 1, 1],
                     },
                 ],
             },
@@ -950,7 +1181,7 @@ mod tests {
             .clone()
             .unwrap();
         assert_eq!(captured.host, "name");
-        assert_eq!(captured.connect_host, Some("127.0.0.1".to_owned()));
+        assert_eq!(captured.connect_host, Some("1.1.1.1".to_owned()));
     }
 
     #[test]
@@ -1174,6 +1405,42 @@ mod tests {
                 qname: "_8443._tcp.name".to_owned(),
                 qtype: RecordType::Tlsa.code(),
             },
+        );
+    }
+
+    #[test]
+    fn rejects_browser_blocked_https_service_port() {
+        let gateway = Gateway::new(
+            gateway_config_with_protocols(vec![OriginProtocol::Http11]),
+            ScriptedResolver::new(
+                vec![
+                    response(
+                        "name",
+                        u16::MAX,
+                        true,
+                        vec![
+                            address_record(),
+                            https_record(
+                                "name",
+                                1,
+                                ".",
+                                vec![alpn_param(&[b"http/1.1"]), port_param(22)],
+                            ),
+                        ],
+                    ),
+                    response("_22._tcp.name", RecordType::Tlsa.code(), true, vec![]),
+                ],
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            CapturingTransport::default(),
+        )
+        .unwrap();
+        let mut request = request("name", "name");
+        request.resolution.qtype = u16::MAX;
+
+        assert_eq!(
+            gateway.handle(&request).unwrap_err(),
+            GatewayError::UnsafeOriginPort(22)
         );
     }
 
@@ -1815,7 +2082,7 @@ mod tests {
             record_type: RecordType::A,
             class: 1,
             ttl: 60,
-            rdata: vec![127, 0, 0, 1],
+            rdata: vec![1, 1, 1, 1],
         }
     }
 
@@ -1825,7 +2092,11 @@ mod tests {
             record_type: RecordType::Aaaa,
             class: 1,
             ttl: 60,
-            rdata: Ipv6Addr::LOCALHOST.octets().to_vec(),
+            rdata: "2606:4700:4700::1111"
+                .parse::<Ipv6Addr>()
+                .unwrap()
+                .octets()
+                .to_vec(),
         }
     }
 
@@ -1937,6 +2208,7 @@ mod tests {
 
     fn request(origin_host: &str, qname: &str) -> GatewayRequest {
         GatewayRequest {
+            auth_token: None,
             origin: OriginRequest {
                 method: "GET".to_owned(),
                 scheme: "https".to_owned(),

@@ -2,10 +2,16 @@ package com.denuoweb.hnsdane.net
 
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import java.security.SecureRandom
 
 internal object HnsWebSocketLimits {
     const val MAX_ACTIVE_SESSIONS = 32
+    const val MAX_PAGE_ID_CHARS = 128
+    const val MAX_PROTOCOLS = 16
+    const val MAX_PROTOCOL_CHARS = 128
     const val MAX_WEB_MESSAGE_CHARS = 3 * 1024 * 1024
     const val MAX_FRAME_PAYLOAD_BYTES = 2 * 1024 * 1024
     const val MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -67,12 +73,19 @@ internal class HnsWebSocketFrameParser(
             val first = buffer[cursor].toInt() and 0xff
             val second = buffer[cursor + 1].toInt() and 0xff
             val fin = (first and FIN_BIT) != 0
+            if ((first and RSV_MASK) != 0) {
+                throw IOException("websocket frame uses unsupported reserved bits")
+            }
             val opcode = first and OPCODE_MASK
             if (opcode !in VALID_OPCODES) {
                 throw IOException("websocket frame opcode is unsupported")
             }
             val masked = (second and MASK_BIT) != 0
-            var payloadLength = (second and LENGTH_MASK).toLong()
+            if (masked) {
+                throw IOException("websocket server frame must not be masked")
+            }
+            val lengthMarker = second and LENGTH_MASK
+            var payloadLength = lengthMarker.toLong()
             var headerLength = MIN_HEADER_BYTES
 
             if (payloadLength == LENGTH_16_MARKER.toLong()) {
@@ -80,12 +93,18 @@ internal class HnsWebSocketFrameParser(
                     break
                 }
                 payloadLength = unsignedShort(cursor + headerLength).toLong()
+                if (payloadLength < LENGTH_16_MARKER) {
+                    throw IOException("websocket frame length is not minimally encoded")
+                }
                 headerLength += SHORT_LENGTH_BYTES
             } else if (payloadLength == LENGTH_64_MARKER.toLong()) {
                 if (available < headerLength + LONG_LENGTH_BYTES) {
                     break
                 }
                 payloadLength = unsignedLong(cursor + headerLength)
+                if (payloadLength <= 0xffffL) {
+                    throw IOException("websocket frame length is not minimally encoded")
+                }
                 headerLength += LONG_LENGTH_BYTES
             }
 
@@ -95,9 +114,6 @@ internal class HnsWebSocketFrameParser(
             if (opcode in CONTROL_OPCODES && (!fin || payloadLength > MAX_CONTROL_PAYLOAD_BYTES)) {
                 throw IOException("websocket control frame is malformed")
             }
-            if (masked) {
-                headerLength += MASK_BYTES
-            }
             val frameLength = headerLength + payloadLength.toInt()
             if (available < frameLength) {
                 break
@@ -105,12 +121,6 @@ internal class HnsWebSocketFrameParser(
 
             val payloadStart = cursor + headerLength
             val payload = buffer.copyOfRange(payloadStart, payloadStart + payloadLength.toInt())
-            if (masked) {
-                val maskStart = cursor + headerLength - MASK_BYTES
-                for (index in payload.indices) {
-                    payload[index] = (payload[index].toInt() xor buffer[maskStart + (index % MASK_BYTES)].toInt()).toByte()
-                }
-            }
             onFrame(HnsWebSocketFrame(fin, opcode, payload))
             cursor += frameLength
         }
@@ -139,8 +149,8 @@ internal class HnsWebSocketFrameParser(
         const val MIN_HEADER_BYTES = 2
         const val SHORT_LENGTH_BYTES = 2
         const val LONG_LENGTH_BYTES = 8
-        const val MASK_BYTES = 4
         const val FIN_BIT = 0x80
+        const val RSV_MASK = 0x70
         const val MASK_BIT = 0x80
         const val OPCODE_MASK = 0x0f
         const val LENGTH_MASK = 0x7f
@@ -172,6 +182,10 @@ internal class HnsWebSocketMessageAssembler(
     }
 
     private fun handleDataFrame(frame: HnsWebSocketFrame) {
+        if (continuationOpcode != null) {
+            fail("websocket data frame arrived during a fragmented message")
+            return
+        }
         if (frame.payload.size > maxMessageBytes) {
             fail("websocket message is too large")
             return
@@ -186,7 +200,7 @@ internal class HnsWebSocketMessageAssembler(
             continuationPayload = ByteArrayOutputStream(frame.payload.size).apply { write(frame.payload) }
             return
         }
-        onMessage(frame.opcode, frame.payload)
+        emitMessage(frame.opcode, frame.payload)
     }
 
     private fun handleContinuation(frame: HnsWebSocketFrame) {
@@ -206,8 +220,16 @@ internal class HnsWebSocketMessageAssembler(
         if (frame.fin) {
             val message = payload.toByteArray()
             resetContinuation()
-            onMessage(opcode, message)
+            emitMessage(opcode, message)
         }
+    }
+
+    private fun emitMessage(opcode: Int, payload: ByteArray) {
+        if (opcode == HnsWebSocketFrameCodec.OPCODE_TEXT && !HnsWebSocketFrameCodec.isValidUtf8(payload)) {
+            fail("websocket text message is not valid UTF-8")
+            return
+        }
+        onMessage(opcode, payload)
     }
 
     private fun fail(reason: String) {
@@ -251,13 +273,17 @@ internal object HnsWebSocketFrameCodec {
     }
 
     fun closePayload(code: Int, reason: String): ByteArray {
-        val reasonBytes = reason.toByteArray(Charsets.UTF_8)
+        require(isValidCloseCode(code)) { "invalid websocket close code" }
+        val reasonBytes = encodeUtf8(reason)
+        require(reasonBytes.size <= MAX_CLOSE_REASON_BYTES) { "websocket close reason is too long" }
         val payload = ByteArray(STATUS_CODE_BYTES + reasonBytes.size)
         payload[0] = ((code ushr 8) and 0xff).toByte()
         payload[1] = (code and 0xff).toByte()
         reasonBytes.copyInto(payload, STATUS_CODE_BYTES)
         return payload
     }
+
+    fun textPayload(value: String): ByteArray = encodeUtf8(value)
 
     fun closeCode(payload: ByteArray): Int? {
         if (payload.size < STATUS_CODE_BYTES) {
@@ -270,8 +296,43 @@ internal object HnsWebSocketFrameCodec {
         if (payload.size <= STATUS_CODE_BYTES) {
             return ""
         }
-        return payload.copyOfRange(STATUS_CODE_BYTES, payload.size).toString(Charsets.UTF_8)
+        return decodeUtf8(payload.copyOfRange(STATUS_CODE_BYTES, payload.size))
     }
+
+    fun validateClosePayload(payload: ByteArray) {
+        require(payload.size != 1) { "websocket close payload is malformed" }
+        if (payload.isEmpty()) {
+            return
+        }
+        require(payload.size <= MAX_CONTROL_PAYLOAD_BYTES) { "websocket close payload is too large" }
+        require(isValidCloseCode(requireNotNull(closeCode(payload)))) { "invalid websocket close code" }
+        closeReason(payload)
+    }
+
+    fun isValidCloseCode(code: Int): Boolean =
+        code in setOf(1000, 1001, 1002, 1003, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014) ||
+            code in 3000..4999
+
+    fun isValidUtf8(bytes: ByteArray): Boolean =
+        runCatching { decodeUtf8(bytes) }.isSuccess
+
+    private fun encodeUtf8(value: String): ByteArray {
+        val encoded = Charsets.UTF_8.newEncoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .encode(CharBuffer.wrap(value))
+        return encoded.toByteArray()
+    }
+
+    private fun decodeUtf8(bytes: ByteArray): String =
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+
+    private fun ByteBuffer.toByteArray(): ByteArray =
+        ByteArray(remaining()).also { get(it) }
 
     private fun writeLength(output: ByteArrayOutputStream, length: Int, masked: Boolean) {
         val maskBit = if (masked) MASK_BIT else 0
@@ -296,6 +357,8 @@ internal object HnsWebSocketFrameCodec {
     private const val OPCODE_MASK = 0x0f
     private const val MASK_BYTES = 4
     private const val STATUS_CODE_BYTES = 2
+    private const val MAX_CONTROL_PAYLOAD_BYTES = 125
+    private const val MAX_CLOSE_REASON_BYTES = MAX_CONTROL_PAYLOAD_BYTES - STATUS_CODE_BYTES
     private const val LENGTH_16_MARKER = 126
     private const val LENGTH_64_MARKER = 127
 }

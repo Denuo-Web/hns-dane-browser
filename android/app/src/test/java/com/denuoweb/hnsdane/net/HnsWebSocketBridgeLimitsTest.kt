@@ -42,4 +42,24 @@ class HnsWebSocketBridgeLimitsTest {
         assertEquals(listOf("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"), handshakes)
         assertEquals(listOf("frame"), frames)
     }
+
+    @Test
+    fun tunnelOutputRejectsTerminatedHandshakeWhoseHeadExceedsLimit() {
+        val handshakes = mutableListOf<ByteArray>()
+        val frames = mutableListOf<ByteArray>()
+        val failures = mutableListOf<String>()
+        val oversizedHead = ByteArray(HnsWebSocketLimits.MAX_HANDSHAKE_BYTES + 1) { 'A'.code.toByte() }
+        val terminator = "\r\n\r\nframe".toByteArray()
+        val output = HnsWebSocketTunnelOutput(
+            onHandshake = { handshakes += it },
+            onFrameBytes = { bytes, offset, length -> frames += bytes.copyOfRange(offset, offset + length) },
+            onFailure = { failures += it },
+        )
+
+        output.write(oversizedHead + terminator)
+
+        assertTrue(handshakes.isEmpty())
+        assertTrue(frames.isEmpty())
+        assertEquals(listOf("HNS WebSocket handshake response is too large"), failures)
+    }
 }

@@ -18,9 +18,13 @@ rust/fuzz/target/
 # Env/secrets
 .env
 .env.*
+.envrc
 *.keystore
 *.jks
 *.p12
+*.pfx
+*.pkcs12
+*.kdbx
 *.pem
 *.key
 *.asc
@@ -32,6 +36,7 @@ release.properties
 google-services.json
 service-account*.json
 credentials*.json
+firebase-adminsdk*.json
 
 # Android artifacts
 *.apk

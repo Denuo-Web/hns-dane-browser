@@ -99,6 +99,25 @@ class HnsNativeDownloadFetcherTest {
         dataDir.deleteRecursively()
     }
 
+    @Test
+    fun fetchRejectsSecureTransportDowngradeAndDeletesBody() {
+        val dataDir = createTempDirectory("hns-download-downgrade-test").toFile()
+        val bridge = QueueGatewayBridge(
+            GatewayResponse.file(
+                head = "HTTP/1.1 302 Found\r\nLocation: http://welcome/file\r\nContent-Length: 0\r\n\r\n",
+                body = "",
+            ),
+        )
+        val fetcher = HnsNativeDownloadFetcher(dataDir, bridge)
+
+        assertThrows(HnsNativeDownloadException::class.java) {
+            fetcher.fetch("https://welcome/start.bin", null)
+        }
+
+        assertFalse(bridge.bodyFiles.single().exists())
+        dataDir.deleteRecursively()
+    }
+
     private data class GatewayCall(
         val method: String,
         val scheme: String,

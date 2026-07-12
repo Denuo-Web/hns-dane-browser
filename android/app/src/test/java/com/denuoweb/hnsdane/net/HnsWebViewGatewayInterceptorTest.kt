@@ -450,6 +450,27 @@ class HnsWebViewGatewayInterceptorTest {
     }
 
     @Test
+    fun hnsRedirectCannotChangeOriginOrDowngradeTransport() {
+        for (location in listOf("https://otherhns/final", "http://welcome/final", "https://welcome:8443/final")) {
+            val bridge = RecordingGatewayBridge(
+                "HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\n\r\n"
+                    .toByteArray(StandardCharsets.ISO_8859_1),
+            )
+            val dataDir = createTempDirectory("hns-webview-origin-redirect-test").toFile()
+            val interceptor = HnsWebViewGatewayInterceptor(dataDir, bridge)
+
+            val response = interceptor.intercept("GET", "https://welcome/start", emptyMap())
+
+            assertEquals(1, bridge.calls.size)
+            requireNotNull(response)
+            assertEquals(502, response.statusCode)
+            assertEquals("HNS Redirect Unsupported", response.reason)
+            assertTrue(response.body.toString(StandardCharsets.UTF_8).contains("same-origin"))
+            dataDir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun hnsPostFailsClosedBeforeNativeGatewayBecauseWebViewBodyIsUnavailable() {
         val bridge = RecordingGatewayBridge(
             "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
@@ -490,6 +511,30 @@ class HnsWebViewGatewayInterceptorTest {
         val response = interceptor.intercept("POST", "https://welcome/form", emptyMap())
 
         assertNull(response)
+        assertTrue(bridge.calls.isEmpty())
+        dataDir.deleteRecursively()
+    }
+
+    @Test
+    fun serviceWorkerBodyRequestFailsClosedEvenWhenPageProxyFallbackIsAvailable() {
+        val bridge = RecordingGatewayBridge(ByteArray(0))
+        val dataDir = createTempDirectory("hns-service-worker-method-test").toFile()
+        val interceptor = HnsWebViewGatewayInterceptor(
+            dataDir,
+            bridge,
+            allowProxyFallbackForBodyRequests = { true },
+        )
+
+        val response = interceptor.intercept(
+            method = "POST",
+            url = "https://welcome/form",
+            requestHeaders = emptyMap(),
+            isForMainFrame = false,
+            allowBodyRequestProxyFallback = false,
+        )
+
+        requireNotNull(response)
+        assertEquals(501, response.statusCode)
         assertTrue(bridge.calls.isEmpty())
         dataDir.deleteRecursively()
     }

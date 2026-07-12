@@ -17,6 +17,11 @@ internal object BrowserDownloadStore {
     private const val PREFS = "browser_downloads"
     private const val KEY_RECORDS = "records_json"
     private const val MAX_RECORDS = 100
+    private const val MAX_URL_CHARS = 16 * 1024
+    private const val MAX_CONTENT_URI_CHARS = 2 * 1024
+    private const val MAX_FILE_NAME_CHARS = 255
+    private const val MAX_MIME_TYPE_CHARS = 255
+    private const val MAX_SERIALIZED_CHARS = 3 * 1024 * 1024
 
     @Synchronized
     fun records(context: Context): List<BrowserDownloadRecord> =
@@ -34,13 +39,15 @@ internal object BrowserDownloadStore {
         mimeType: String?,
         queuedAtMillis: Long = System.currentTimeMillis(),
     ) {
+        if (downloadId < 0L) return
+        val normalizedUrl = normalizeUrl(url) ?: return
         val updated = listOf(
             BrowserDownloadRecord(
                 downloadId = downloadId,
                 contentUri = "",
-                url = url,
-                fileName = fileName,
-                mimeType = mimeType.orEmpty(),
+                url = normalizedUrl,
+                fileName = normalizeFileName(fileName),
+                mimeType = normalizeMimeType(mimeType),
                 queuedAtMillis = queuedAtMillis,
             ),
         ) + records(context).filterNot { it.downloadId == downloadId && downloadId >= 0L }
@@ -57,16 +64,20 @@ internal object BrowserDownloadStore {
         mimeType: String?,
         queuedAtMillis: Long = System.currentTimeMillis(),
     ) {
+        val normalizedContentUri = contentUri.trim().takeIf {
+            it.isNotEmpty() && it.length <= MAX_CONTENT_URI_CHARS
+        } ?: return
+        val normalizedUrl = normalizeUrl(url) ?: return
         val updated = listOf(
             BrowserDownloadRecord(
                 downloadId = -1L,
-                contentUri = contentUri,
-                url = url,
-                fileName = fileName,
-                mimeType = mimeType.orEmpty(),
+                contentUri = normalizedContentUri,
+                url = normalizedUrl,
+                fileName = normalizeFileName(fileName),
+                mimeType = normalizeMimeType(mimeType),
                 queuedAtMillis = queuedAtMillis,
             ),
-        ) + records(context).filterNot { it.contentUri == contentUri && contentUri.isNotBlank() }
+        ) + records(context).filterNot { it.contentUri == normalizedContentUri }
 
         save(context, updated.take(MAX_RECORDS))
     }
@@ -81,32 +92,41 @@ internal object BrowserDownloadStore {
         return count
     }
 
-    private fun parseRecords(json: String?): List<BrowserDownloadRecord> {
-        if (json.isNullOrBlank()) {
+    internal fun parseRecords(json: String?): List<BrowserDownloadRecord> {
+        if (json.isNullOrBlank() || json.length > MAX_SERIALIZED_CHARS) {
             return emptyList()
         }
 
         val array = runCatching { JSONArray(json) }.getOrNull() ?: return emptyList()
-        return (0 until array.length()).mapNotNull { index ->
+        return (0 until minOf(array.length(), MAX_RECORDS)).mapNotNull { index ->
             val item = array.optJSONObject(index) ?: return@mapNotNull null
             val downloadId = item.optLong("downloadId", -1L)
             val contentUri = item.optString("contentUri").trim()
-            val url = item.optString("url").trim()
-            val fileName = item.optString("fileName").trim()
-            if ((downloadId < 0L && contentUri.isBlank()) || url.isBlank()) {
+            val url = normalizeUrl(item.optString("url"))
+            val validContentUri = contentUri.length <= MAX_CONTENT_URI_CHARS
+            if ((downloadId < 0L && contentUri.isBlank()) || !validContentUri || url == null) {
                 null
             } else {
                 BrowserDownloadRecord(
                     downloadId = downloadId,
                     contentUri = contentUri,
                     url = url,
-                    fileName = fileName.ifBlank { "download" },
-                    mimeType = item.optString("mimeType").trim(),
+                    fileName = normalizeFileName(item.optString("fileName")),
+                    mimeType = normalizeMimeType(item.optString("mimeType")),
                     queuedAtMillis = item.optLong("queuedAtMillis", 0L),
                 )
             }
         }
     }
+
+    private fun normalizeUrl(url: String): String? =
+        url.trim().takeIf { it.isNotEmpty() && it.length <= MAX_URL_CHARS }
+
+    private fun normalizeFileName(fileName: String): String =
+        fileName.trim().take(MAX_FILE_NAME_CHARS).ifBlank { "download" }
+
+    private fun normalizeMimeType(mimeType: String?): String =
+        mimeType.orEmpty().trim().take(MAX_MIME_TYPE_CHARS)
 
     private fun save(context: Context, records: List<BrowserDownloadRecord>) {
         val array = JSONArray()

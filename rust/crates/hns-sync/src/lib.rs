@@ -4,7 +4,7 @@ use hns_core::network::Network;
 use hns_core::{BlockHeader, Hash, NameHash};
 use hns_p2p::{
     HeaderSyncAction, HeaderSyncSession, MAX_HEADERS, P2pError, Packet, PeerConnection,
-    PeerManager, ProofPacket, SqlitePeerStore, VersionPacket,
+    PeerManager, ProofPacket, SqlitePeerStore, VersionPacket, is_allowed_peer_endpoint,
 };
 use hns_resolver::{
     MemoryResourceValueProvider, ResolverError, SqliteResourceValueProvider, VerifiedResourceValue,
@@ -59,6 +59,8 @@ pub struct HeaderSyncRunnerConfig {
     pub timeout: Duration,
     pub stop: Hash,
     pub malformed_ban_seconds: u64,
+    /// Test/development escape hatch. Production mainnet and testnet sync must leave this false.
+    pub allow_unsafe_peer_endpoints: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,6 +196,7 @@ impl Default for HeaderSyncRunnerConfig {
             timeout: DEFAULT_SYNC_TIMEOUT,
             stop: Hash::ZERO,
             malformed_ban_seconds: DEFAULT_MALFORMED_BAN_SECONDS,
+            allow_unsafe_peer_endpoints: false,
         }
     }
 }
@@ -284,6 +287,58 @@ impl<C> HeaderSyncRunner<C> {
     pub fn connector(&self) -> &C {
         &self.connector
     }
+
+    fn peer_endpoint_allowed(&self, address: SocketAddr) -> bool {
+        self.config.allow_unsafe_peer_endpoints || is_allowed_peer_endpoint(&self.network, address)
+    }
+
+    fn eligible_peer_count(&self, peers: &PeerManager) -> usize {
+        peers
+            .iter()
+            .filter(|peer| self.peer_endpoint_allowed(peer.address))
+            .count()
+    }
+
+    fn select_outbound_peers(
+        &self,
+        peers: &PeerManager,
+        preferred_count: usize,
+        now: u64,
+    ) -> Vec<SocketAddr> {
+        peers
+            .select_outbound(peers.len(), now)
+            .into_iter()
+            .filter(|address| self.peer_endpoint_allowed(*address))
+            .take(preferred_count)
+            .collect()
+    }
+
+    fn select_discovery_peers(
+        &self,
+        peers: &PeerManager,
+        preferred_count: usize,
+        now: u64,
+        exclude: &HashSet<SocketAddr>,
+    ) -> Vec<SocketAddr> {
+        peers
+            .select_discovery_outbound(peers.len(), now, exclude)
+            .into_iter()
+            .filter(|address| self.peer_endpoint_allowed(*address))
+            .take(preferred_count)
+            .collect()
+    }
+
+    fn seed_discovered_peers(
+        &self,
+        peers: &mut PeerManager,
+        discovered: impl IntoIterator<Item = SocketAddr>,
+    ) -> usize {
+        peers.seed(
+            discovered
+                .into_iter()
+                .filter(|address| self.peer_endpoint_allowed(*address)),
+        )
+    }
 }
 
 impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
@@ -303,7 +358,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         now: u64,
         store: Option<&SqlitePeerStore>,
     ) -> Result<HeaderSyncRunResult, SyncError> {
-        let outbound = peers.select_outbound(self.config.preferred_peers, now);
+        let outbound = self.select_outbound_peers(peers, self.config.preferred_peers, now);
         let mut attempted_addresses = HashSet::new();
         let mut result = HeaderSyncRunResult::empty();
 
@@ -376,7 +431,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         if self.config.discover_peers
             && let Ok(discovered) = peer.request_addresses()
         {
-            peers.seed(discovered);
+            self.seed_discovered_peers(peers, discovered);
             persist_peer_manager(store, peers)?;
         }
         let mut accepted = 0usize;
@@ -476,19 +531,20 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
         store: Option<&SqlitePeerStore>,
     ) -> Result<(), SyncError> {
         if !self.config.discover_peers
-            || peers.len() >= self.config.peer_discovery_target
+            || self.eligible_peer_count(peers) >= self.config.peer_discovery_target
             || self.config.peer_discovery_query_peers == 0
         {
             return Ok(());
         }
 
-        let candidates = peers.select_discovery_outbound(
+        let candidates = self.select_discovery_peers(
+            peers,
             self.config.peer_discovery_query_peers,
             now,
             attempted_addresses,
         );
         for address in candidates {
-            if peers.len() >= self.config.peer_discovery_target {
+            if self.eligible_peer_count(peers) >= self.config.peer_discovery_target {
                 break;
             }
 
@@ -503,7 +559,7 @@ impl<C: HeaderPeerConnector> HeaderSyncRunner<C> {
                             peers.record_observed_height(address, remote.height, now);
                             persist_peer_manager(store, peers)?;
                             if let Ok(discovered) = peer.request_addresses() {
-                                peers.seed(discovered);
+                                self.seed_discovered_peers(peers, discovered);
                                 persist_peer_manager(store, peers)?;
                             }
                             peers.record_success(address, remote.height, now);
@@ -567,7 +623,8 @@ impl HeaderSyncRunner<TcpHeaderPeerConnector> {
                 failures: Vec::new(),
             });
         }
-        let addresses = peers.select_outbound(
+        let addresses = self.select_outbound_peers(
+            peers,
             self.config
                 .parallel_header_fetch_peers
                 .max(1)
@@ -673,8 +730,11 @@ impl HeaderSyncRunner<TcpHeaderPeerConnector> {
                 &mut staged_ranges,
                 &mut result,
             )?;
-            let candidates =
-                peers.select_outbound(self.config.parallel_header_fetch_peers.max(1), now);
+            let candidates = self.select_outbound_peers(
+                peers,
+                self.config.parallel_header_fetch_peers.max(1),
+                now,
+            );
             if candidates.is_empty() {
                 break;
             }
@@ -814,9 +874,14 @@ impl HeaderSyncRunner<TcpHeaderPeerConnector> {
         }
 
         let candidates = if refresh_due {
-            peers.select_discovery_outbound(self.config.parallel_peer_probes, now, &HashSet::new())
+            self.select_discovery_peers(
+                peers,
+                self.config.parallel_peer_probes,
+                now,
+                &HashSet::new(),
+            )
         } else {
-            peers.select_outbound(self.config.parallel_peer_probes, now)
+            self.select_outbound_peers(peers, self.config.parallel_peer_probes, now)
         };
         if candidates.len() <= 1 {
             return Ok(0);
@@ -852,7 +917,7 @@ impl HeaderSyncRunner<TcpHeaderPeerConnector> {
                         discovered,
                     } => {
                         peers.record_success(address, remote_height, now);
-                        peers.seed(discovered);
+                        self.seed_discovered_peers(peers, discovered);
                         successful = successful.saturating_add(1);
                     }
                     ParallelPeerProbe::Failure(failure) => {
@@ -1694,6 +1759,13 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    fn permissive_runner_config() -> HeaderSyncRunnerConfig {
+        HeaderSyncRunnerConfig {
+            allow_unsafe_peer_endpoints: true,
+            ..HeaderSyncRunnerConfig::default()
+        }
+    }
+
     #[test]
     fn empty_batch_keeps_best_tip() {
         let mut coordinator = seeded_coordinator();
@@ -1797,7 +1869,7 @@ mod tests {
             connector,
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -1829,6 +1901,45 @@ mod tests {
     }
 
     #[test]
+    fn strict_runner_filters_private_and_custom_port_peers_and_discovery() {
+        let mut coordinator = seeded_coordinator();
+        let primary: SocketAddr = "1.1.1.1:12038".parse().unwrap();
+        let discovered: SocketAddr = "8.8.8.8:12038".parse().unwrap();
+        let private: SocketAddr = "127.0.0.1:12038".parse().unwrap();
+        let custom_port: SocketAddr = "9.9.9.9:22".parse().unwrap();
+        let mut peers = PeerManager::default();
+        peers.seed([private, custom_port, primary]);
+        let connector = ScriptedHeaderConnector::new([(
+            primary,
+            ScriptedHeaderPeer::headers(Height(0), Vec::new()).with_addresses(vec![
+                private,
+                custom_port,
+                discovered,
+            ]),
+        )]);
+        let runner = HeaderSyncRunner::with_config(
+            network::mainnet(),
+            connector,
+            HeaderSyncRunnerConfig {
+                preferred_peers: 3,
+                peer_discovery_target: 2,
+                ..HeaderSyncRunnerConfig::default()
+            },
+        );
+
+        let result = runner
+            .sync_once(&mut coordinator, &mut peers, 1_000)
+            .unwrap();
+
+        assert_eq!(result.attempted, 1);
+        assert_eq!(result.successful, 1);
+        assert_eq!(peers.get(primary).unwrap().successes, 1);
+        assert!(peers.get(discovered).is_some());
+        assert_eq!(peers.get(private).unwrap().successes, 0);
+        assert_eq!(peers.get(custom_port).unwrap().successes, 0);
+    }
+
+    #[test]
     fn header_sync_runner_persists_discovery_before_header_download() {
         let path = temp_db_path("sync-peers-early");
         let mut coordinator = seeded_coordinator();
@@ -1856,7 +1967,7 @@ mod tests {
             connector,
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -1899,7 +2010,7 @@ mod tests {
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
                 max_header_batches_per_peer: 2,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -1935,7 +2046,7 @@ mod tests {
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
                 max_header_batches_per_peer: 2,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -1966,7 +2077,7 @@ mod tests {
             connector,
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -1998,7 +2109,7 @@ mod tests {
             connector,
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2038,7 +2149,7 @@ mod tests {
                 preferred_peers: 1,
                 peer_discovery_target: 4,
                 peer_discovery_query_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2066,7 +2177,7 @@ mod tests {
             TcpHeaderPeerConnector,
             HeaderSyncRunnerConfig {
                 parallel_peer_probes: 4,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2108,7 +2219,7 @@ mod tests {
                 parallel_peer_probes: 2,
                 peer_discovery_target: 2,
                 peer_height_refresh_interval: 60,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2148,7 +2259,7 @@ mod tests {
                 parallel_peer_probes: 2,
                 peer_discovery_target: 2,
                 peer_height_refresh_interval: 60,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2185,7 +2296,7 @@ mod tests {
                 max_header_batches_per_peer: 1,
                 parallel_header_fetch_peers: 2,
                 timeout: Duration::from_secs(2),
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2228,7 +2339,7 @@ mod tests {
                 max_header_batches_per_peer: 1,
                 parallel_header_fetch_peers: 2,
                 timeout: Duration::from_secs(2),
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2271,7 +2382,7 @@ mod tests {
                 max_header_batches_per_peer: 1,
                 parallel_header_fetch_peers: 2,
                 timeout: Duration::from_secs(2),
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2375,7 +2486,7 @@ mod tests {
             )>()),
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 
@@ -2411,7 +2522,7 @@ mod tests {
             HeaderSyncRunnerConfig {
                 preferred_peers: 1,
                 malformed_ban_seconds: 60,
-                ..HeaderSyncRunnerConfig::default()
+                ..permissive_runner_config()
             },
         );
 

@@ -4,6 +4,8 @@ use hns_core::dns::{
     ResourceRecord, SVCB_PARAM_ALPN, SVCB_PARAM_DOHPATH, SVCB_PARAM_IPV4HINT, SVCB_PARAM_IPV6HINT,
     SVCB_PARAM_MANDATORY, SVCB_PARAM_PORT, SvcbRecord,
 };
+use hns_core::network::NetworkKind;
+use hns_core::network_policy::{is_browser_blocked_port, is_publicly_routable};
 use hns_core::resource::{ResourceError, decode_handshake_resource_records};
 use hns_core::{Hash, Height, NameHash, NameHashError};
 use hns_dnssec::{
@@ -34,6 +36,18 @@ const DEFAULT_DOH_PORT: u16 = 443;
 const DOH_URI_TEMPLATE_DNS_VARIABLE: &str = "{?dns}";
 const MAX_CNAME_CHAIN_LEN: usize = 8;
 static DNS_QUERY_ID: AtomicU16 = AtomicU16::new(0x4d00);
+// Generated from https://data.iana.org/TLD/tlds-alpha-by-domain.txt, version 2026062302.
+const ICANN_TLDS: &str = include_str!("icann_tlds.txt");
+const SPECIAL_USE_SUFFIXES: &[&str] = &[
+    "alt",
+    "example",
+    "internal",
+    "invalid",
+    "local",
+    "localhost",
+    "onion",
+    "test",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NameClass {
@@ -99,6 +113,10 @@ pub enum ResolverError {
     UnsupportedBackend,
     #[error("HNS delegation has no usable nameserver address")]
     NoNameserverAddress,
+    #[error("delegated DNS endpoint is not publicly routable")]
+    NonPublicDnsEndpoint,
+    #[error("authoritative DoH port {0} is blocked by browser network policy")]
+    UnsafeAuthoritativeDohPort(u16),
     #[error("DNS transport failed: {0}")]
     DnsTransport(String),
     #[error("DNS response returned rcode {0}")]
@@ -183,11 +201,47 @@ pub struct AuthoritativeDohEndpoint {
     pub path_and_query: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DnsEndpointPolicy {
+    pub allow_non_public_addresses: bool,
+    pub allow_unsafe_doh_ports: bool,
+}
+
+impl DnsEndpointPolicy {
+    pub const fn strict() -> Self {
+        Self {
+            allow_non_public_addresses: false,
+            allow_unsafe_doh_ports: false,
+        }
+    }
+
+    pub const fn permissive() -> Self {
+        Self {
+            allow_non_public_addresses: true,
+            allow_unsafe_doh_ports: true,
+        }
+    }
+
+    pub const fn for_network(network: NetworkKind) -> Self {
+        match network {
+            NetworkKind::Mainnet | NetworkKind::Testnet => Self::strict(),
+            NetworkKind::Regtest => Self::permissive(),
+        }
+    }
+}
+
+impl Default for DnsEndpointPolicy {
+    fn default() -> Self {
+        Self::strict()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UdpTcpDnsTransport {
     pub timeout: Duration,
     pub max_udp_response_len: usize,
     pub max_tcp_message_len: usize,
+    pub endpoint_policy: DnsEndpointPolicy,
 }
 
 pub struct SystemDnssecVerifier;
@@ -200,6 +254,10 @@ pub struct AuthoritativeDnssecResolver<T = UdpTcpDnsTransport, V = SystemDnssecV
 }
 
 pub trait DnsTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        DnsEndpointPolicy::strict()
+    }
+
     fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError>;
 
     fn exchange_tcp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError>;
@@ -469,12 +527,18 @@ impl Default for UdpTcpDnsTransport {
             timeout: Duration::from_secs(3),
             max_udp_response_len: DEFAULT_DNS_UDP_PAYLOAD,
             max_tcp_message_len: DEFAULT_DNS_TCP_MAX_MESSAGE_LEN,
+            endpoint_policy: DnsEndpointPolicy::strict(),
         }
     }
 }
 
 impl DnsTransport for UdpTcpDnsTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        self.endpoint_policy
+    }
+
     fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        validate_dns_server(self.endpoint_policy, server)?;
         let bind_addr = match server {
             SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
@@ -495,7 +559,7 @@ impl DnsTransport for UdpTcpDnsTransport {
         let (len, source) = socket
             .recv_from(&mut response)
             .map_err(|error| ResolverError::DnsTransport(error.to_string()))?;
-        if source.ip() != server.ip() {
+        if source != server {
             return Err(ResolverError::InvalidDnsResponse);
         }
         response.truncate(len);
@@ -503,6 +567,7 @@ impl DnsTransport for UdpTcpDnsTransport {
     }
 
     fn exchange_tcp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        validate_dns_server(self.endpoint_policy, server)?;
         if query.len() > u16::MAX as usize {
             return Err(ResolverError::InvalidDnsResponse);
         }
@@ -3047,6 +3112,29 @@ enum DnsQueryTarget<'a> {
     Doh(&'a AuthoritativeDohEndpoint),
 }
 
+fn validate_dns_server(policy: DnsEndpointPolicy, server: SocketAddr) -> Result<(), ResolverError> {
+    if policy.allow_non_public_addresses || is_publicly_routable(server.ip()) {
+        Ok(())
+    } else {
+        Err(ResolverError::NonPublicDnsEndpoint)
+    }
+}
+
+fn validate_doh_endpoint(
+    policy: DnsEndpointPolicy,
+    endpoint: &AuthoritativeDohEndpoint,
+) -> Result<(), ResolverError> {
+    validate_dns_server(
+        policy,
+        SocketAddr::new(endpoint.connect_addr, endpoint.port),
+    )?;
+    if policy.allow_unsafe_doh_ports || !is_browser_blocked_port(endpoint.port) {
+        Ok(())
+    } else {
+        Err(ResolverError::UnsafeAuthoritativeDohPort(endpoint.port))
+    }
+}
+
 fn dns_query<T: DnsTransport>(
     transport: &T,
     server: SocketAddr,
@@ -3071,6 +3159,11 @@ fn dns_query_target<T: DnsTransport>(
     qname: &DnsName,
     qtype: RecordType,
 ) -> Result<DnsMessage, ResolverError> {
+    let endpoint_policy = transport.endpoint_policy();
+    match target {
+        DnsQueryTarget::Server(server) => validate_dns_server(endpoint_policy, server)?,
+        DnsQueryTarget::Doh(endpoint) => validate_doh_endpoint(endpoint_policy, endpoint)?,
+    }
     let id = next_dns_query_id();
     let query = build_dns_query(id, qname, qtype)?;
     let DnsQueryTarget::Server(server) = target else {
@@ -3464,66 +3557,27 @@ pub fn classify_name(input: &str) -> NameClass {
 
     if host.is_empty() {
         NameClass::Search
-    } else if hns_root_label(host).is_ok() && !uses_common_icann_tld(host) {
+    } else if host.parse::<IpAddr>().is_ok() || uses_icann_namespace(host) {
+        NameClass::Icann
+    } else if hns_root_label(host).is_ok() {
         NameClass::Hns
     } else {
         NameClass::Icann
     }
 }
 
-fn uses_common_icann_tld(host: &str) -> bool {
-    let labels = host.trim_end_matches('.').rsplit_once('.');
-    let Some((_, tld)) = labels else {
+fn uses_icann_namespace(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    let Some(suffix) = host.rsplit('.').next() else {
         return false;
     };
-    matches!(
-        tld.to_ascii_lowercase().as_str(),
-        "ai" | "app"
-            | "au"
-            | "biz"
-            | "blog"
-            | "br"
-            | "ca"
-            | "ch"
-            | "cloud"
-            | "cn"
-            | "co"
-            | "com"
-            | "de"
-            | "dev"
-            | "edu"
-            | "es"
-            | "eu"
-            | "fr"
-            | "gov"
-            | "id"
-            | "in"
-            | "info"
-            | "int"
-            | "io"
-            | "it"
-            | "jp"
-            | "me"
-            | "mil"
-            | "name"
-            | "net"
-            | "nl"
-            | "no"
-            | "online"
-            | "org"
-            | "page"
-            | "pl"
-            | "ru"
-            | "se"
-            | "site"
-            | "store"
-            | "tech"
-            | "to"
-            | "tv"
-            | "uk"
-            | "us"
-            | "xyz"
-    )
+    SPECIAL_USE_SUFFIXES
+        .iter()
+        .any(|candidate| suffix.eq_ignore_ascii_case(candidate))
+        || host.contains('.')
+            && ICANN_TLDS
+                .lines()
+                .any(|candidate| suffix.eq_ignore_ascii_case(candidate))
 }
 
 #[cfg(test)]
@@ -3571,6 +3625,11 @@ mod tests {
         server_responses: ServerDnsResponseMap,
         requests: DnsRequestLog,
         udp_behavior: ScriptedUdpBehavior,
+    }
+
+    struct PolicyDnsTransport {
+        policy: DnsEndpointPolicy,
+        calls: AtomicUsize,
     }
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3710,6 +3769,10 @@ mod tests {
     }
 
     impl DnsTransport for ScriptedDnsTransport {
+        fn endpoint_policy(&self) -> DnsEndpointPolicy {
+            DnsEndpointPolicy::permissive()
+        }
+
         fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
             let query = DnsMessage::parse(query).unwrap();
             let question = query.questions[0].clone();
@@ -3804,6 +3867,39 @@ mod tests {
                 .cloned()
                 .unwrap_or_default();
             Ok(dns_response(&query, fixture, false))
+        }
+    }
+
+    impl DnsTransport for PolicyDnsTransport {
+        fn endpoint_policy(&self) -> DnsEndpointPolicy {
+            self.policy
+        }
+
+        fn exchange_udp(
+            &self,
+            _server: SocketAddr,
+            _query: &[u8],
+        ) -> Result<Vec<u8>, ResolverError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ResolverError::UnsupportedBackend)
+        }
+
+        fn exchange_tcp(
+            &self,
+            _server: SocketAddr,
+            _query: &[u8],
+        ) -> Result<Vec<u8>, ResolverError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ResolverError::UnsupportedBackend)
+        }
+
+        fn exchange_doh(
+            &self,
+            _endpoint: &AuthoritativeDohEndpoint,
+            _query: &[u8],
+        ) -> Result<Vec<u8>, ResolverError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ResolverError::UnsupportedBackend)
         }
     }
 
@@ -3950,6 +4046,143 @@ mod tests {
     #[test]
     fn dotted_name_is_icann() {
         assert_eq!(classify_name("example.com"), NameClass::Icann);
+    }
+
+    #[test]
+    fn uncommon_and_internationalized_iana_tlds_are_icann() {
+        assert_eq!(classify_name("collection.museum"), NameClass::Icann);
+        assert_eq!(
+            classify_name("example.xn--vermgensberater-ctb"),
+            NameClass::Icann
+        );
+        assert_eq!(classify_name("museum"), NameClass::Hns);
+    }
+
+    #[test]
+    fn special_use_suffixes_and_ip_literals_never_route_to_hns() {
+        for host in [
+            "alt",
+            "name.alt",
+            "example",
+            "www.example",
+            "internal",
+            "corp.internal",
+            "name.invalid",
+            "printer.local",
+            "localhost",
+            "www.localhost",
+            "service.onion",
+            "name.test",
+            "127.0.0.1",
+            "::1",
+        ] {
+            assert_eq!(classify_name(host), NameClass::Icann, "{host}");
+        }
+    }
+
+    #[test]
+    fn delegated_dns_policy_rejects_non_public_endpoints_before_transport() {
+        let name = DnsName::from_ascii("host.name").unwrap();
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "64:ff9b::a00:1",
+        ] {
+            let transport = PolicyDnsTransport {
+                policy: DnsEndpointPolicy::strict(),
+                calls: AtomicUsize::new(0),
+            };
+            let server = SocketAddr::new(address.parse().unwrap(), 53);
+
+            assert_eq!(
+                dns_query(&transport, server, &name, RecordType::A).unwrap_err(),
+                ResolverError::NonPublicDnsEndpoint,
+                "{address}"
+            );
+            assert_eq!(transport.calls.load(Ordering::SeqCst), 0, "{address}");
+        }
+    }
+
+    #[test]
+    fn authoritative_doh_policy_rejects_unsafe_port_before_transport() {
+        let transport = PolicyDnsTransport {
+            policy: DnsEndpointPolicy::strict(),
+            calls: AtomicUsize::new(0),
+        };
+        let endpoint = AuthoritativeDohEndpoint {
+            ns: DnsName::from_ascii("ns.name").unwrap(),
+            host: "ns.name".to_owned(),
+            connect_addr: "1.1.1.1".parse().unwrap(),
+            port: 22,
+            path_and_query: "/dns-query".to_owned(),
+        };
+
+        assert_eq!(
+            dns_query_doh(
+                &transport,
+                &endpoint,
+                &DnsName::from_ascii("host.name").unwrap(),
+                RecordType::A,
+            )
+            .unwrap_err(),
+            ResolverError::UnsafeAuthoritativeDohPort(22),
+        );
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn regtest_endpoint_policy_explicitly_allows_private_endpoints() {
+        let transport = PolicyDnsTransport {
+            policy: DnsEndpointPolicy::for_network(NetworkKind::Regtest),
+            calls: AtomicUsize::new(0),
+        };
+        let error = dns_query(
+            &transport,
+            "127.0.0.1:53".parse().unwrap(),
+            &DnsName::from_ascii("host.name").unwrap(),
+            RecordType::A,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, ResolverError::UnsupportedBackend);
+        assert_eq!(transport.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            DnsEndpointPolicy::for_network(NetworkKind::Mainnet),
+            DnsEndpointPolicy::strict()
+        );
+        assert_eq!(
+            DnsEndpointPolicy::for_network(NetworkKind::Testnet),
+            DnsEndpointPolicy::strict()
+        );
+    }
+
+    #[test]
+    fn udp_transport_rejects_response_from_wrong_source_port() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_address = server.local_addr().unwrap();
+        let responder = std::thread::spawn(move || {
+            let mut query = [0u8; 16];
+            let (_, client) = server.recv_from(&mut query).unwrap();
+            let wrong_source = UdpSocket::bind("127.0.0.1:0").unwrap();
+            wrong_source.send_to(b"spoofed", client).unwrap();
+        });
+        let transport = UdpTcpDnsTransport {
+            timeout: Duration::from_secs(1),
+            endpoint_policy: DnsEndpointPolicy::permissive(),
+            ..UdpTcpDnsTransport::default()
+        };
+
+        assert_eq!(
+            transport
+                .exchange_udp(server_address, b"query")
+                .unwrap_err(),
+            ResolverError::InvalidDnsResponse
+        );
+        responder.join().unwrap();
     }
 
     #[test]

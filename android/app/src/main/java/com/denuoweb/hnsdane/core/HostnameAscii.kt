@@ -5,24 +5,66 @@ import java.util.Locale
 
 internal object HostnameAscii {
     fun toAscii(host: String): String? {
-        val normalized = host.removeSurrounding("[", "]")
-        if (normalized.isBlank() || normalized.any { it.isWhitespace() || it == '/' || it == '?' || it == '#' }) {
+        // Keep the expensive normalization and IDN/punycode paths behind a raw-input
+        // bound. Web content can supply this value, and IDN.toASCII is not intended
+        // to process arbitrarily large strings.
+        if (host.isEmpty() || host.length > MAX_RAW_HOST_CHARS) {
+            return null
+        }
+        val normalized = host
+            .removeSurrounding("[", "]")
+            .replace('\u3002', '.')
+            .replace('\uFF0E', '.')
+            .replace('\uFF61', '.')
+        if (
+            normalized.isBlank() ||
+            normalized.any { it.isWhitespace() || it == '/' || it == '?' || it == '#' }
+        ) {
+            return null
+        }
+
+        val labels = normalized.split('.')
+        if (
+            labels.size > MAX_LABELS ||
+            labels.dropLast(if (normalized.endsWith('.')) 1 else 0).any {
+                it.isEmpty() || it.length > MAX_RAW_LABEL_CHARS
+            }
+        ) {
             return null
         }
 
         runCatching { IDN.toASCII(normalized).lowercase(Locale.US) }
             .getOrNull()
+            ?.takeIf(::isValidAsciiHost)
             ?.let { return it }
 
-        val labels = normalized
-            .replace('\u3002', '.')
-            .replace('\uFF0E', '.')
-            .replace('\uFF61', '.')
-            .split('.')
-        val asciiLabels = labels.map { label ->
-            toAsciiLabel(label) ?: return null
+        return runCatching { fallbackToAscii(labels, normalized.endsWith('.')) }
+            .getOrNull()
+            ?.takeIf(::isValidAsciiHost)
+    }
+
+    private fun fallbackToAscii(labels: List<String>, trailingDot: Boolean): String? {
+        val asciiLabels = ArrayList<String>(labels.size)
+        labels.forEachIndexed { index, label ->
+            if (trailingDot && index == labels.lastIndex && label.isEmpty()) {
+                asciiLabels += ""
+            } else {
+                asciiLabels += toAsciiLabel(label) ?: return null
+            }
         }
         return asciiLabels.joinToString(".").lowercase(Locale.US)
+    }
+
+    private fun isValidAsciiHost(host: String): Boolean {
+        val withoutTrailingDot = host.removeSuffix(".")
+        if (withoutTrailingDot.isEmpty() || withoutTrailingDot.length > MAX_ASCII_HOST_CHARS) {
+            return false
+        }
+        return withoutTrailingDot.split('.').all { label ->
+            label.isNotEmpty() &&
+                label.length <= MAX_ASCII_LABEL_CHARS &&
+                label.all(::isAsciiHostChar)
+        }
     }
 
     private fun toAsciiLabel(label: String): String? {
@@ -130,6 +172,11 @@ internal object HostnameAscii {
             char == '-'
 
     private const val ASCII_LIMIT = 0x80
+    private const val MAX_RAW_HOST_CHARS = 1_024
+    private const val MAX_RAW_LABEL_CHARS = 256
+    private const val MAX_LABELS = 127
+    private const val MAX_ASCII_HOST_CHARS = 253
+    private const val MAX_ASCII_LABEL_CHARS = 63
     private const val UNICODE_MAX = 0x10FFFF
     private const val SURROGATE_MIN = 0xD800
     private const val SURROGATE_MAX = 0xDFFF

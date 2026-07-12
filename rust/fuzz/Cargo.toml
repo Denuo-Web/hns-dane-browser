@@ -3,6 +3,7 @@ name = "hns-dane-browser-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [package.metadata]
 cargo-fuzz = true

@@ -61,6 +61,24 @@ class HnsWebSocketRequestPolicyTest {
     }
 
     @Test
+    fun followupMessagesMustAlsoComeFromActiveMainFrame() {
+        assertThrows(HnsWebSocketPolicyException::class.java) {
+            HnsWebSocketRequestPolicy.validateMessageSource(
+                sourceOrigin = "https://denuoweb",
+                activeMainFrameUrl = "https://denuoweb/",
+                isMainFrame = false,
+            )
+        }
+        assertThrows(HnsWebSocketPolicyException::class.java) {
+            HnsWebSocketRequestPolicy.validateMessageSource(
+                sourceOrigin = "https://otherhns",
+                activeMainFrameUrl = "https://denuoweb/",
+                isMainFrame = true,
+            )
+        }
+    }
+
+    @Test
     fun sourceOriginMustMatchActivePage() {
         assertThrows(HnsWebSocketPolicyException::class.java) {
             HnsWebSocketRequestPolicy.validate(

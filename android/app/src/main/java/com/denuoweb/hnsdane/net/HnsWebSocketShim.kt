@@ -26,7 +26,7 @@ internal object HnsWebSocketShim {
   var pageId = String(Date.now()) + '-' + String(Math.random()).slice(2);
   var nextId = 1;
   var icannTlds = new Set([$icannTlds]);
-  var reservedSingleLabels = new Set(['example', 'invalid', 'local', 'localhost', 'test']);
+  var specialUseSuffixes = new Set(['alt', 'example', 'internal', 'invalid', 'local', 'localhost', 'onion', 'test']);
   var maxMessageBytes = ${HnsWebSocketLimits.MAX_MESSAGE_BYTES};
   var maxBufferedBytes = ${HnsWebSocketLimits.MAX_OUTBOUND_QUEUE_BYTES};
 
@@ -48,9 +48,9 @@ internal object HnsWebSocketShim {
 
   function requiresHnsResolution(host) {
     host = normalizeHost(host);
-    if (!host || reservedSingleLabels.has(host) || isIpLiteral(host)) return false;
-    if (host.endsWith('.localhost')) return false;
+    if (!host || isIpLiteral(host)) return false;
     var labels = host.split('.');
+    if (specialUseSuffixes.has(labels[labels.length - 1])) return false;
     if (labels.length === 1) return true;
     return !icannTlds.has(labels[labels.length - 1]);
   }

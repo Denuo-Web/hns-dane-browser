@@ -24,7 +24,9 @@ import androidx.activity.ComponentActivity
 import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.BuildConfig
 import com.denuoweb.hnsdane.net.NativeBridge
+import com.denuoweb.hnsdane.net.ProcessHnsSyncSingleFlight
 import org.json.JSONObject
+import kotlin.concurrent.thread
 
 class SettingsActivity : ComponentActivity() {
     private lateinit var homepageStatus: TextView
@@ -38,6 +40,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var historyStatus: TextView
     private lateinit var downloadStatus: TextView
     private lateinit var themeStatus: TextView
+    private var resolverCacheClearInProgress = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -501,7 +504,7 @@ class SettingsActivity : ComponentActivity() {
 
     private fun openLink(uri: Uri, copyLabel: String, copyText: String) {
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
         } catch (_: ActivityNotFoundException) {
             getSystemService(ClipboardManager::class.java)
                 .setPrimaryClip(ClipData.newPlainText(copyLabel, copyText))
@@ -684,21 +687,43 @@ class SettingsActivity : ComponentActivity() {
     }
 
     private fun clearResolverCache() {
+        if (resolverCacheClearInProgress) {
+            Toast.makeText(this, getString(R.string.sync_already_running), Toast.LENGTH_SHORT).show()
+            return
+        }
         val network = HnsResolutionPreferences.handshakeNetwork(this)
         val networkName = network.displayName(this)
-        val result = NativeBridge.clearResolverCache(filesDir.absolutePath, network.id)
-        val status = runCatching { JSONObject(result).optString("status") }.getOrDefault("")
-        val message = if (status == "cleared") {
-            getString(R.string.settings_resolver_cache_cleared, networkName)
-        } else {
-            getString(R.string.settings_resolver_cache_clear_failed)
+        val dataDir = filesDir.absolutePath
+        resolverCacheClearInProgress = true
+        resolverCacheStatus.text = getString(R.string.common_running)
+        thread(name = "hns-resolver-cache-clear") {
+            val result = ProcessHnsSyncSingleFlight.tryRun {
+                NativeBridge.clearResolverCache(dataDir, network.id)
+            }
+            val status = result?.let { runCatching { JSONObject(it).optString("status") }.getOrDefault("") }
+            runOnUiThread {
+                resolverCacheClearInProgress = false
+                if (isDestroyed) {
+                    return@runOnUiThread
+                }
+                if (status == null) {
+                    resolverCacheStatus.text = getString(R.string.settings_resolver_cache_ready)
+                    Toast.makeText(this, getString(R.string.sync_already_running), Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                val message = if (status == "cleared") {
+                    getString(R.string.settings_resolver_cache_cleared, networkName)
+                } else {
+                    getString(R.string.settings_resolver_cache_clear_failed)
+                }
+                resolverCacheStatus.text = if (status == "cleared") {
+                    getString(R.string.settings_resolver_cache_cleared_status, networkName)
+                } else {
+                    getString(R.string.settings_resolver_cache_clear_failed_status)
+                }
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
         }
-        resolverCacheStatus.text = if (status == "cleared") {
-            getString(R.string.settings_resolver_cache_cleared_status, networkName)
-        } else {
-            getString(R.string.settings_resolver_cache_clear_failed_status)
-        }
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshHomepageStatus() {

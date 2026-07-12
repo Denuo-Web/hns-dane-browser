@@ -6,11 +6,11 @@ object HnsHostPolicy {
     fun requiresHnsResolution(host: String): Boolean {
         val normalized = normalizedHost(host)
 
-        if (normalized.isEmpty() || normalized == "localhost" || normalized.endsWith(".localhost")) {
+        if (normalized.isEmpty()) {
             return false
         }
 
-        if (normalized in RESERVED_NON_HNS_SINGLE_LABELS) {
+        if (!isValidDnsHost(normalized)) {
             return false
         }
 
@@ -19,6 +19,9 @@ object HnsHostPolicy {
         }
 
         val labels = normalized.split('.')
+        if (labels.last() in SPECIAL_USE_SUFFIXES) {
+            return false
+        }
         if (labels.size == 1) {
             return true
         }
@@ -53,7 +56,16 @@ object HnsHostPolicy {
         }
     }
 
-    private val RESERVED_NON_HNS_SINGLE_LABELS = setOf("example", "invalid", "local", "test")
+    private fun isValidDnsHost(host: String): Boolean =
+        host.length <= 253 && host.split('.').all { label ->
+            label.isNotEmpty() &&
+                label.length <= 63 &&
+                !label.startsWith('-') &&
+                !label.endsWith('-') &&
+                label.all { it.isLetterOrDigit() || it == '-' }
+        }
+
+    private val SPECIAL_USE_SUFFIXES = setOf("alt", "example", "internal", "invalid", "local", "localhost", "onion", "test")
     private val ICANN_DANE_TEST_HOSTS = setOf("dane-test.denuoweb.com")
 
 }

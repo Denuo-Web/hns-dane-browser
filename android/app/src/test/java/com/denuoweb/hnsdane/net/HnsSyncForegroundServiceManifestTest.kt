@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
 import org.w3c.dom.NodeList
@@ -48,6 +49,21 @@ class HnsSyncForegroundServiceManifestTest {
 
         assertNotNull(legal)
         assertEquals("false", legal?.getAttributeNS(ANDROID_NS, "exported"))
+
+        val main = document.getElementsByTagName("activity")
+            .elements()
+            .firstOrNull { it.getAttributeNS(ANDROID_NS, "name") == MAIN_ACTIVITY }
+
+        assertNotNull(main)
+        assertEquals("false", main?.getAttributeNS(ANDROID_NS, "exported"))
+
+        val launcher = document.getElementsByTagName("activity")
+            .elements()
+            .firstOrNull { it.getAttributeNS(ANDROID_NS, "name") == LAUNCHER_ACTIVITY }
+
+        assertNotNull(launcher)
+        assertEquals("true", launcher?.getAttributeNS(ANDROID_NS, "exported"))
+        assertTrue(launcher.hasLauncherIntentFilter())
     }
 
     private fun locateManifest(): File {
@@ -70,12 +86,24 @@ class HnsSyncForegroundServiceManifestTest {
     private fun NodeList.elements(): Sequence<Element> =
         (0 until length).asSequence().mapNotNull { item(it) as? Element }
 
+    private fun Element?.hasLauncherIntentFilter(): Boolean {
+        val element = this ?: return false
+        return element.getElementsByTagName("intent-filter")
+            .elements()
+            .any { filter ->
+                filter.getElementsByTagName("action").hasAndroidName("android.intent.action.MAIN") &&
+                    filter.getElementsByTagName("category").hasAndroidName("android.intent.category.LAUNCHER")
+            }
+    }
+
     private companion object {
         const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
         const val HNS_SYNC_SERVICE = ".net.HnsSyncForegroundService"
         const val SETTINGS_ACTIVITY = ".ui.SettingsActivity"
         const val COOKIE_SETTINGS_ACTIVITY = ".ui.CookieSettingsActivity"
         const val LEGAL_ACTIVITY = ".ui.LegalActivity"
+        const val MAIN_ACTIVITY = ".ui.MainActivity"
+        const val LAUNCHER_ACTIVITY = ".ui.LauncherActivity"
         const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
         const val FOREGROUND_SERVICE = "android.permission.FOREGROUND_SERVICE"
         const val FOREGROUND_SERVICE_DATA_SYNC = "android.permission.FOREGROUND_SERVICE_DATA_SYNC"

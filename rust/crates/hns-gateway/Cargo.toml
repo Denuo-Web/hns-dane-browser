@@ -10,4 +10,5 @@ hns-core.workspace = true
 hns-dane.workspace = true
 hns-resolver.workspace = true
 hns-transport.workspace = true
+subtle.workspace = true
 thiserror.workspace = true

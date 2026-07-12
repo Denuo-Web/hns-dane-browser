@@ -1,5 +1,7 @@
 package com.denuoweb.hnsdane.net
 
+import com.denuoweb.hnsdane.core.HostnameAscii
+import java.io.Closeable
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.net.Socket
@@ -28,8 +30,9 @@ interface HnsConnectTerminator {
 class LocalTlsHnsConnectTerminator(
     private val certificateProvider: LocalTlsCertificateProvider = NativeBridge,
     private val certificateRegistry: HnsLocalCertificateRegistry = HnsLocalCertificateRegistry,
-) : HnsConnectTerminator {
+) : HnsConnectTerminator, Closeable {
     private val contexts = ConcurrentHashMap<String, SSLContext>()
+    private val trustedHosts = ConcurrentHashMap.newKeySet<String>()
 
     override fun prepare(target: ConnectTarget) {
         contextFor(target.host)
@@ -45,9 +48,19 @@ class LocalTlsHnsConnectTerminator(
     }
 
     private fun contextFor(host: String): SSLContext {
-        val normalizedHost = host.trim().trimEnd('.').lowercase(Locale.US)
+        val normalizedHost = HostnameAscii.toAscii(host.trim().trimEnd('.'))
+            ?.lowercase(Locale.US)
+            ?.takeIf { it.length <= 253 }
+            ?: throw IOException("local HNS TLS host is invalid")
         return try {
-            contexts.computeIfAbsent(normalizedHost) { buildContext(it) }
+            contexts[normalizedHost] ?: synchronized(contexts) {
+                contexts[normalizedHost] ?: run {
+                    if (contexts.size >= MAX_CACHED_CONTEXTS) {
+                        throw IOException("too many local HNS TLS hosts")
+                    }
+                    buildContext(normalizedHost).also { contexts[normalizedHost] = it }
+                }
+            }
         } catch (error: Exception) {
             throw IOException("local HNS TLS setup failed", error)
         }
@@ -67,9 +80,16 @@ class LocalTlsHnsConnectTerminator(
             keyManagers
         }
         certificateRegistry.trustHostCertificate(host, localCertificate.certificateSha256)
+        trustedHosts += host
         return SSLContext.getInstance("TLS").apply {
             init(keyManagers, null, SecureRandom())
         }
+    }
+
+    override fun close() {
+        contexts.clear()
+        trustedHosts.toList().forEach(certificateRegistry::untrustHostCertificate)
+        trustedHosts.clear()
     }
 
     private fun decodeCertificate(certificateDer: ByteArray): X509Certificate {
@@ -88,5 +108,6 @@ class LocalTlsHnsConnectTerminator(
         const val KEY_ALIAS = "hns-connect"
         val KEY_PASSWORD = charArrayOf()
         val KEY_ALGORITHMS = listOf("EC", "RSA", "Ed25519")
+        const val MAX_CACHED_CONTEXTS = 64
     }
 }

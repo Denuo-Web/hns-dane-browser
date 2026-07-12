@@ -35,7 +35,7 @@ internal object BrowserPreferences {
 
     fun normalizeHomepage(input: String): String? {
         val trimmed = input.trim()
-        if (trimmed.isBlank()) {
+        if (trimmed.isBlank() || trimmed.length > MAX_HOMEPAGE_CHARS) {
             return null
         }
 
@@ -51,4 +51,6 @@ internal object BrowserPreferences {
         val target = BrowserUrlClassifier().classify(trimmed)
         return target.url.takeUnless { target.kind == BrowserTargetKind.Search }
     }
+
+    private const val MAX_HOMEPAGE_CHARS = 16 * 1024
 }

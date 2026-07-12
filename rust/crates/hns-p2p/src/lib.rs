@@ -1,5 +1,6 @@
 use hns_core::bytes::{ParseError, Reader};
 use hns_core::network::Network;
+use hns_core::network_policy::is_publicly_routable;
 use hns_core::{BlockHeader, Hash, Height};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -24,6 +25,25 @@ pub const STALE_TIP_SCORE: i32 = 10;
 pub const TRANSIENT_FAILURE_SCORE: i32 = 5;
 pub const SUCCESS_REWARD: i32 = 2;
 pub const DEFAULT_DNS_SEED_LIMIT: usize = 64;
+
+/// Returns whether an automatically discovered peer endpoint is safe for the selected network.
+///
+/// Mainnet and testnet peers may only use the network's P2P port on a public address. Regtest is
+/// intentionally local-development friendly, but still rejects unusable port-zero and unspecified
+/// endpoints.
+pub fn is_allowed_peer_endpoint(network: &Network, address: SocketAddr) -> bool {
+    if address.port() == 0 || address.ip().is_unspecified() {
+        return false;
+    }
+
+    match network.name {
+        "mainnet" | "testnet" => {
+            address.port() == network.port && is_publicly_routable(address.ip())
+        }
+        "regtest" => true,
+        _ => false,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -437,6 +457,12 @@ impl PeerManager {
 
     pub fn is_empty(&self) -> bool {
         self.peers.is_empty()
+    }
+
+    pub fn retain(&mut self, mut keep: impl FnMut(&PeerState) -> bool) -> usize {
+        let previous_len = self.peers.len();
+        self.peers.retain(|_, peer| keep(peer));
+        previous_len.saturating_sub(self.peers.len())
     }
 
     pub fn address_group_count(&self, now: u64) -> usize {
@@ -1875,6 +1901,68 @@ mod tests {
         );
         assert_eq!(source.port(), 12_038);
         assert_eq!(source.limit(), DEFAULT_DNS_SEED_LIMIT);
+    }
+
+    #[test]
+    fn peer_endpoint_policy_blocks_private_and_custom_mainnet_endpoints() {
+        let network = network::mainnet();
+
+        assert!(is_allowed_peer_endpoint(
+            &network,
+            "1.1.1.1:12038".parse().unwrap()
+        ));
+        for address in [
+            "127.0.0.1:12038",
+            "10.0.0.1:12038",
+            "169.254.169.254:12038",
+            "1.1.1.1:22",
+            "1.1.1.1:13038",
+            "[::1]:12038",
+            "[fc00::1]:12038",
+        ] {
+            assert!(
+                !is_allowed_peer_endpoint(&network, address.parse().unwrap()),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn peer_endpoint_policy_allows_regtest_loopback_and_custom_ports() {
+        let network = network::regtest();
+
+        assert!(is_allowed_peer_endpoint(
+            &network,
+            "127.0.0.1:18444".parse().unwrap()
+        ));
+        assert!(is_allowed_peer_endpoint(
+            &network,
+            "[::1]:18444".parse().unwrap()
+        ));
+        assert!(!is_allowed_peer_endpoint(
+            &network,
+            "0.0.0.0:18444".parse().unwrap()
+        ));
+        assert!(!is_allowed_peer_endpoint(
+            &network,
+            "127.0.0.1:0".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn peer_manager_can_prune_disallowed_persisted_endpoints() {
+        let network = network::mainnet();
+        let public: SocketAddr = "1.1.1.1:12038".parse().unwrap();
+        let private: SocketAddr = "127.0.0.1:12038".parse().unwrap();
+        let mut manager = PeerManager::default();
+        manager.seed([public, private]);
+
+        assert_eq!(
+            manager.retain(|peer| is_allowed_peer_endpoint(&network, peer.address)),
+            1
+        );
+        assert!(manager.get(public).is_some());
+        assert!(manager.get(private).is_none());
     }
 
     #[test]

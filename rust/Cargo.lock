@@ -621,6 +621,7 @@ dependencies = [
  "hns-dane",
  "hns-resolver",
  "hns-transport",
+ "subtle",
  "thiserror 2.0.18",
 ]
 
@@ -671,6 +672,7 @@ dependencies = [
  "quinn",
  "rcgen",
  "rustls",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
