@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.12 - 2026-07-13
+
+### Fixed
+
+- Retried delegated authoritative DNS over TCP when UDP answers fail DNSSEC validation, preserving fail-closed DNSSEC behavior while recovering from UDP-only DNS path corruption.
+- Bumped the Android app, Rust core, Play upload defaults, and Play metadata package for the 0.3.12 release.
+
 ## 0.3.11 - 2026-07-12
 
 ### Fixed

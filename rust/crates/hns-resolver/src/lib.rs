@@ -2049,7 +2049,45 @@ where
     T: DnsTransport,
     V: DelegatedDnssecVerifier,
 {
-    let target_response = dns_query(transport, server, request_name, qtype)?;
+    match resolve_delegated_from_server_target(
+        transport,
+        verifier,
+        server,
+        DnsQueryTarget::Server(server),
+        delegation,
+        request_name,
+        qtype,
+        ds_rrset,
+    ) {
+        Err(ResolverError::DnssecFailed) => resolve_delegated_from_server_target(
+            transport,
+            verifier,
+            server,
+            DnsQueryTarget::ServerTcp(server),
+            delegation,
+            request_name,
+            qtype,
+            ds_rrset,
+        ),
+        result => result,
+    }
+}
+
+fn resolve_delegated_from_server_target<T, V>(
+    transport: &T,
+    verifier: &V,
+    server: SocketAddr,
+    target: DnsQueryTarget<'_>,
+    delegation: &HnsDelegation,
+    request_name: &DnsName,
+    qtype: RecordType,
+    ds_rrset: &[ResourceRecord],
+) -> Result<ResolutionAnswer, ResolverError>
+where
+    T: DnsTransport,
+    V: DelegatedDnssecVerifier,
+{
+    let target_response = dns_query_target(transport, target, request_name, qtype)?;
     let target_rrset = records_for(&target_response.answers, request_name, qtype);
 
     if ds_rrset.is_empty() {
@@ -2060,7 +2098,8 @@ where
         });
     }
 
-    let dnskey_response = dns_query(transport, server, &delegation.owner, RecordType::Dnskey)?;
+    let dnskey_response =
+        dns_query_target(transport, target, &delegation.owner, RecordType::Dnskey)?;
     let dnskey_rrset = records_for(
         &dnskey_response.answers,
         &delegation.owner,
@@ -2170,7 +2209,7 @@ where
     resolve_secure_answer_records(SecureAnswerResolutionInput {
         transport,
         verifier,
-        target: DnsQueryTarget::Server(server),
+        target,
         delegation,
         request_name,
         qtype,
@@ -3109,6 +3148,7 @@ fn closest_encloser_candidates(
 #[derive(Clone, Copy)]
 enum DnsQueryTarget<'a> {
     Server(SocketAddr),
+    ServerTcp(SocketAddr),
     Doh(&'a AuthoritativeDohEndpoint),
 }
 
@@ -3161,13 +3201,21 @@ fn dns_query_target<T: DnsTransport>(
 ) -> Result<DnsMessage, ResolverError> {
     let endpoint_policy = transport.endpoint_policy();
     match target {
-        DnsQueryTarget::Server(server) => validate_dns_server(endpoint_policy, server)?,
+        DnsQueryTarget::Server(server) | DnsQueryTarget::ServerTcp(server) => {
+            validate_dns_server(endpoint_policy, server)?
+        }
         DnsQueryTarget::Doh(endpoint) => validate_doh_endpoint(endpoint_policy, endpoint)?,
     }
     let id = next_dns_query_id();
     let query = build_dns_query(id, qname, qtype)?;
-    let DnsQueryTarget::Server(server) = target else {
-        return dns_query_https(transport, target, qname, qtype, &query);
+    let server = match target {
+        DnsQueryTarget::Server(server) => server,
+        DnsQueryTarget::ServerTcp(server) => {
+            return dns_query_tcp(transport, server, id, qname, qtype, &query);
+        }
+        DnsQueryTarget::Doh(_) => {
+            return dns_query_https(transport, target, qname, qtype, &query);
+        }
     };
     let udp_response = match transport.exchange_udp(server, &query) {
         Ok(response) => response,
@@ -3632,6 +3680,10 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    struct TcpRepairDnsTransport {
+        requests: DnsRequestLog,
+    }
+
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     enum ScriptedUdpBehavior {
         #[default]
@@ -3900,6 +3952,44 @@ mod tests {
         ) -> Result<Vec<u8>, ResolverError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Err(ResolverError::UnsupportedBackend)
+        }
+    }
+
+    impl DnsTransport for TcpRepairDnsTransport {
+        fn endpoint_policy(&self) -> DnsEndpointPolicy {
+            DnsEndpointPolicy::permissive()
+        }
+
+        fn exchange_udp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+            let query = DnsMessage::parse(query).unwrap();
+            let question = query.questions[0].clone();
+            self.requests.lock().unwrap().push((
+                server,
+                question.name.to_string(),
+                question.record_type.code(),
+                false,
+            ));
+            Ok(dns_response(
+                &query,
+                tcp_repair_fixture(&question, false),
+                false,
+            ))
+        }
+
+        fn exchange_tcp(&self, server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+            let query = DnsMessage::parse(query).unwrap();
+            let question = query.questions[0].clone();
+            self.requests.lock().unwrap().push((
+                server,
+                question.name.to_string(),
+                question.record_type.code(),
+                true,
+            ));
+            Ok(dns_response(
+                &query,
+                tcp_repair_fixture(&question, true),
+                false,
+            ))
         }
     }
 
@@ -4696,6 +4786,74 @@ mod tests {
                     "welcome".to_owned(),
                     RecordType::Dnskey.code(),
                     true,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn authoritative_dnssec_resolver_retries_tcp_when_udp_dnssec_fails() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 53)), 53);
+        let resolver = AuthoritativeDnssecResolver::new(
+            TcpRepairDnsTransport {
+                requests: Arc::clone(&requests),
+            },
+            StaticDnssecVerifier {
+                positive_valid: true,
+                no_data_valid: false,
+                name_error_valid: false,
+                child_positive_valid: false,
+                child_no_data_valid: false,
+                child_name_error_valid: false,
+                validations: Arc::new(Mutex::new(Vec::new())),
+                no_data_validations: Arc::new(Mutex::new(Vec::new())),
+                name_error_validations: Arc::new(Mutex::new(Vec::new())),
+                child_validations: Arc::new(Mutex::new(Vec::new())),
+                child_no_data_validations: Arc::new(Mutex::new(Vec::new())),
+                child_name_error_validations: Arc::new(Mutex::new(Vec::new())),
+            },
+        );
+
+        let answer = resolver
+            .resolve_delegated(
+                &ResolutionRequest {
+                    qname: "welcome".to_owned(),
+                    qtype: RecordType::A.code(),
+                },
+                &delegation_with_records(vec![
+                    ns_record("welcome", "ns1.welcome"),
+                    glue4_record("ns1.welcome", [203, 0, 113, 53]),
+                    ds_record("welcome"),
+                ]),
+            )
+            .unwrap();
+
+        assert!(answer.secure);
+        assert_eq!(
+            answer.records,
+            vec![record(
+                DnsName::from_ascii("welcome").unwrap(),
+                RecordType::A,
+                vec![1, 1, 1, 1],
+            )]
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            vec![
+                (server, "welcome".to_owned(), RecordType::A.code(), false),
+                (
+                    server,
+                    "welcome".to_owned(),
+                    RecordType::Dnskey.code(),
+                    false
+                ),
+                (server, "welcome".to_owned(), RecordType::A.code(), true),
+                (
+                    server,
+                    "welcome".to_owned(),
+                    RecordType::Dnskey.code(),
+                    true
                 ),
             ]
         );
@@ -6598,6 +6756,26 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    fn tcp_repair_fixture(question: &DnsQuestion, valid_dnskey: bool) -> DnsResponseFixture {
+        let records = match question.record_type {
+            RecordType::A => vec![
+                record(question.name.clone(), RecordType::A, vec![1, 1, 1, 1]),
+                rrsig_record(&question.name.to_string()),
+            ],
+            RecordType::Dnskey if valid_dnskey => vec![
+                record(question.name.clone(), RecordType::Dnskey, vec![1, 2, 3, 4]),
+                rrsig_record(&question.name.to_string()),
+            ],
+            _ => Vec::new(),
+        };
+        DnsResponseFixture {
+            rcode: DNS_RCODE_NOERROR,
+            answers: records,
+            authorities: Vec::new(),
+            additionals: Vec::new(),
+        }
     }
 
     fn dns_response(query: &DnsMessage, fixture: DnsResponseFixture, truncated: bool) -> Vec<u8> {
