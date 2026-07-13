@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">Doğrulama başarısız oldu</string>
 <string name="security_proof_unavailable">Kanıt mevcut değil</string>
+<string name="http_transport_warning">Güvenli değil: HTTP trafiği şifrelenmiyor</string>
 <string name="security_status_content_description">Çözümleyici izlemeyi aç</string>
 <string name="menu_hamburger_content_description">Tarayıcı menüsü</string>
 <string name="menu_forward">İleri</string>

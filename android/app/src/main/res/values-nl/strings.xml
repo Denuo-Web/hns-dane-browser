@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">Validatie mislukt</string>
 <string name="security_proof_unavailable">Bewijs niet beschikbaar</string>
+<string name="http_transport_warning">Niet beveiligd: HTTP-verkeer is niet versleuteld</string>
 <string name="security_status_content_description">Open de tracertrace</string>
 <string name="menu_hamburger_content_description">Browsermenu</string>
 <string name="menu_forward">Vooruit</string>

@@ -48,6 +48,7 @@ import androidx.webkit.WebViewFeature
 import androidx.webkit.WebViewRenderProcess
 import androidx.webkit.WebViewRenderProcessClient
 import com.denuoweb.hnsdane.BuildConfig
+import com.denuoweb.hnsdane.HnsDaneApplication
 import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.core.BrowserSecurityPolicy
 import com.denuoweb.hnsdane.core.BrowserTargetKind
@@ -55,13 +56,11 @@ import com.denuoweb.hnsdane.core.BrowserUrlClassifier
 import com.denuoweb.hnsdane.core.HnsPageResolverPolicy
 import com.denuoweb.hnsdane.core.HnsPageTlsPolicy
 import com.denuoweb.hnsdane.core.SecurityState
-import com.denuoweb.hnsdane.net.BundledHeaderSyncBridge
 import com.denuoweb.hnsdane.net.DisabledServiceWorkerClient
 import com.denuoweb.hnsdane.net.GatewayEventLog
 import com.denuoweb.hnsdane.net.HnsProxyController
 import com.denuoweb.hnsdane.net.HnsServiceWorkerGatewayClient
 import com.denuoweb.hnsdane.net.HnsSyncProgress
-import com.denuoweb.hnsdane.net.HnsSyncScheduler
 import com.denuoweb.hnsdane.net.HnsSyncSnapshot
 import com.denuoweb.hnsdane.net.HnsNativeDownloadFetcher
 import com.denuoweb.hnsdane.net.HnsWebSocketBridge
@@ -75,7 +74,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
 import java.io.ByteArrayInputStream
-import java.lang.ref.WeakReference
+import java.io.Closeable
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -114,7 +113,7 @@ class MainActivity : ComponentActivity() {
     private var mainFrameHnsTraceJson: String? = null
     private var mainFrameHnsStatusUrl: String? = null
     private var lastSyncSnapshot: HnsSyncSnapshot? = null
-    private var activeSyncScheduler: HnsSyncScheduler? = null
+    private var syncSnapshotSubscription: Closeable? = null
     private var activityStarted: Boolean = false
     @Volatile
     private var gatewayInterceptionEnabled: Boolean = true
@@ -333,7 +332,7 @@ class MainActivity : ComponentActivity() {
         )
         refreshSecurityState()
         refreshSyncProgress()
-        startActiveSync()
+        observeForegroundSync()
         startSyncStatusPolling()
     }
 
@@ -345,7 +344,7 @@ class MainActivity : ComponentActivity() {
         }
         hnsWebSocketBridge.closeAll(reason = "browser backgrounded")
         stopSyncStatusPolling()
-        stopActiveSync()
+        stopObservingForegroundSync()
         stopLoopbackGateway()
         super.onStop()
     }
@@ -353,7 +352,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         activityDestroyed = true
         gatewayInterceptionEnabled = false
-        stopActiveSync()
+        stopObservingForegroundSync()
         stopLoopbackGateway()
         hnsWebSocketBridge.close()
         disableServiceWorkerInterception()
@@ -619,35 +618,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startActiveSync() {
-        if (activeSyncScheduler != null || activityDestroyed) {
+    private fun observeForegroundSync() {
+        if (syncSnapshotSubscription != null || activityDestroyed) {
             return
         }
 
-        val appContext = applicationContext
-        val activity = WeakReference(this)
-        val scheduler = HnsSyncScheduler(
-            filesDir,
-            bridge = BundledHeaderSyncBridge(appContext),
-            network = { HnsResolutionPreferences.handshakeNetworkId(appContext) },
-        )
-        activeSyncScheduler = scheduler
-        scheduler.start snapshotCallback@{ snapshot ->
-            val owner = activity.get() ?: return@snapshotCallback
-            owner.mainHandler.post {
-                if (owner.activeSyncScheduler !== scheduler || owner.activityDestroyed) {
+        val app = application as? HnsDaneApplication ?: return
+        syncSnapshotSubscription = app.observeSync { snapshot ->
+            mainHandler.post {
+                if (syncSnapshotSubscription == null || activityDestroyed) {
                     return@post
                 }
-                owner.lastSyncSnapshot = snapshot
-                owner.refreshSecurityState()
-                owner.refreshSyncProgress()
+                lastSyncSnapshot = snapshot
+                refreshSecurityState()
+                refreshSyncProgress()
             }
         }
     }
 
-    private fun stopActiveSync() {
-        activeSyncScheduler?.close()
-        activeSyncScheduler = null
+    private fun stopObservingForegroundSync() {
+        syncSnapshotSubscription?.close()
+        syncSnapshotSubscription = null
     }
 
     private fun menuButton(): TextView =

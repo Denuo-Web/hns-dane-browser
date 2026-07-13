@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">Walidacja nie powiodła się</string>
 <string name="security_proof_unavailable">Dowód niedostępny</string>
+<string name="http_transport_warning">Niezabezpieczone: ruch HTTP nie jest szyfrowany</string>
 <string name="security_status_content_description">Otwórz ślad programu rozpoznawania nazw</string>
 <string name="menu_hamburger_content_description">Menu przeglądarki</string>
 <string name="menu_forward">Naprzód</string>

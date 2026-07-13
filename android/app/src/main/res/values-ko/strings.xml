@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">검증 실패</string>
 <string name="security_proof_unavailable">증명할 수 없음</string>
+<string name="http_transport_warning">안전하지 않음: HTTP 트래픽이 암호화되지 않습니다</string>
 <string name="security_status_content_description">리졸버 추적 열기</string>
 <string name="menu_hamburger_content_description">브라우저 메뉴</string>
 <string name="menu_forward">앞으로</string>

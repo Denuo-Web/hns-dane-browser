@@ -40,6 +40,7 @@
     <string name="security_hns_webpki">HNS + WebPKI</string>
     <string name="security_failed">検証に失敗しました</string>
     <string name="security_proof_unavailable">証拠がありません</string>
+    <string name="http_transport_warning">安全ではありません: HTTP 通信は暗号化されていません</string>
     <string name="security_status_content_description">リゾルバートレースを開く</string>
     <string name="menu_hamburger_content_description">ブラウザメニュー</string>
     <string name="menu_forward">フォワード</string>

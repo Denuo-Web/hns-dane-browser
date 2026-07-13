@@ -40,6 +40,7 @@
     <string name="security_hns_webpki">HNS + WebPKI</string>
     <string name="security_failed">La validación falló</string>
     <string name="security_proof_unavailable">Prueba no disponible</string>
+    <string name="http_transport_warning">No es seguro: el tráfico HTTP no está cifrado</string>
     <string name="security_status_content_description">Abrir rastreo de resolución</string>
     <string name="menu_hamburger_content_description">Menú del navegador</string>
     <string name="menu_forward">Adelante</string>

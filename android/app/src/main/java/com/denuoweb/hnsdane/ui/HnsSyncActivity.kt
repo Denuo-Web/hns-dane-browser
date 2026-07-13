@@ -5,11 +5,13 @@ import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.HnsDaneApplication
 import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.net.HeaderSnapshotInstaller
 import com.denuoweb.hnsdane.net.NativeBridge
 import com.denuoweb.hnsdane.net.ProcessHnsSyncSingleFlight
 import org.json.JSONObject
+import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -18,6 +20,7 @@ class HnsSyncActivity : ComponentActivity() {
     private lateinit var headerResyncStatus: TextView
     private var syncRunInProgress = false
     private var activePoller: AtomicBoolean? = null
+    private var syncSnapshotSubscription: Closeable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,7 +61,21 @@ class HnsSyncActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        val app = application as? HnsDaneApplication ?: return
+        syncSnapshotSubscription = app.observeSync { snapshot ->
+            syncStatus.post {
+                if (syncSnapshotSubscription != null && !syncRunInProgress) {
+                    syncStatus.text = snapshot.statusJson
+                }
+            }
+        }
+    }
+
     override fun onStop() {
+        syncSnapshotSubscription?.close()
+        syncSnapshotSubscription = null
         activePoller?.set(false)
         activePoller = null
         super.onStop()

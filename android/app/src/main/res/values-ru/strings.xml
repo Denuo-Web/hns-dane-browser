@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">Проверка не удалась</string>
 <string name="security_proof_unavailable">Доказательство недоступно</string>
+<string name="http_transport_warning">Небезопасно: HTTP-трафик не зашифрован</string>
 <string name="security_status_content_description">Открыть трассировку преобразователя</string>
 <string name="menu_hamburger_content_description">Меню браузера</string>
 <string name="menu_forward">Вперед</string>

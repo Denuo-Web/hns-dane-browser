@@ -40,6 +40,7 @@
     <string name="security_hns_webpki">HNS + WebPKI</string>
     <string name="security_failed">Die Validierung ist fehlgeschlagen</string>
     <string name="security_proof_unavailable">Beweis nicht verfügbar</string>
+    <string name="http_transport_warning">Nicht sicher: HTTP-Datenverkehr ist nicht verschlüsselt</string>
     <string name="security_status_content_description">Öffnen Sie den Resolver-Trace</string>
     <string name="menu_hamburger_content_description">Browser-Menü</string>
     <string name="menu_forward">Nach vorne</string>

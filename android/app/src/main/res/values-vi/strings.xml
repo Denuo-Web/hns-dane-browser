@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">Xác thực không thành công</string>
 <string name="security_proof_unavailable">Không có bằng chứng</string>
+<string name="http_transport_warning">Không an toàn: lưu lượng HTTP không được mã hóa</string>
 <string name="security_status_content_description">Mở dấu vết của trình phân giải</string>
 <string name="menu_hamburger_content_description">Trình đơn trình duyệt</string>
 <string name="menu_forward">Chuyển tiếp</string>

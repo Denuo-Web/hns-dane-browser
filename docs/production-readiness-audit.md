@@ -30,7 +30,7 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 - Added `scripts/play-upload-closed-testing.sh` for closed testing upload once Play API credentials are available.
 - Documented that the standard Play closed-testing API track is `alpha` unless the Play Console app uses a custom closed track.
 - Added CI for the shipping Rust workspace, fuzz workspace, snapshot exporter, Android unit/lint/debug/release builds, and dependency/license checks; pinned the Gradle wrapper distribution and artifact verification metadata.
-- Corrected the release documentation to match activity-scoped sync and the absence of notification/foreground-service permissions.
+- Corrected the release documentation to match application-foreground sync and the absence of notification/foreground-service permissions.
 
 ## Remaining Non-Code Work
 
@@ -41,7 +41,7 @@ This audit treats the app as a Play Store closed-testing candidate and checks th
 
 ## Watch Items
 
-- Sync runs only while `MainActivity` is started and stops in `onStop`; test background/foreground interruption and catch-up resume because there is no background service or notification.
+- Sync runs while any app activity is started and stops when the entire app backgrounds; test cross-screen continuity plus background/foreground interruption and catch-up resume because there is no background service or notification.
 - Release AAB signing and Play upload remain manual, secret-dependent external gates. CI intentionally builds an unsigned release bundle and receives no signing or Play credentials.
 - General-purpose browsing can reach arbitrary third-party web content; keep target audience and content rating conservative.
 - HNS WebSocket / HTTP Upgrade for HNS origins now uses native stream tunneling after HNS resolution, HTTPS/SVCB policy, and DANE validation with bounded bridge messages, handshake buffering, and outbound native write queues; keep regression coverage around bridge-unavailable and validation-failure fail-closed behavior.

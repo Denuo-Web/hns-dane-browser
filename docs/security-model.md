@@ -61,7 +61,7 @@ The app follows the Android security checklist as a platform baseline:
 
 The app follows the Android privacy checklist as a platform baseline:
 
-- The app requests no dangerous runtime permissions. Sync is activity-scoped, so there is no notification permission prompt or foreground-service notification.
+- The app requests no dangerous runtime permissions. Sync is scoped to the application foreground, so there is no notification permission prompt or foreground-service notification.
 - The app does not request location, nearby device, camera, microphone, contacts, SMS, call log, account, advertising ID, all-files storage, or package-visibility permissions.
 - The app does not use background location, location foreground services, device serial numbers, IMEI, SSAID, Advertising ID, or an app-generated cross-install tracking identifier.
 - External storage use is limited to user-initiated downloads through Android DownloadManager into public Downloads; app metadata stays in private shared preferences or app-private files and is excluded from backup and device transfer.

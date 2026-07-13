@@ -40,6 +40,7 @@
     <string name="security_hns_webpki">HNS + WebPKI</string>
     <string name="security_failed">האימות נכשל</string>
     <string name="security_proof_unavailable">הוכחה לא זמינה</string>
+    <string name="http_transport_warning">לא מאובטח: תעבורת HTTP אינה מוצפנת</string>
     <string name="security_status_content_description">פתח את עקבות הפותר</string>
     <string name="menu_hamburger_content_description">תפריט דפדפן</string>
     <string name="menu_forward">קָדִימָה</string>

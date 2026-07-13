@@ -21,6 +21,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import com.denuoweb.hnsdane.HnsDaneApplication
 import com.denuoweb.hnsdane.R
 import com.denuoweb.hnsdane.BuildConfig
 import com.denuoweb.hnsdane.net.NativeBridge
@@ -581,6 +582,7 @@ class SettingsActivity : ComponentActivity() {
                 val selected = networks[index]
                 if (selected != current) {
                     HnsResolutionPreferences.setHandshakeNetwork(this, selected)
+                    (application as? HnsDaneApplication)?.onHandshakeNetworkChanged()
                     refreshHnsNetworkStatus()
                     val selectedName = selected.displayName(this)
                     resolverCacheStatus.text = getString(R.string.settings_resolver_cache_ready_network, selectedName)

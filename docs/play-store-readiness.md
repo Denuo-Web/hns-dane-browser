@@ -12,7 +12,7 @@ This checklist maps HNS DANE Browser to current Google Play release requirements
 | Android App Bundle | Rebuild required | Package identity is `com.denuoweb.hnsdane`; create a new upload AAB such as `dist/play-store/hns-dane-browser-v0.3.10-play-upload-signed.aab`. |
 | 64-bit native code | Gate ready | `verifyPlayReleaseBundle` checks `arm64-v8a` and `x86_64` `libhns_dane_browser_ffi.so`; no 32-bit ABI is shipped. |
 | Restricted permissions | Ready | Manifest does not request location, contacts, SMS, call logs, camera, microphone, all-files, package visibility, or account permissions. |
-| Foreground service | Not used | Sync is owned by `MainActivity` and stops in `onStop`. The manifest declares no service and requests none of `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, or `FOREGROUND_SERVICE_DATA_SYNC`; mark foreground-service use as not applicable and remove stale `dataSync` drafts. |
+| Foreground service | Not used | Sync is owned by the application while at least one app screen is started and stops when the whole app backgrounds. The manifest declares no service and requests none of `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, or `FOREGROUND_SERVICE_DATA_SYNC`; mark foreground-service use as not applicable and remove stale `dataSync` drafts. |
 | Privacy policy | Console URL ready | Use `https://denuoweb.com/work/hns-dane-browser/privacy`; verify the hosted static HTML page is live immediately before Play submission. |
 | Data safety form | Console copy ready | No ads/analytics/accounts. Disclose user-requested browsing/HNS network sharing and local browsing/download records. |
 | Ads declaration | Ready | Declare “No ads.” Donations do not unlock features. |
@@ -84,7 +84,7 @@ Use these exact values for the first production-track readiness pass. Re-check t
 
 ### Foreground Services
 
-The current APK does not declare an Android service or request notification/foreground-service permissions. Header sync starts from `MainActivity.onStart`, publishes progress in-process, and is stopped by `onStop`. In Play Console, answer that the app does not use foreground service types. A foreground-service declaration, notification demo, or `dataSync` reviewer note would describe a removed implementation and must not be submitted for this build.
+The current APK does not declare an Android service or request notification/foreground-service permissions. Header sync starts when the first app activity starts, publishes progress in-process across app screens, and stops when the last activity stops. In Play Console, answer that the app does not use foreground service types. A foreground-service declaration, notification demo, or `dataSync` reviewer note would describe a removed implementation and must not be submitted for this build.
 
 ### Data Safety Draft
 

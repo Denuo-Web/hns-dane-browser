@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS + WebPKI</string>
 <string name="security_failed">सत्यापन विफल रहा</string>
 <string name="security_proof_unavailable">प्रमाण उपलब्ध नहीं है</string>
+<string name="http_transport_warning">असुरक्षित: HTTP ट्रैफ़िक एन्क्रिप्टेड नहीं है</string>
 <string name="security_status_content_description">रिज़ॉल्वर ट्रेस खोलें</string>
 <string name="menu_hamburger_content_description">ब्राउज़र मेनू</string>
 <string name="menu_forward">आगे</string>

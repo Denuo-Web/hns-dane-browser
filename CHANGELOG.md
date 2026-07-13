@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Kept automatic HNS header sync alive while navigating between browser, settings, diagnostics, and sync screens; it now stops only when the whole app leaves the foreground, and the HNS Sync screen follows automatic status updates live.
+- Added the missing localized cleartext-HTTP warning in every declared app language so the 0.3.10 warning bar no longer fails Android lint or falls back to English.
+
 ## 0.3.10 - 2026-07-12
 
 ### Security

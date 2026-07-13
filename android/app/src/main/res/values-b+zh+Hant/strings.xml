@@ -40,6 +40,7 @@
 <string name="security_hns_webpki">HNS+WebPKI</string>
 <string name="security_failed">驗證失敗</string>
 <string name="security_proof_unavailable">無法提供證明</string>
+<string name="http_transport_warning">不安全：HTTP 流量未加密</string>
 <string name="security_status_content_description">開啟解析器追蹤</string>
 <string name="menu_hamburger_content_description">瀏覽器選單</string>
 <string name="menu_forward">前進</string>
