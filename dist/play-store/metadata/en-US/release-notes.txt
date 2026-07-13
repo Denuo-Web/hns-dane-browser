@@ -1,1 +1,1 @@
-0.3.10 restores verified HNS resolution, shows a clear HTTP transport warning, and stabilizes HNS gateway page loads and assets.
+0.3.11 keeps HNS sync active across app screens, updates sync status live, and completes localized HTTP safety warnings.

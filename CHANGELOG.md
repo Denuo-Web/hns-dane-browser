@@ -4,10 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.11 - 2026-07-12
+
 ### Fixed
 
 - Kept automatic HNS header sync alive while navigating between browser, settings, diagnostics, and sync screens; it now stops only when the whole app leaves the foreground, and the HNS Sync screen follows automatic status updates live.
-- Added the missing localized cleartext-HTTP warning in every declared app language so the 0.3.10 warning bar no longer fails Android lint or falls back to English.
+- Added the missing localized cleartext-HTTP warning in every declared app language so the warning bar no longer fails Android lint or falls back to English.
+
+### Changed
+
+- Bumped the Android app, Rust core, network user-agent strings, Play upload defaults, and Play metadata package for the 0.3.11 release.
 
 ## 0.3.10 - 2026-07-12
 
