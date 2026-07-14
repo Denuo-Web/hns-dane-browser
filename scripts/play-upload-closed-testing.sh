@@ -10,9 +10,9 @@ fi
 package_name="${PLAY_PACKAGE:-com.denuoweb.hnsdane}"
 track_name="${PLAY_TRACK:-alpha}"
 release_status="${PLAY_RELEASE_STATUS:-completed}"
-aab_path="${1:-dist/play-store/hns-dane-browser-v0.3.14-play-upload-signed.aab}"
-release_name="${PLAY_RELEASE_NAME:-HNS DANE Browser 0.3.14}"
-release_notes="${PLAY_RELEASE_NOTES:-Changes the default compatibility DoH resolver to the working Zorro HNSDoH node while keeping resolver settings user-configurable.}"
+aab_path="${1:-dist/play-store/hns-dane-browser-v0.3.15-play-upload-signed.aab}"
+release_name="${PLAY_RELEASE_NAME:-HNS DANE Browser 0.3.15}"
+release_notes="${PLAY_RELEASE_NOTES:-Fixes authoritative Handshake DoH requests by sending exact HTTP body lengths, avoiding intercepted port 53 when proof-bootstrapped DoH is available.}"
 
 if [[ ! "$package_name" =~ ^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$ ]]; then
   echo "Invalid Play package name: $package_name" >&2

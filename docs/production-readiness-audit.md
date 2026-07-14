@@ -2,13 +2,13 @@
 
 Last audited: 2026-07-14
 
-This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the audit serves version `0.3.1` (`versionCode 22`), while the repository release candidate declares `0.3.14` (`versionCode 35`).
+This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the audit serves version `0.3.1` (`versionCode 22`), while the repository release candidate declares `0.3.15` (`versionCode 36`).
 
 ## Release Candidate Findings
 
 | Area | Status | Finding |
 | --- | --- | --- |
-| Android release build | Ready locally | The clean final `0.3.14` build produced a non-debuggable, minified, resource-shrunk, upload-signed AAB, and its structural and entry-by-entry signer checks passed. |
+| Android release build | Ready locally | The clean final `0.3.15` build produced a non-debuggable, minified, resource-shrunk, upload-signed AAB, and its structural and entry-by-entry signer checks passed. |
 | Public Play listing | Reconciliation required | Google Play already has a production listing at `0.3.1` (`versionCode 22`). Before the next update, reconcile the live privacy-policy field, Data safety answers, listing text, screenshots, and release notes with current behavior and the eventual release version. |
 | Privacy policy | Ready | The canonical URL `https://denuoweb.com/work/hns-dane-browser/privacy` renders the HNS DANE Browser Privacy Policy after the site application loads. The supplied hosted policy covers local data, browser/HNS network requests, sharing, security, retention/deletion, children, and a privacy contact mechanism; it is accepted unchanged for this release audit. |
 | Manifest exposure | Ready | The only app-defined exported entry point is `LauncherActivity`. Browser, settings, diagnostics, HNS inspector, history, download, and other app activities are non-exported, and the app declares no service. Merged dependency components remain subject to their own signature/permission guards. |
@@ -18,7 +18,7 @@ This audit treats the repository as a candidate update to an existing public Goo
 | Privacy controls | Improved | Settings can clear cookies plus WebView origin storage, and the diagnostics UI can clear the bounded gateway event log. The repository and in-app disclosures now describe WebView-provider Safe Browsing and these local retention controls. |
 | Build supply chain | Local gates pass; remote enforcement blocked | Local Rust, dependency, Android unit, lint, and signed-bundle checks passed during the audit. The checked-in GitHub Actions workflow has no runs because Actions is disabled for the repository; `main` also has no branch protection or ruleset. |
 | 16 KiB / native symbols | Local gate passed | The clean bundle uses `PAGE_ALIGNMENT_16K`; both stripped JNI libraries have 16 KiB PT_LOAD alignment, RELRO, non-executable stacks, immediate binding, no text relocations, and matching unstripped FULL debug metadata with SHA-1 Build IDs. |
-| Device instrumentation | External verification pending | The Android unit suite passed, but no physical Android device was attached, so `HnsConnectInstrumentationTest` and live browser flows were not rerun during this audit. |
+| Release-device acceptance | Core resolver path passed; broader instrumentation pending | The exact signed `0.3.15` APK was installed on a Pixel 9. With compatibility mode and Zorro still configured, a cache-cleared `https://denuoweb/` load used only the HNS-proof-bootstrapped authoritative DoH endpoint, skipped UDP/TCP port 53 and compatibility fallback, validated DNSSEC, and verified DANE. The broader `HnsConnectInstrumentationTest` and full manual regression matrix remain separate gates. |
 | Data collection posture | Ready for live-form reconciliation | No ads, analytics SDKs, developer accounts, sensitive permissions, advertising ID access, or developer telemetry endpoint was found. Google's current guidance excludes open-web WebView navigation, on-device processing, and reasonably expected user-initiated transfers; retain the live `No collected / No shared` posture unless the current WebView Safe Browsing provider guidance requires a declaration. |
 
 ## Applied Cleanup
@@ -45,11 +45,11 @@ This audit treats the repository as a candidate update to an existing public Goo
 
 ## Local Verification Evidence
 
-- `./scripts/check.sh`: passed supply-chain/version checks, formatting, warning-denied Clippy, all three cargo-deny scopes, 398 Rust tests, fuzz-target compilation, and the snapshot exporter.
-- Clean Android build: passed with Gradle 9.6.1 / AGP 9.2.1, compile/target SDK 37, NDK `28.2.13676358`, and build-tools AAPT2 36.1.0; 97 actionable tasks completed in 13m 44s.
+- `./scripts/check.sh`: passed supply-chain/version checks, formatting, warning-denied Clippy, all three cargo-deny scopes, 401 Rust tests, fuzz-target compilation, and the snapshot exporter.
+- Clean Android build: passed with Gradle 9.6.1 / AGP 9.2.1, compile/target SDK 37, NDK `28.2.13676358`, and build-tools AAPT2 36.1.0; 97 actionable tasks completed in 13m 19s.
 - Android tests and lint: 193 unit tests passed; debug and release lint each reported 0 errors and 110 warnings.
-- Candidate artifact inspection: both packaged libraries report NDK r28c, Android API 34, stripped status, 16 KiB PT_LOAD alignment, GNU_RELRO, non-executable GNU_STACK, BIND_NOW/NOW, and matching unstripped debug-symbol Build IDs. The debug APK also passes `zipalign -c -P 16 4`.
-- Final signed `0.3.14` / code 35 AAB: SHA-256 `85b1d843d0afc5b50990b75866a8ced0e13e1cfb98dc05b193c531df908e3b7e`. The signed GitHub APK is SHA-256 `fefd14aebdcb7a0796cacff0e4dd3b60a01d5f4a399ea0c931d8523b159b74d3` and passes APK signature plus 16 KiB ZIP-alignment verification.
+- Candidate artifact inspection: both packaged libraries report NDK r28c, Android API 34, stripped status, 16 KiB PT_LOAD alignment, GNU_RELRO, non-executable GNU_STACK, BIND_NOW/NOW, and matching unstripped debug-symbol Build IDs. The signed release APK also passes `zipalign -c -P 16 4`.
+- Final signed `0.3.15` / code 36 AAB: SHA-256 `8353b0b537928e5b23e1bcb00c64e3d31d11fc11bd5f2769f4e52434ee3accb9`. The signed GitHub APK is SHA-256 `297091acb1c177bf0cf33106b411b9be3af6c17e7659a865e4dcccb0e24d7048` and passes APK signature plus 16 KiB ZIP-alignment verification.
 
 ## Watch Items
 

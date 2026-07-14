@@ -1,1 +1,1 @@
-0.3.14 changes the default compatibility DoH resolver to the working Zorro HNSDoH node while keeping resolver settings user-configurable.
+0.3.15 fixes authoritative Handshake DoH requests by sending exact HTTP body lengths, allowing proof-bootstrapped DoH to bypass intercepted port 53 without a site-specific exception.

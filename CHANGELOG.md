@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.15 - 2026-07-14
+
+### Fixed
+
+- Added exact transport-owned `Content-Length` metadata to non-empty HTTP/2 and HTTP/3 request bodies, restoring proof-bootstrapped authoritative DoH interoperability with servers that require it while preventing caller-supplied length mismatches.
+
+### Changed
+
+- Bumped the Android app, Rust core, Play upload defaults, and Play metadata package for the 0.3.15 release.
+
 ## 0.3.14 - 2026-07-14
 
 ### Changed
