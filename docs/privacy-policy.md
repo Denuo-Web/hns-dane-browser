@@ -29,7 +29,8 @@ To provide browser functionality, HNS DANE Browser may connect to:
 - Websites and web services that you choose to open.
 - Handshake peers and DNS seed hosts for header sync, peer discovery, and proof retrieval.
 - Authoritative DNS nameservers for delegated HNS names.
-- RFC 9461-discovered RFC 8484 authoritative DoH endpoints for delegated HNS names when direct DNS transport is unavailable or invalid.
+- Proof-bootstrapped or RFC 9461-discovered RFC 8484 authoritative DoH endpoints for delegated HNS names.
+- The non-routable `192.0.2.1` TEST-NET DNS sentinel after delegated DNS failure; a matching reply confirms transparent outbound port 53 interception, while no reply is reported only as not detected.
 - The configured HNS DNS-over-HTTPS compatibility resolver when compatibility mode is enabled and local or direct delegated resolution fails.
 - Android DownloadManager destinations when you choose to download a file.
 

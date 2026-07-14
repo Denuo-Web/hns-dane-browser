@@ -54,6 +54,7 @@ internal object LocalizedTraceText {
             "udp53" -> context.getString(R.string.trace_protocol_authoritative_udp53)
             "tcp53" -> context.getString(R.string.trace_protocol_authoritative_tcp53)
             "authoritative_doh" -> context.getString(R.string.trace_protocol_authoritative_doh)
+            "dns_interception_probe" -> context.getString(R.string.trace_protocol_dns_interception_probe)
             "hns_doh" -> context.getString(R.string.trace_protocol_hns_doh)
             "icann_doh" -> context.getString(R.string.trace_protocol_icann_doh)
             else -> protocol

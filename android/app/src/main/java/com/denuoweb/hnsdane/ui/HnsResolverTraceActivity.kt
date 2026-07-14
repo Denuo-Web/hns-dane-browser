@@ -79,6 +79,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
             appendLine(getString(R.string.trace_field_authoritative_udp53, authoritativeDns?.optString("udp53") ?: getString(R.string.common_unknown)))
             appendLine(getString(R.string.trace_field_authoritative_tcp53, authoritativeDns?.optString("tcp53") ?: getString(R.string.common_unknown)))
             appendLine(getString(R.string.trace_field_authoritative_doh, authoritativeDns?.optString("doh") ?: getString(R.string.common_unknown)))
+            appendLine(getString(R.string.trace_field_port53_interception, trace.optString("port53Interception", getString(R.string.common_unknown))))
             appendLine(getString(R.string.trace_field_resolver_attempts, dnsAttemptsSummary(trace)))
             appendLine(getString(R.string.trace_field_dnssec, trace.optString("dnssec", getString(R.string.common_unknown))))
             appendLine(getString(R.string.trace_field_origin_address, trace.optString("originAddress", getString(R.string.common_unknown))))
@@ -154,6 +155,7 @@ class HnsResolverTraceActivity : ComponentActivity() {
         val udp53 = authoritativeDns?.optString("udp53").orEmpty()
         val tcp53 = authoritativeDns?.optString("tcp53").orEmpty()
         val doh = authoritativeDns?.optString("doh").orEmpty()
+        val port53Interception = trace.optString("port53Interception")
         val dnssec = trace.optString("dnssec")
         val fallback = trace.optJSONObject("fallback")
         val nameserverCandidates = trace.optJSONArray("nameserverCandidates")
@@ -164,6 +166,8 @@ class HnsResolverTraceActivity : ComponentActivity() {
                 getString(R.string.trace_fix_hns_stale)
             hnsProof == "unavailable" || hnsProof == "unknown" ->
                 getString(R.string.trace_fix_hns_unavailable)
+            port53Interception == "detected" ->
+                getString(R.string.trace_fix_port53_interception)
             nameserverCandidates == null || nameserverCandidates.length() == 0 ->
                 getString(R.string.trace_fix_add_delegation)
             udp53 in setOf("timeout", "transport_error") &&

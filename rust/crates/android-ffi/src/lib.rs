@@ -21,9 +21,9 @@ use hns_p2p::{
 };
 use hns_resolver::{
     AuthoritativeDnssecResolver, AuthoritativeDohEndpoint, CompositeResolver, DelegatedResolver,
-    DelegatingResolver, DnsEndpointPolicy, DnsTransport, HnsDelegation, HnsProofProvider,
-    HnsResourceValueProvider, NameClass, ProvenNameRecords, ResolutionAnswer, ResolutionRequest,
-    Resolver, ResolverError, ResourceValueAnchor, SqliteResourceValueProvider,
+    DelegatingResolver, DnsEndpointPolicy, DnsInterceptionStatus, DnsTransport, HnsDelegation,
+    HnsProofProvider, HnsResourceValueProvider, NameClass, ProvenNameRecords, ResolutionAnswer,
+    ResolutionRequest, Resolver, ResolverError, ResourceValueAnchor, SqliteResourceValueProvider,
     SystemDnssecVerifier, UdpTcpDnsTransport, classify_name,
 };
 use hns_sync::{
@@ -44,7 +44,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -65,6 +65,9 @@ const DEFAULT_DNS_UDP_PAYLOAD: usize = 1232;
 const DEFAULT_GATEWAY_PROOF_PEERS: usize = 8;
 const DEFAULT_GATEWAY_PROOF_TIMEOUT: Duration = Duration::from_secs(3);
 const ANDROID_COMPAT_AUTHORITATIVE_DNS_TIMEOUT: Duration = Duration::from_millis(900);
+const DNS_INTERCEPTION_PROBE_TIMEOUT: Duration = Duration::from_millis(350);
+const DNS_INTERCEPTION_PROBE_ID: u16 = 0x484a;
+const DNS_INTERCEPTION_PROBE_NAME: &str = "hns-dns-interception-probe.invalid";
 const RESOURCE_PROOF_CACHE_CANONICAL_WINDOW: u32 = 144;
 const ANDROID_HEADER_SYNC_PEERS: usize = 12;
 const ANDROID_HEADER_SYNC_BATCHES_PER_PEER: usize = 16;
@@ -659,6 +662,7 @@ struct AndroidAuthoritativeDnsTransport {
     direct: UdpTcpDnsTransport,
     doh_http: Arc<TcpHttpTransport>,
     trace: DnsTraceRecorder,
+    interception_probe: Arc<Mutex<Option<DnsInterceptionStatus>>>,
 }
 
 impl AndroidAuthoritativeDnsTransport {
@@ -667,6 +671,7 @@ impl AndroidAuthoritativeDnsTransport {
             direct,
             doh_http: Arc::new(shared_http_transport()),
             trace,
+            interception_probe: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -726,6 +731,97 @@ impl DnsTransport for AndroidAuthoritativeDnsTransport {
             return Err(ResolverError::InvalidDnsResponse);
         }
         Ok(response.body)
+    }
+
+    fn probe_dns_interception(&self) -> DnsInterceptionStatus {
+        if let Ok(probe) = self.interception_probe.lock()
+            && let Some(status) = *probe
+        {
+            return status;
+        }
+
+        let started = Instant::now();
+        let (status, error) = run_dns_interception_probe(DNS_INTERCEPTION_PROBE_TIMEOUT);
+        self.trace.push(DnsTraceEvent {
+            protocol: "dns_interception_probe",
+            server: "192.0.2.1:53".to_owned(),
+            status: dns_interception_status_name(status).to_owned(),
+            elapsed_ms: elapsed_millis(started),
+            error,
+        });
+        if let Ok(mut probe) = self.interception_probe.lock() {
+            *probe = Some(status);
+        }
+        status
+    }
+}
+
+fn run_dns_interception_probe(timeout: Duration) -> (DnsInterceptionStatus, Option<String>) {
+    let qname = match DnsName::from_ascii(DNS_INTERCEPTION_PROBE_NAME) {
+        Ok(name) => name,
+        Err(_) => {
+            return (
+                DnsInterceptionStatus::Inconclusive,
+                Some("probe name is invalid".to_owned()),
+            );
+        }
+    };
+    let query = match build_doh_query(DNS_INTERCEPTION_PROBE_ID, &qname, RecordType::A) {
+        Ok(query) => query,
+        Err(error) => return (DnsInterceptionStatus::Inconclusive, Some(error.to_string())),
+    };
+    let server = SocketAddr::from(([192, 0, 2, 1], 53));
+    let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], 0))) {
+        Ok(socket) => socket,
+        Err(error) => return (DnsInterceptionStatus::Inconclusive, Some(error.to_string())),
+    };
+    if let Err(error) = socket.set_read_timeout(Some(timeout)) {
+        return (DnsInterceptionStatus::Inconclusive, Some(error.to_string()));
+    }
+    if let Err(error) = socket.send_to(&query, server) {
+        return (DnsInterceptionStatus::Inconclusive, Some(error.to_string()));
+    }
+
+    let mut response = vec![0u8; DEFAULT_DNS_UDP_PAYLOAD];
+    let (length, source) = match socket.recv_from(&mut response) {
+        Ok(received) => received,
+        Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+            return (DnsInterceptionStatus::NotDetected, None);
+        }
+        Err(error) => return (DnsInterceptionStatus::Inconclusive, Some(error.to_string())),
+    };
+    response.truncate(length);
+    let parsed = DnsMessage::parse(&response);
+    if source == server
+        && parsed.as_ref().is_ok_and(|message| {
+            message.header.id == DNS_INTERCEPTION_PROBE_ID
+                && message.header.flags.is_response()
+                && message.questions.len() == 1
+                && message.questions[0].name == qname
+                && message.questions[0].record_type == RecordType::A
+                && message.questions[0].class == DNS_CLASS_IN
+        })
+    {
+        return (
+            DnsInterceptionStatus::Detected,
+            Some(
+                "received a matching DNS reply from a non-routable TEST-NET destination".to_owned(),
+            ),
+        );
+    }
+
+    (
+        DnsInterceptionStatus::Inconclusive,
+        Some("probe received an unrelated or malformed reply".to_owned()),
+    )
+}
+
+fn dns_interception_status_name(status: DnsInterceptionStatus) -> &'static str {
+    match status {
+        DnsInterceptionStatus::NotTested => "not_tested",
+        DnsInterceptionStatus::NotDetected => "not_detected",
+        DnsInterceptionStatus::Detected => "detected",
+        DnsInterceptionStatus::Inconclusive => "inconclusive",
     }
 }
 
@@ -2280,6 +2376,7 @@ fn resolution_trace_json(
         .map(|error| format!(r#""{}""#, json_escape(&error.to_string())))
         .unwrap_or_else(|| "null".to_owned());
     let authoritative_dns = authoritative_dns_trace_json(&dns_events);
+    let port53_interception = dns_protocol_status(&dns_events, "dns_interception_probe");
     let dns_attempts = dns_trace_attempts_json(&dns_events);
     let resolution_source = resolution_source_name(
         name_class,
@@ -2297,7 +2394,7 @@ fn resolution_trace_json(
     let local_chain_stale = optional_bool_json(local_currentness.and_then(|value| value.stale));
 
     format!(
-        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","network":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
+        r#"{{"host":"{}","url":"{}","nameClass":"{}","root":"{}","network":"{}","mode":"{}","hnsProof":"{}","localBestHeight":{},"targetHeight":{},"estimatedTargetHeight":{},"localChainStale":{},"delegation":{},"resolutionSource":"{}","resourceRecords":[{}],"nameserverCandidates":{},"authoritativeDns":{},"port53Interception":"{}","dnssec":"{}","originAddress":"{}","tls":{},"fallback":{{"used":{},"type":{},"reason":{}}},"dnsAttempts":[{}],"finalError":{}}}"#,
         json_escape(input.host),
         json_escape(&gateway_request_address(input)),
         name_class_trace_name(name_class),
@@ -2314,6 +2411,7 @@ fn resolution_trace_json(
         resource_types,
         nameserver_candidates_json(&dns_events),
         authoritative_dns,
+        port53_interception,
         dnssec_trace_status(resolution, error),
         if origin_address { "found" } else { "missing" },
         tls_trace_json(input, tls.validation, tls.decision, tls.inspection, error),
@@ -5879,6 +5977,15 @@ mod tests {
             elapsed_ms: 12,
             error: Some("connection refused".to_owned()),
         });
+        dns_trace.push(DnsTraceEvent {
+            protocol: "dns_interception_probe",
+            server: "192.0.2.1:53".to_owned(),
+            status: "detected".to_owned(),
+            elapsed_ms: 7,
+            error: Some(
+                "received a matching DNS reply from a non-routable TEST-NET destination".to_owned(),
+            ),
+        });
         let trace = resolution_trace_json(
             &GatewayHttpRequestInput {
                 data_dir: "/tmp",
@@ -5905,6 +6012,7 @@ mod tests {
             r#""authoritativeDns":{"udp53":"timeout","tcp53":"transport_error","doh":"not_attempted"}"#
         ));
         assert!(trace.contains(r#""nameserverCandidates":["192.0.2.53:53"]"#));
+        assert!(trace.contains(r#""port53Interception":"detected""#));
         assert!(
             trace.contains(r#""protocol":"udp53","server":"192.0.2.53:53","status":"timeout""#)
         );

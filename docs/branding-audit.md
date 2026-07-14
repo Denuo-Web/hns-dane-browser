@@ -31,7 +31,7 @@ This avoids implying that the app is a general-purpose ICANN DANE browser. The p
 The clean user-facing distinction:
 
 - HNS names use local HNS proofs as the root of authority.
-- Delegated HNS names may use authoritative DNS over UDP/TCP 53, then RFC 9461-discovered RFC 8484 authoritative DoH if port 53 is unavailable.
+- Delegated HNS names may use proof-bootstrapped or RFC 9461-discovered RFC 8484 authoritative DoH, with authoritative UDP/TCP 53 as a direct fallback.
 - ICANN names stay on the normal ICANN path but also fall back to RFC 8484.
 
 ## Package / Application ID

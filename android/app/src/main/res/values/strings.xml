@@ -333,7 +333,7 @@
 
     <string name="legal_license_summary">HNS DANE Browser is source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use, study, modification, and redistribution are allowed under the license. Commercial use requires separate written permission from Denuo Web, LLC.</string>
     <string name="legal_user_agreement">This is an experimental Handshake-first browser with local HNS proofs, RFC 8484 DoH transport, and DNSSEC/DANE diagnostics. HNS resolution, DNSSEC validation, DANE checks, compatibility fallback, and sync may fail closed or be incomplete. The app is provided without warranty, is not a financial service, and donations are optional and unlock no features.</string>
-    <string name="legal_privacy_summary">HNS DANE Browser does not include ads, analytics SDKs, or developer-operated accounts. It stores browsing history, cookies, download records, settings, diagnostics, and HNS sync/cache data locally on the device. It sends network requests needed for browser functionality to websites you visit, HNS peers, DNS seeds, authoritative nameservers, RFC 9461-discovered authoritative DoH endpoints, and, in compatibility mode only, an HNS DoH resolver after local/direct resolution fails. Strict HNS mode disables the third-party HNS DoH fallback. Local browsing data can be cleared from Settings.</string>
+    <string name="legal_privacy_summary">HNS DANE Browser does not include ads, analytics SDKs, or developer-operated accounts. It stores browsing history, cookies, download records, settings, diagnostics, and HNS sync/cache data locally on the device. It sends network requests needed for browser functionality to websites you visit, HNS peers, DNS seeds, authoritative nameservers, proof-bootstrapped or RFC 9461-discovered authoritative DoH endpoints, and the non-routable 192.0.2.1 TEST-NET DNS sentinel after delegated DNS failure. In compatibility mode only, it may also use the configured HNS DoH resolver after local/direct resolution fails. Strict HNS mode disables that third-party fallback. Local browsing data can be cleared from Settings.</string>
     <string name="legal_license_name" translatable="false">PolyForm Noncommercial 1.0.0</string>
     <string name="legal_copy_privacy_policy_url">privacy policy URL</string>
     <string name="legal_copy_source_code_url">source code URL</string>
@@ -421,6 +421,7 @@
     <string name="trace_field_authoritative_udp53">Authoritative UDP 53: %1$s</string>
     <string name="trace_field_authoritative_tcp53">Authoritative TCP 53: %1$s</string>
     <string name="trace_field_authoritative_doh">Authoritative DoH: %1$s</string>
+    <string name="trace_field_port53_interception" translatable="false">Port 53 interception probe: %1$s</string>
     <string name="trace_field_resolver_attempts">Resolver attempts: %1$s</string>
     <string name="trace_field_dnssec">DNSSEC: %1$s</string>
     <string name="trace_field_origin_address">Origin address: %1$s</string>
@@ -460,6 +461,7 @@
     <string name="trace_protocol_authoritative_udp53">Authoritative UDP 53</string>
     <string name="trace_protocol_authoritative_tcp53">Authoritative TCP 53</string>
     <string name="trace_protocol_authoritative_doh">Authoritative DoH</string>
+    <string name="trace_protocol_dns_interception_probe" translatable="false">Port 53 interception probe</string>
     <string name="trace_protocol_hns_doh">Compatibility HNS DoH</string>
     <string name="trace_protocol_icann_doh">Trusted ICANN DoH</string>
     <string name="trace_tlsa_present">present</string>
@@ -492,9 +494,10 @@
     <string name="trace_suggested_fix">Suggested fix:</string>
     <string name="trace_fix_hns_stale">Let HNS sync catch up, then retry. The local proof is valid for its historical block, but not current enough to decide whether the name exists now.</string>
     <string name="trace_fix_hns_unavailable">Sync headers/proofs first, then retry. No verified HNS proof was available.</string>
-    <string name="trace_fix_add_delegation">Add usable HNS delegation data: NS plus GLUE4/GLUE6 or SYNTH4/SYNTH6. For networks that block port 53, publish an RFC 9461 _dns nameserver SVCB record in the signed zone.</string>
-    <string name="trace_fix_doh_answered">Direct authoritative DNS on port 53 failed, but the RFC 9461-discovered authoritative DoH endpoint answered and validated. Keep UDP/TCP 53 reachable where possible.</string>
-    <string name="trace_fix_nameserver_unreliable_with_doh">Your delegated nameserver candidate did not answer reliably. Ensure authoritative DNS is reachable on UDP/TCP 53 or publish an RFC 9461 _dns SVCB record for an RFC 8484 DoH endpoint in the signed zone.</string>
+    <string name="trace_fix_add_delegation">Add usable HNS delegation data: NS plus GLUE4/GLUE6 or SYNTH4/SYNTH6. To work without port 53, add a proof-anchored hnsdns=1 authoritative DoH declaration to the HNS resource.</string>
+    <string name="trace_fix_port53_interception" translatable="false">This network returned a DNS reply for a non-routable TEST-NET destination, which confirms transparent port 53 interception. Use authoritative DoH; the HNS owner must publish a proof-anchored hnsdns=1 endpoint so the browser can bootstrap it without DNS.</string>
+    <string name="trace_fix_doh_answered">Direct authoritative DNS on port 53 failed, but the authoritative DoH endpoint answered and validated.</string>
+    <string name="trace_fix_nameserver_unreliable_with_doh">Your delegated nameserver candidate did not answer reliably. Keep authoritative DNS reachable on UDP/TCP 53 and publish proof-anchored hnsdns=1 bootstrap metadata for networks that intercept or block port 53.</string>
     <string name="trace_fix_nameserver_unreliable">Your delegated nameserver candidate did not answer reliably. Ensure authoritative DNS is reachable on UDP 53 and TCP 53.</string>
     <string name="trace_fix_dnssec_bogus">Fix the delegated DNSSEC chain: HNS DS must match child DNSKEY, signatures must be current, and denial data must be valid.</string>
     <string name="trace_fix_dnssec_before_tlsa">Fix delegated DNSSEC first. TLSA/DANE was not evaluated because secure resolution failed before the TLSA lookup.</string>

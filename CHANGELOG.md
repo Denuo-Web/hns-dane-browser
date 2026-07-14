@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Added proof-anchored `hnsdns=1` authoritative DoH bootstrap metadata so delegated HNS names can reach their RFC 8484 endpoint without first relying on interceptable UDP/TCP port 53; origin answers still require delegated DNSSEC validation against the HNS-proven DS.
+- Added a bounded TEST-NET DNS sentinel probe and resolver-trace field that can positively identify transparent port 53 interception without treating a timeout as proof that the network is clean.
+- Allowed RFC 9461 DNS-server SVCB records to use a distinct WebPKI-authenticated target name while retaining the HNS-proven nameserver glue address for the connection.
+
 ## 0.3.12 - 2026-07-13
 
 ### Fixed

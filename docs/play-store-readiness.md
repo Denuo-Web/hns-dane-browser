@@ -91,7 +91,7 @@ The current APK does not declare an Android service or request notification/fore
 Use the Play Console definitions and answer conservatively:
 
 - Data collected by developer: `No`. There are no developer-operated accounts, analytics SDKs, ads SDKs, crash upload SDKs, or backend telemetry endpoints in app code.
-- Data shared with third parties: `Yes`, only for app functionality. User-requested browsing and HNS resolution send requests to websites, HNS peers, DNS seeds, authoritative DNS servers, RFC 9461-discovered authoritative DoH endpoints, and the optional compatibility HNS DoH resolver after local/direct resolution fails.
+- Data shared with third parties: `Yes`, only for app functionality. User-requested browsing and HNS resolution send requests to websites, HNS peers, DNS seeds, authoritative DNS servers, proof-bootstrapped or RFC 9461-discovered authoritative DoH endpoints, the non-routable TEST-NET interception sentinel after delegated DNS failure, and the optional compatibility HNS DoH resolver after local/direct resolution fails.
 - Web browsing: disclose URLs/hostnames and website interaction data as shared for app functionality. Do not mark as developer-collected unless Play's current wording treats user-requested browser traffic as collection.
 - App activity: browsing history, diagnostics, download records, settings, resolver cache, HNS sync/cache state, and cookies-adjacent WebView state are stored locally on device.
 - Files/docs: user-initiated downloads are saved to public Downloads. Normal WebPKI downloads use Android DownloadManager; HNS downloads are fetched through the native gateway and saved through Android MediaStore.
