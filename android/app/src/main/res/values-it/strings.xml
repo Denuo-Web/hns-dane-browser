@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">%1$s URL non sono ancora supportati</string>
 <string name="download_error_http_https_only">sono supportati solo i download HTTP e HTTPS</string>
 <string name="download_error_local_assets">Non è possibile scaricare le risorse dell\'app locale</string>
-<string name="notification_permission_rationale_title">Mostrare le notifiche di sincronizzazione?</string>
-<string name="notification_permission_rationale_message">La sincronizzazione HNS viene eseguita come servizio di sincronizzazione dei dati visibili mentre il browser è aperto. Le notifiche mostrano l\'avanzamento della sincronizzazione e forniscono un\'azione di interruzione.</string>
-<string name="notification_permission_rationale_not_now">Non ora</string>
-<string name="notification_permission_rationale_continue">Continua</string>
-<string name="sync_notification_channel">Sincronizzazione HNS</string>
-<string name="sync_notification_title">Sincronizzazione HNS attiva</string>
-<string name="sync_notification_starting">Avvio della sincronizzazione dell\'intestazione e della prova</string>
-<string name="sync_notification_running">Mantenere aggiornate le prove HNS</string>
-<string name="sync_notification_error">La sincronizzazione richiede il ripristino della rete o del peer</string>
-<string name="sync_notification_stop">Fermare</string>
 <string name="sync_status_idle">inattivo</string>
 <string name="sync_status_syncing">sincronizzazione</string>
 <string name="sync_status_up_to_date">aggiornato</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">Copia JSON</string>
 <string name="row_copy_markdown">Copia Markdown</string>
 <string name="row_copy_markdown_summary">Copia un report Markdown compatto.</string>
-<string name="row_delete_cookies">Elimina i cookie</string>
-<string name="row_delete_cookies_summary">Rimuovere i cookie memorizzati dai siti Web in questo browser.</string>
 <string name="row_diagnostics">Diagnostica</string>
 <string name="row_diagnostics_summary">Dettagli di build, runtime e core nativi.</string>
 <string name="row_donate_hns">Dona HNS</string>
@@ -240,8 +228,6 @@
 <item quantity="one">Record in coda dell\'app %d</item>
 <item quantity="other">Record in coda dell\'app %d</item>
 </plurals>
-<string name="cookie_deleted">Cookie cancellati</string>
-<string name="cookie_none_to_delete">Nessun cookie da eliminare</string>
 <string name="cookie_status_after_delete">%1$s. %2$s</string>
 <string name="cookie_summary_blocking">Sono consentiti i cookie di prima parte. I cookie di terze parti sono bloccati.</string>
 <string name="cookie_summary_allowing_all">Sono ammessi cookie proprietari e di terze parti.</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">Pronto per cancellare i valori del risolutore memorizzati nella cache.</string>
 <string name="settings_resolver_cache_ready_network">Pronto per cancellare i valori del risolutore memorizzati nella cache per %1$s.</string>
 <string name="settings_header_resync_ready">Reimposta le intestazioni locali e sincronizza nuovamente dai peer.</string>
-<string name="settings_header_resync_ready_network">Reimposta le intestazioni %1$s e sincronizza nuovamente dai peer.</string>
 <string name="settings_network_choice">%1$s-%2$s</string>
 <string name="settings_network_set">Rete impostata su %1$s</string>
 <string name="settings_homepage_edit_title">Modifica la home page</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">Eventi del gateway copiati</string>
 <string name="legal_license_summary">HNS DANE Browser è disponibile come codice sorgente sotto la licenza PolyForm Noncommercial 1.0.0. La licenza consente l\'uso non commerciale, lo studio, la modifica e la ridistribuzione. L\'uso commerciale richiede un\'autorizzazione scritta separata da Denuo Web, LLC.</string>
 <string name="legal_user_agreement">Questo è un browser sperimentale Handshake-first con prove HNS locali, trasporto RFC 8484 DoH e diagnostica DNSSEC/DANE. La risoluzione HNS, la convalida DNSSEC, i controlli DANE, il fallback di compatibilità e la sincronizzazione potrebbero non riuscire a chiudersi o essere incompleti. L\'app viene fornita senza garanzia, non è un servizio finanziario e le donazioni sono facoltative e non sbloccano alcuna funzionalità.</string>
-<string name="legal_privacy_summary">HNS DANE Browser non include annunci, SDK di analisi o account gestiti dagli sviluppatori. Memorizza la cronologia di navigazione, i cookie, i record di download, le impostazioni, la diagnostica e i dati di sincronizzazione/cache HNS localmente sul dispositivo. Invia richieste di rete necessarie per la funzionalità del browser ai siti Web visitati, peer HNS, seed DNS, server dei nomi autorevoli, endpoint DoH autorevoli rilevati da RFC 9461 e, solo in modalità compatibilità, un risolutore HNS DoH dopo il fallimento della risoluzione locale/diretta. La modalità HNS rigorosa disabilita il fallback HNS DoH di terze parti. I dati di navigazione locale possono essere cancellati da Impostazioni.</string>
 <string name="legal_copy_privacy_policy_url">informativa sulla privacy URL</string>
 <string name="legal_copy_source_code_url">codice sorgente URL</string>
 <string name="legal_copy_hns_donation_address">Indirizzo per la donazione HNS</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">Correzione suggerita:</string>
 <string name="trace_fix_hns_stale">Lascia che la sincronizzazione HNS riprenda, quindi riprova. La prova locale è valida per il suo blocco storico, ma non abbastanza attuale per decidere se il nome esista adesso.</string>
 <string name="trace_fix_hns_unavailable">Sincronizza prima le intestazioni/bozze, quindi riprova. Non era disponibile alcuna prova HNS verificata.</string>
-<string name="trace_fix_add_delegation">Aggiungi dati di delega HNS utilizzabili: NS più GLUE4/GLUE6 o SYNTH4/SYNTH6. Per le reti che bloccano la porta 53, pubblicare un record SVCB del server dei nomi RFC 9461 _dns nella zona firmata.</string>
-<string name="trace_fix_doh_answered">Il DNS autorevole diretto sulla porta 53 non è riuscito, ma l\'endpoint DoH autorevole rilevato da RFC 9461 ha risposto e convalidato. Mantenere UDP/TCP 53 raggiungibile ove possibile.</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">Il candidato al server dei nomi delegato non ha risposto in modo affidabile. Assicurati che il DNS autorevole sia raggiungibile su UDP/TCP 53 o pubblica un record RFC 9461 _dns SVCB per un endpoint RFC 8484 DoH nella zona firmata.</string>
 <string name="trace_fix_nameserver_unreliable">Il tuo candidato al server dei nomi delegato non ha risposto in modo affidabile. Assicurati che il DNS autorevole sia raggiungibile su UDP 53 e TCP 53.</string>
 <string name="trace_fix_dnssec_bogus">Correggere la catena delegata DNSSEC: HNS DS deve corrispondere al figlio DNSKEY, le firme devono essere aggiornate e i dati di rifiuto devono essere validi.</string>
 <string name="trace_fix_dnssec_before_tlsa">Correggere prima il DNSSEC delegato. TLSA/DANE non è stato valutato perché la risoluzione sicura non è riuscita prima della ricerca TLSA.</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">Correggere prima ICANN DNSSEC. TLSA/DANE non è stato valutato perché la convalida sicura DNS non è riuscita.</string>
 <string name="trace_fix_icann_working">Il percorso ICANN DNSSEC e DANE funziona per questa pagina.</string>
 <string name="trace_fix_no_obvious_icann">Nessuna soluzione ovvia da questa traccia. Controlla i dettagli TLSA/DANE se la convalida HTTPS fallisce.</string>
-<string name="proof_error_no_host">nessun host HNS è disponibile per questa pagina</string>
 <string name="proof_field_name">Nome: %1$s</string>
 <string name="proof_field_name_hash">Nome hash: %1$s</string>
 <string name="proof_field_tree_root">Radice dell\'albero: %1$s</string>

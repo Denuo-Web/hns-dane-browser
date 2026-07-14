@@ -67,7 +67,7 @@ class GatewayResponseBodyStoreTest {
         }
 
         GatewayResponseBodyStore.pruneDirectory(
-            directory = body.parentFile,
+            directory = requireNotNull(body.parentFile),
             nowMillis = 10_000L,
             maxAgeMillis = 1,
             maxFiles = 0,

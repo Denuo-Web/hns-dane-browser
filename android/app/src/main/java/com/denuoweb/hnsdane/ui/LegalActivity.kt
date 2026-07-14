@@ -60,6 +60,13 @@ class LegalActivity : ComponentActivity() {
                         BrowserAppInfo.SOURCE_CODE_URL,
                     )
                 })
+                addScreenRow(preferenceRow(
+                    title = getString(R.string.row_third_party_notices),
+                    summary = getString(R.string.row_third_party_notices_summary),
+                    actionLabel = getString(R.string.action_open),
+                ) {
+                    startActivity(Intent(this@LegalActivity, ThirdPartyNoticesActivity::class.java))
+                })
             })
             addView(screenSection(getString(R.string.section_user_agreement)) {
                 addScreenRow(preferenceRow(

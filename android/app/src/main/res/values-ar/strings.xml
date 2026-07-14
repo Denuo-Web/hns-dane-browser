@@ -63,16 +63,6 @@
     <string name="download_error_blob_data_urls">عناوين URL %1$s غير مدعومة حتى الآن</string>
     <string name="download_error_http_https_only">يتم دعم تنزيلات HTTP وHTTPS فقط</string>
     <string name="download_error_local_assets">لا يمكن تنزيل أصول التطبيق المحلية</string>
-    <string name="notification_permission_rationale_title">هل تريد إظهار إشعارات المزامنة؟</string>
-    <string name="notification_permission_rationale_message">تعمل مزامنة HNS كخدمة مزامنة بيانات مرئية عندما يكون المتصفح مفتوحًا. تُظهر الإشعارات تقدم المزامنة وتوفر إجراء إيقاف.</string>
-    <string name="notification_permission_rationale_not_now">ليس الآن</string>
-    <string name="notification_permission_rationale_continue">يكمل</string>
-    <string name="sync_notification_channel">مزامنة HNS</string>
-    <string name="sync_notification_title">مزامنة HNS نشطة</string>
-    <string name="sync_notification_starting">بدء مزامنة الرأس والإثبات</string>
-    <string name="sync_notification_running">الحفاظ على البراهين HNS الحالية</string>
-    <string name="sync_notification_error">تحتاج المزامنة إلى استرداد الشبكة أو الأقران</string>
-    <string name="sync_notification_stop">قف</string>
     <string name="sync_status_idle">عاطل</string>
     <string name="sync_status_syncing">مزامنة</string>
     <string name="sync_status_up_to_date">حتى الآن</string>
@@ -142,8 +132,6 @@
     <string name="row_copy_json">انسخ ملف JSON</string>
     <string name="row_copy_markdown">نسخ تخفيض السعر</string>
     <string name="row_copy_markdown_summary">انسخ تقرير Markdown المضغوط.</string>
-    <string name="row_delete_cookies">حذف ملفات تعريف الارتباط</string>
-    <string name="row_delete_cookies_summary">قم بإزالة ملفات تعريف الارتباط المخزنة بواسطة مواقع الويب في هذا المتصفح.</string>
     <string name="row_diagnostics">التشخيص</string>
     <string name="row_diagnostics_summary">البناء ووقت التشغيل والتفاصيل الأساسية الأصلية.</string>
     <string name="row_donate_hns">تبرع بـ HNS</string>
@@ -264,8 +252,6 @@
         <item quantity="many">Regtestات قائمة انتظار التطبيق %d</item>
         <item quantity="other">Regtestات قائمة انتظار التطبيق %d</item>
     </plurals>
-    <string name="cookie_deleted">تم حذف ملفات تعريف الارتباط</string>
-    <string name="cookie_none_to_delete">لا توجد ملفات تعريف الارتباط لحذفها</string>
     <string name="cookie_status_after_delete">%1$s. %2$s</string>
     <string name="cookie_summary_blocking">يُسمح بملفات تعريف الارتباط للطرف الأول. يتم حظر ملفات تعريف الارتباط للجهات الخارجية.</string>
     <string name="cookie_summary_allowing_all">يُسمح بملفات تعريف الارتباط الخاصة بالطرف الأول والطرف الثالث.</string>
@@ -273,7 +259,6 @@
     <string name="settings_resolver_cache_ready">جاهز لمسح قيم المحلل المخزنة مؤقتًا.</string>
     <string name="settings_resolver_cache_ready_network">جاهز لمسح قيم المحلل المخزنة مؤقتًا لـ %1$s.</string>
     <string name="settings_header_resync_ready">إعادة تعيين الرؤوس المحلية والمزامنة مرة أخرى من أقرانهم.</string>
-    <string name="settings_header_resync_ready_network">قم بإعادة تعيين رؤوس %1$s وقم بمزامنتها مرة أخرى من النظراء.</string>
     <string name="settings_network_choice">%1$s - %2$s</string>
     <string name="settings_network_set">تم ضبط الشبكة على %1$s</string>
     <string name="settings_homepage_edit_title">تحرير الصفحة الرئيسية</string>
@@ -340,7 +325,6 @@
     <string name="gateway_copied">تم نسخ أحداث البوابة</string>
     <string name="legal_license_summary">متصفح HNS DANE متاح المصدر بموجب ترخيص PolyForm Noncommercial 1.0.0. يُسمح بالاستخدام غير التجاري والدراسة والتعديل وإعادة التوزيع بموجب الترخيص. يتطلب الاستخدام التجاري الحصول على إذن كتابي منفصل من شركة Denuo Web, LLC.</string>
     <string name="legal_user_agreement">هذا متصفح تجريبي للHandshake أولاً مع إثباتات HNS المحلية، ونقل RFC 8484 DoH، وتشخيصات DNSSEC/DANE. قد يفشل حل HNS، والتحقق من صحة DNSSEC، وفحوصات DANE، وتراجع التوافق، والمزامنة أو تكون غير مكتملة. يتم توفير التطبيق بدون ضمان، وهو ليس خدمة مالية، والتبرعات اختيارية ولا تفتح أي ميزات.</string>
-    <string name="legal_privacy_summary">لا يشتمل متصفح HNS DANE على إعلانات أو مجموعات SDK للتحليلات أو حسابات يديرها المطورون. يقوم بتخزين Regtest التصفح وملفات تعريف الارتباط وRegtestات التنزيل والإعدادات والتشخيصات وبيانات مزامنة/ذاكرة التخزين المؤقت لـ HNS محليًا على الجهاز. فهو يرسل طلبات الشبكة اللازمة لوظائف المتصفح إلى مواقع الويب التي تزورها، وأقران HNS، وبذور DNS، وخوادم الأسماء الموثوقة، ونقاط نهاية DoH الرسمية المكتشفة بواسطة RFC 9461، وفي وضع التوافق فقط، محلل HNS DoH بعد فشل الحل المحلي/المباشر. يعمل وضع HNS الصارم على تعطيل الإجراء الاحتياطي لـ HNS DoH التابع لجهة خارجية. يمكن مسح بيانات التصفح المحلية من الإعدادات.</string>
     <string name="legal_copy_privacy_policy_url">عنوان URL لسياسة الخصوصية</string>
     <string name="legal_copy_source_code_url">عنوان URL لرمز المصدر</string>
     <string name="legal_copy_hns_donation_address">عنوان التبرع بـ HNS</string>
@@ -493,9 +477,6 @@
     <string name="trace_suggested_fix">الإصلاح المقترح:</string>
     <string name="trace_fix_hns_stale">اسمح لمزامنة HNS بالمتابعة، ثم أعد المحاولة. الدليل المحلي صالح للكتلة التاريخية الخاصة به، ولكنه ليس حديثًا بدرجة كافية لتحديد ما إذا كان الاسم موجودًا الآن.</string>
     <string name="trace_fix_hns_unavailable">قم بمزامنة الرؤوس/البراهين أولاً، ثم أعد المحاولة. لم يتوفر دليل HNS تم التحقق منه.</string>
-    <string name="trace_fix_add_delegation">أضف بيانات تفويض HNS القابلة للاستخدام: NS plus GLUE4/GLUE6 أو SYNTH4/SYNTH6. بالنسبة للشبكات التي تحظر المنفذ 53، قم بنشر Regtest SVCB لخادم أسماء RFC 9461 _dns في المنطقة الموقعة.</string>
-    <string name="trace_fix_doh_answered">فشل نظام DNS المعتمد المباشر على المنفذ 53، ولكن تم الرد على نقطة نهاية DoH الرسمية المكتشفة بواسطة RFC 9461 والتحقق من صحتها. اجعل UDP/TCP 53 متاحًا حيثما أمكن ذلك.</string>
-    <string name="trace_fix_nameserver_unreliable_with_doh">لم يقم مرشح خادم الأسماء المفوض بالإجابة بشكل موثوق. تأكد من إمكانية الوصول إلى DNS المعتمد على UDP/TCP 53 أو قم بنشر Regtest RFC 9461 _dns SVCB لنقطة نهاية RFC 8484 DoH في المنطقة الموقعة.</string>
     <string name="trace_fix_nameserver_unreliable">لم يقم مرشح خادم الأسماء المفوض بالإجابة بشكل موثوق. تأكد من إمكانية الوصول إلى DNS المعتمد على UDP 53 وTCP 53.</string>
     <string name="trace_fix_dnssec_bogus">إصلاح سلسلة DNSSEC المفوضة: يجب أن يتطابق HNS DS مع DNSKEY الفرعي، ويجب أن تكون التوقيعات حديثة، ويجب أن تكون بيانات الرفض صالحة.</string>
     <string name="trace_fix_dnssec_before_tlsa">قم بإصلاح DNSSEC المفوض أولاً. لم يتم تقييم TLSA/DANE بسبب فشل الحل الآمن قبل بحث TLSA.</string>
@@ -508,7 +489,6 @@
     <string name="trace_fix_icann_dnssec_before_tlsa">قم بإصلاح ICANN DNSSEC أولاً. لم يتم تقييم TLSA/DANE بسبب فشل التحقق الآمن من DNS.</string>
     <string name="trace_fix_icann_working">يعمل مسار ICANN DNSSEC وDANE لهذه الصفحة.</string>
     <string name="trace_fix_no_obvious_icann">لا يوجد حل واضح من هذا التتبع. تحقق من تفاصيل TLSA/DANE في حالة فشل التحقق من صحة HTTPS.</string>
-    <string name="proof_error_no_host">لا يوجد مضيف HNS متاح لهذه الصفحة</string>
     <string name="proof_field_name">الاسم: %1$s</string>
     <string name="proof_field_name_hash">تجزئة الاسم: %1$s</string>
     <string name="proof_field_tree_root">جذر الشجرة: %1$s</string>

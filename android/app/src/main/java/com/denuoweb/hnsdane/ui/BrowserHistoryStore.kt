@@ -65,6 +65,7 @@ internal object BrowserHistoryStore {
         val lower = url.lowercase()
         return url.isBlank() ||
             lower == "about:blank" ||
+            lower == BrowserPreferences.DEFAULT_HOME ||
             lower.startsWith("data:") ||
             lower.startsWith("blob:")
     }

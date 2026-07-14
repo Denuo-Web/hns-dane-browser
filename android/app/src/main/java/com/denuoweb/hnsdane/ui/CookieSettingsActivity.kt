@@ -2,9 +2,13 @@ package com.denuoweb.hnsdane.ui
 
 import android.os.Bundle
 import android.webkit.CookieManager
+import android.webkit.WebStorage
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
+import androidx.webkit.WebStorageCompat
+import androidx.webkit.WebViewFeature
 import com.denuoweb.hnsdane.R
 
 class CookieSettingsActivity : ComponentActivity() {
@@ -26,29 +30,53 @@ class CookieSettingsActivity : ComponentActivity() {
                     status.text = summary()
                 })
                 addScreenRow(preferenceRow(
-                    title = getString(R.string.row_delete_cookies),
-                    summary = getString(R.string.row_delete_cookies_summary),
+                    title = getString(R.string.row_delete_website_data),
+                    summary = getString(R.string.row_delete_website_data_summary),
                     actionLabel = getString(R.string.action_delete),
                     destructive = true,
                 ) {
-                    deleteCookies()
+                    deleteWebsiteData()
                 })
             })
         }
     }
 
-    private fun deleteCookies() {
-        CookieManager.getInstance().removeAllCookies { removedAny ->
-            CookieManager.getInstance().flush()
-            runOnUiThread {
-                val message = if (removedAny) {
-                    getString(R.string.cookie_deleted)
-                } else {
-                    getString(R.string.cookie_none_to_delete)
+    private fun deleteWebsiteData() {
+        val webStorage = WebStorage.getInstance()
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+            try {
+                WebStorageCompat.deleteBrowsingData(
+                    webStorage,
+                    ContextCompat.getMainExecutor(this),
+                ) {
+                    clearCookiesAndReport(R.string.website_data_deleted, Toast.LENGTH_SHORT)
                 }
-                status.text = getString(R.string.cookie_status_after_delete, message, summary())
-                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                return
+            } catch (_: UnsupportedOperationException) {
+                // The installed WebView can change between the feature check and invocation.
             }
+        }
+
+        requestLegacyWebsiteDataDeletion(webStorage)
+    }
+
+    private fun requestLegacyWebsiteDataDeletion(webStorage: WebStorage) {
+        webStorage.deleteAllData()
+        clearCookiesAndReport(R.string.website_data_deletion_requested, Toast.LENGTH_LONG)
+    }
+
+    private fun clearCookiesAndReport(messageRes: Int, toastDuration: Int) {
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush()
+            showDeletionStatus(messageRes, toastDuration)
+        }
+    }
+
+    private fun showDeletionStatus(messageRes: Int, toastDuration: Int) {
+        runOnUiThread {
+            val message = getString(messageRes)
+            status.text = getString(R.string.cookie_status_after_delete, message, summary())
+            Toast.makeText(this, message, toastDuration).show()
         }
     }
 

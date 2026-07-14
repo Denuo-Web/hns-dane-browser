@@ -35,6 +35,9 @@
             android:name=".ui.LegalActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.ThirdPartyNoticesActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.HnsResolverTraceActivity"
             android:exported="false" />
         <activity

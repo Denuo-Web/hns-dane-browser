@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">尚不支持 %1$s URL</string>
 <string name="download_error_http_https_only">仅支持 HTTP 和 HTTPS 下载</string>
 <string name="download_error_local_assets">本地应用资源无法下载</string>
-<string name="notification_permission_rationale_title">显示同步通知？</string>
-<string name="notification_permission_rationale_message">当浏览器打开时，HNS 同步作为可见数据同步服务运行。通知显示同步进度并提供停止操作。</string>
-<string name="notification_permission_rationale_not_now">现在不行</string>
-<string name="notification_permission_rationale_continue">继续</string>
-<string name="sync_notification_channel">HNS同步</string>
-<string name="sync_notification_title">HNS 同步激活</string>
-<string name="sync_notification_starting">开始标题和校样同步</string>
-<string name="sync_notification_running">保持 HNS 证明最新</string>
-<string name="sync_notification_error">同步需要网络或对等恢复</string>
-<string name="sync_notification_stop">停止</string>
 <string name="sync_status_idle">空闲</string>
 <string name="sync_status_syncing">同步</string>
 <string name="sync_status_up_to_date">最新的</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">复制JSON</string>
 <string name="row_copy_markdown">复制Markdown</string>
 <string name="row_copy_markdown_summary">复制一份紧凑的 Markdown 报告。</string>
-<string name="row_delete_cookies">删除cookies</string>
-<string name="row_delete_cookies_summary">删除此浏览器中网站存储的 cookie。</string>
 <string name="row_diagnostics">诊断</string>
 <string name="row_diagnostics_summary">构建、运行时和本机核心详细信息。</string>
 <string name="row_donate_hns">捐赠HNS</string>
@@ -240,8 +228,6 @@
 <item quantity="one">%d 应用程序排队记录</item>
 <item quantity="other">%d 应用程序排队记录</item>
 </plurals>
-<string name="cookie_deleted">Cookie 已删除</string>
-<string name="cookie_none_to_delete">没有要删除的 cookie</string>
 <string name="cookie_status_after_delete">%1$s。 %2$s</string>
 <string name="cookie_summary_blocking">允许使用第一方 cookie。第三方 cookie 被阻止。</string>
 <string name="cookie_summary_allowing_all">允许使用第一方和第三方 cookie。</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">准备清除缓存的解析器值。</string>
 <string name="settings_resolver_cache_ready_network">准备清除 %1$s 的缓存解析器值。</string>
 <string name="settings_header_resync_ready">重置本地标头并再次从对等方同步。</string>
-<string name="settings_header_resync_ready_network">重置 %1$s 标头并再次从对等点同步。</string>
 <string name="settings_network_choice">%1$s-%2$s</string>
 <string name="settings_network_set">网络设置为 %1$s</string>
 <string name="settings_homepage_edit_title">编辑主页</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">已复制网关事件</string>
 <string name="legal_license_summary">HNS DANE Browser 可根据 PolyForm 非商业许可证 1.0.0 获取源代码。许可证允许非商业使用、研究、修改和重新分发。商业用途需要获得 Denuo Web, LLC 的单独书面许可。</string>
 <string name="legal_user_agreement">这是一个实验性的 Handshake 优先浏览器，具有本地 HNS 证明、RFC 8484 DoH 传输和 DNSSEC/DANE 诊断。 HNS 分辨率、DNSSEC 验证、DANE 检查、兼容性回退和同步可能会失败或不完整。该应用程序不提供保修，不是金融服务，捐赠是可选的，并且不解锁任何功能。</string>
-<string name="legal_privacy_summary">HNS DANE Browser 不包括广告、分析 SDK 或开发者运营的帐户。它将浏览历史记录、cookie、下载记录、设置、诊断和 HNS 同步/缓存数据存储在设备本地。它将浏览器功能所需的网络请求发送到您访问的网站、HNS 对等点、DNS 种子、权威名称服务器、RFC 9461 发现的权威 DoH 端点，以及本地/直接解析失败后的 HNS DoH 解析器（仅在兼容模式下）。严格 HNS 模式禁用第三方 HNS DoH 回退。可以从“设置”中清除本地浏览数据。</string>
 <string name="legal_copy_privacy_policy_url">隐私政策 URL</string>
 <string name="legal_copy_source_code_url">源代码URL</string>
 <string name="legal_copy_hns_donation_address">HNS捐款地址</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">建议修复：</string>
 <string name="trace_fix_hns_stale">让 HNS 同步赶上，然后重试。本地证明对其历史区块有效，但不足以确定该名称现在是否存在。</string>
 <string name="trace_fix_hns_unavailable">首先同步标题/校样，然后重试。没有经过验证的 HNS 证据可用。</string>
-<string name="trace_fix_add_delegation">添加可用的 HNS 授权数据：NS 加 GLUE4/GLUE6 或 SYNTH4/SYNTH6。对于阻止端口 53 的网络，请在签名区域中发布 RFC 9461 _dns 名称服务器 SVCB 记录。</string>
-<string name="trace_fix_doh_answered">端口 53 上的直接权威 DNS 失败，但 RFC 9461 发现的权威 DoH 端点已应答并验证。尽可能保持 UDP/TCP 53 可达。</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">您的委托名称服务器候选人没有可靠地回答。确保可在 UDP/TCP 53 上访问权威 DNS，或为签名区域中的 RFC 8484 DoH 端点发布 RFC 9461 _dns SVCB 记录。</string>
 <string name="trace_fix_nameserver_unreliable">您的委托名称服务器候选人没有可靠地回答。确保在 UDP 53 和 TCP 53 上可以访问权威 DNS。</string>
 <string name="trace_fix_dnssec_bogus">修复委托 DNSSEC 链：HNS DS 必须与子 DNSKEY 匹配，签名必须是最新的，并且拒绝数据必须有效。</string>
 <string name="trace_fix_dnssec_before_tlsa">首先修复委托的 DNSSEC。未评估 TLSA/DANE，因为安全解析在 TLSA 查找之前失败。</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">先修复 ICANN DNSSEC。由于安全 DNS 验证失败，因此未评估 TLSA/DANE。</string>
 <string name="trace_fix_icann_working">ICANN、DNSSEC 和 DANE 路径适用于此页面。</string>
 <string name="trace_fix_no_obvious_icann">此跟踪没有明显的修复。如果 HTTPS 验证失败，请检查 TLSA/DANE 详细信息。</string>
-<string name="proof_error_no_host">该页面没有可用的 HNS 主机</string>
 <string name="proof_field_name">名称：%1$s</string>
 <string name="proof_field_name_hash">名称哈希：%1$s</string>
 <string name="proof_field_tree_root">树根：%1$s</string>

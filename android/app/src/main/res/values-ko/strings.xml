@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">%1$s URL는 아직 지원되지 않습니다.</string>
 <string name="download_error_http_https_only">HTTP 및 HTTPS 다운로드만 지원됩니다.</string>
 <string name="download_error_local_assets">로컬 앱 자산을 다운로드할 수 없습니다.</string>
-<string name="notification_permission_rationale_title">동기화 알림을 표시하시겠습니까?</string>
-<string name="notification_permission_rationale_message">HNS 동기화는 브라우저가 열려 있는 동안 표시되는 데이터 동기화 서비스로 실행됩니다. 알림은 동기화 진행 상황을 표시하고 중지 작업을 제공합니다.</string>
-<string name="notification_permission_rationale_not_now">지금은 아님</string>
-<string name="notification_permission_rationale_continue">계속</string>
-<string name="sync_notification_channel">HNS 동기화</string>
-<string name="sync_notification_title">HNS 동기화 활성</string>
-<string name="sync_notification_starting">헤더 및 증명 동기화 시작</string>
-<string name="sync_notification_running">HNS 교정을 최신 상태로 유지</string>
-<string name="sync_notification_error">동기화에는 네트워크 또는 피어 복구가 필요합니다.</string>
-<string name="sync_notification_stop">중지</string>
 <string name="sync_status_idle">유휴</string>
 <string name="sync_status_syncing">동기화 중</string>
 <string name="sync_status_up_to_date">최신</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">JSON 복사</string>
 <string name="row_copy_markdown">Markdown 복사</string>
 <string name="row_copy_markdown_summary">컴팩트 Markdown 보고서를 복사합니다.</string>
-<string name="row_delete_cookies">쿠키 삭제</string>
-<string name="row_delete_cookies_summary">이 브라우저에서 웹사이트에 의해 저장된 쿠키를 제거합니다.</string>
 <string name="row_diagnostics">진단</string>
 <string name="row_diagnostics_summary">빌드, 런타임 및 기본 핵심 세부정보입니다.</string>
 <string name="row_donate_hns">HNS 기부</string>
@@ -240,8 +228,6 @@
 <item quantity="one">%d 앱 대기열 기록</item>
 <item quantity="other">%d 앱 대기열 기록</item>
 </plurals>
-<string name="cookie_deleted">쿠키가 삭제되었습니다.</string>
-<string name="cookie_none_to_delete">삭제할 쿠키가 없습니다.</string>
 <string name="cookie_status_after_delete">%1$s. %2$s</string>
 <string name="cookie_summary_blocking">자사 쿠키가 허용됩니다. 타사 쿠키는 차단됩니다.</string>
 <string name="cookie_summary_allowing_all">자사 및 타사 쿠키가 허용됩니다.</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">캐시된 확인자 값을 지울 준비가 되었습니다.</string>
 <string name="settings_resolver_cache_ready_network">%1$s에 대해 캐시된 확인자 값을 지울 준비가 되었습니다.</string>
 <string name="settings_header_resync_ready">로컬 헤더를 재설정하고 피어에서 다시 동기화하세요.</string>
-<string name="settings_header_resync_ready_network">%1$s 헤더를 재설정하고 피어에서 다시 동기화하세요.</string>
 <string name="settings_network_choice">%1$s - %2$s</string>
 <string name="settings_network_set">%1$s로 설정된 네트워크</string>
 <string name="settings_homepage_edit_title">홈페이지 수정</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">게이트웨이 이벤트가 복사되었습니다.</string>
 <string name="legal_license_summary">HNS DANE Browser은 PolyForm Noncommercial License 1.0.0에 따라 소스를 사용할 수 있습니다. 비상업적 사용, 연구, 수정 및 재배포는 라이센스에 따라 허용됩니다. 상업적으로 사용하려면 Denuo Web, LLC의 별도 서면 허가가 필요합니다.</string>
 <string name="legal_user_agreement">이는 로컬 HNS 증명, RFC 8484 DoH 전송 및 DNSSEC/DANE 진단 기능을 갖춘 실험적인 Handshake 우선 브라우저입니다. HNS 해상도, DNSSEC 유효성 검사, DANE 검사, 호환성 대체 및 동기화가 실패하거나 완료되지 않을 수 있습니다. 이 앱은 보증 없이 제공되며 금융 서비스가 아니며 기부는 선택 사항이며 잠금 해제 기능이 없습니다.</string>
-<string name="legal_privacy_summary">HNS DANE Browser에는 광고, 분석 SDK 또는 개발자가 운영하는 계정이 포함되지 않습니다. 검색 기록, 쿠키, 다운로드 기록, 설정, 진단 및 HNS 동기화/캐시 데이터를 장치에 로컬로 저장합니다. 브라우저 기능에 필요한 네트워크 요청을 방문하는 웹 사이트, HNS 피어, DNS 시드, 신뢰할 수 있는 네임서버, RFC 9461에서 발견된 신뢰할 수 있는 DoH 엔드포인트 및 호환 모드에서만 로컬/직접 확인이 실패한 후 HNS DoH 확인자로 보냅니다. 엄격한 HNS 모드는 타사 HNS DoH 대체를 비활성화합니다. 로컬 인터넷 사용 기록은 설정에서 삭제할 수 있습니다.</string>
 <string name="legal_copy_privacy_policy_url">개인정보 보호정책 URL</string>
 <string name="legal_copy_source_code_url">소스 코드 URL</string>
 <string name="legal_copy_hns_donation_address">HNS 기부 주소</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">제안된 수정 사항:</string>
 <string name="trace_fix_hns_stale">HNS 동기화가 완료되도록 한 다음 다시 시도하세요. 지역 증명은 역사적 블록에 대해 유효하지만 이름이 현재 존재하는지 여부를 결정할 만큼 최신 상태는 아닙니다.</string>
 <string name="trace_fix_hns_unavailable">먼저 헤더/증명을 동기화한 후 다시 시도하세요. 확인된 HNS 증거가 없습니다.</string>
-<string name="trace_fix_add_delegation">사용 가능한 HNS 위임 데이터 추가: NS와 GLUE4/GLUE6 또는 SYNTH4/SYNTH6. 포트 53을 차단하는 네트워크의 경우 서명된 영역에 RFC 9461 _dns 이름 서버 SVCB 레코드를 게시합니다.</string>
-<string name="trace_fix_doh_answered">포트 53의 직접 권한 있는 DNS이 실패했지만 RFC 9461에서 검색된 권한 있는 DoH 엔드포인트가 응답하고 검증되었습니다. 가능하면 UDP/TCP 53에 접근할 수 있는 상태를 유지하세요.</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">위임된 네임서버 후보가 안정적으로 응답하지 않았습니다. UDP/TCP 53에서 권한 있는 DNS에 연결할 수 있는지 확인하거나 서명된 영역의 RFC 8484 DoH 엔드포인트에 대한 RFC 9461 _dns SVCB 레코드를 게시하세요.</string>
 <string name="trace_fix_nameserver_unreliable">위임된 네임서버 후보가 안정적으로 응답하지 않았습니다. UDP 53 및 TCP 53에서 권한 있는 DNS에 연결할 수 있는지 확인하세요.</string>
 <string name="trace_fix_dnssec_bogus">위임된 DNSSEC 체인을 수정하세요. HNS DS는 하위 DNSKEY과 일치해야 하고, 서명은 최신이어야 하며, 거부 데이터는 유효해야 합니다.</string>
 <string name="trace_fix_dnssec_before_tlsa">위임된 DNSSEC을 먼저 수정하세요. TLSA 조회 전에 보안 확인이 실패했기 때문에 TLSA/DANE가 평가되지 않았습니다.</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">ICANN DNSSEC를 먼저 수정하세요. 보안 DNS 검증이 실패했기 때문에 TLSA/DANE이 평가되지 않았습니다.</string>
 <string name="trace_fix_icann_working">ICANN DNSSEC 및 DANE 경로가 이 페이지에서 작동 중입니다.</string>
 <string name="trace_fix_no_obvious_icann">이 추적에서는 확실한 수정 사항이 없습니다. HTTPS 검증에 실패하면 TLSA/DANE 세부정보를 확인하세요.</string>
-<string name="proof_error_no_host">이 페이지에는 HNS 호스트를 사용할 수 없습니다</string>
 <string name="proof_field_name">이름: %1$s</string>
 <string name="proof_field_name_hash">이름 해시: %1$s</string>
 <string name="proof_field_tree_root">나무뿌리: %1$s</string>

@@ -50,6 +50,13 @@ class HnsSyncForegroundServiceManifestTest {
         assertNotNull(legal)
         assertEquals("false", legal?.getAttributeNS(ANDROID_NS, "exported"))
 
+        val thirdPartyNotices = document.getElementsByTagName("activity")
+            .elements()
+            .firstOrNull { it.getAttributeNS(ANDROID_NS, "name") == THIRD_PARTY_NOTICES_ACTIVITY }
+
+        assertNotNull(thirdPartyNotices)
+        assertEquals("false", thirdPartyNotices?.getAttributeNS(ANDROID_NS, "exported"))
+
         val main = document.getElementsByTagName("activity")
             .elements()
             .firstOrNull { it.getAttributeNS(ANDROID_NS, "name") == MAIN_ACTIVITY }
@@ -102,6 +109,7 @@ class HnsSyncForegroundServiceManifestTest {
         const val SETTINGS_ACTIVITY = ".ui.SettingsActivity"
         const val COOKIE_SETTINGS_ACTIVITY = ".ui.CookieSettingsActivity"
         const val LEGAL_ACTIVITY = ".ui.LegalActivity"
+        const val THIRD_PARTY_NOTICES_ACTIVITY = ".ui.ThirdPartyNoticesActivity"
         const val MAIN_ACTIVITY = ".ui.MainActivity"
         const val LAUNCHER_ACTIVITY = ".ui.LauncherActivity"
         const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"

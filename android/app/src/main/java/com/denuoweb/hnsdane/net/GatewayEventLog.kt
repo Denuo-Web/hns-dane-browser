@@ -74,9 +74,22 @@ internal object GatewayEventLog {
     }
 
     @Synchronized
-    fun clear() {
-        events.clear()
-        runCatching { storeFile?.delete() }
+    fun clear(): Boolean {
+        val clearedPersistedData = runCatching {
+            val file = storeFile
+            when {
+                file == null || !file.exists() -> true
+                file.delete() -> true
+                else -> {
+                    file.writeText("", StandardCharsets.UTF_8)
+                    file.length() == 0L
+                }
+            }
+        }.getOrDefault(false)
+        if (clearedPersistedData) {
+            events.clear()
+        }
+        return clearedPersistedData
     }
 
     private fun persistLocked() {

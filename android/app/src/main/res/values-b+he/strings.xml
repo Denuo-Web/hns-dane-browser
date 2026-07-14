@@ -63,16 +63,6 @@
     <string name="download_error_blob_data_urls">כתובות URL של %1$s אינן נתמכות עדיין</string>
     <string name="download_error_http_https_only">רק הורדות HTTP ו-HTTPS נתמכות</string>
     <string name="download_error_local_assets">לא ניתן להוריד נכסי אפליקציה מקומית</string>
-    <string name="notification_permission_rationale_title">להציג התראות סנכרון?</string>
-    <string name="notification_permission_rationale_message">סנכרון HNS פועל כשירות סנכרון נתונים גלוי כשהדפדפן פתוח. התראות מציגות את התקדמות הסנכרון ומספקות פעולת עצירה.</string>
-    <string name="notification_permission_rationale_not_now">לא עכשיו</string>
-    <string name="notification_permission_rationale_continue">לְהַמשִׁיך</string>
-    <string name="sync_notification_channel">סנכרון HNS</string>
-    <string name="sync_notification_title">סנכרון HNS פעיל</string>
-    <string name="sync_notification_starting">התחלת סנכרון כותרת והוכחה</string>
-    <string name="sync_notification_running">שמירה על הוכחות HNS עדכניות</string>
-    <string name="sync_notification_error">הסנכרון זקוק לשחזור רשת או עמיתים</string>
-    <string name="sync_notification_stop">לְהַפְסִיק</string>
     <string name="sync_status_idle">לְהִתְבַּטֵל</string>
     <string name="sync_status_syncing">סנכרון</string>
     <string name="sync_status_up_to_date">מעודכן</string>
@@ -142,8 +132,6 @@
     <string name="row_copy_json">העתק את JSON</string>
     <string name="row_copy_markdown">העתק Markdown</string>
     <string name="row_copy_markdown_summary">העתק דוח Markdown קומפקטי.</string>
-    <string name="row_delete_cookies">מחק עוגיות</string>
-    <string name="row_delete_cookies_summary">הסר קובצי Cookie המאוחסנים על ידי אתרי אינטרנט בדפדפן זה.</string>
     <string name="row_diagnostics">אבחון</string>
     <string name="row_diagnostics_summary">בנייה, זמן ריצה ופרטי ליבה מקוריים.</string>
     <string name="row_donate_hns">תרום HNS</string>
@@ -246,8 +234,6 @@
         <item quantity="two">%d רשומות בתור אפליקציה</item>
         <item quantity="other">%d רשומות בתור אפליקציה</item>
     </plurals>
-    <string name="cookie_deleted">קובצי Cookie נמחקו</string>
-    <string name="cookie_none_to_delete">אין קובצי Cookie למחוק</string>
     <string name="cookie_status_after_delete">%1$s. %2$s</string>
     <string name="cookie_summary_blocking">קובצי Cookie של צד ראשון מותרים. קובצי Cookie של צד שלישי חסומים.</string>
     <string name="cookie_summary_allowing_all">קובצי Cookie של צד ראשון וצד שלישי מותרים.</string>
@@ -255,7 +241,6 @@
     <string name="settings_resolver_cache_ready">מוכן לנקות ערכי פותר מטמון.</string>
     <string name="settings_resolver_cache_ready_network">מוכן לנקות ערכי פותר מטמון עבור %1$s.</string>
     <string name="settings_header_resync_ready">אפס כותרות מקומיות וסנכרן שוב מעמיתים.</string>
-    <string name="settings_header_resync_ready_network">אפס את הכותרות של %1$s וסנכרן שוב מעמיתים.</string>
     <string name="settings_network_choice">%1$s - %2$s</string>
     <string name="settings_network_set">הרשת מוגדרת ל-%1$s</string>
     <string name="settings_homepage_edit_title">ערוך את דף הבית</string>
@@ -322,7 +307,6 @@
     <string name="gateway_copied">הועתקו אירועי שער</string>
     <string name="legal_license_summary">דפדפן HNS DANE זמין במקור תחת PolyForm Noncommercial License 1.0.0. שימוש לא מסחרי, מחקר, שינוי והפצה מחדש מותרים במסגרת הרישיון. שימוש מסחרי מחייב אישור נפרד בכתב מ-Denuo Web, LLC.</string>
     <string name="legal_user_agreement">זהו דפדפן ניסיוני הראשון בHandshake עם הוכחות HNS מקומיות, תחבורה RFC 8484 DoH ואבחון DNSSEC/DANE. רזולוציית HNS, אימות DNSSEC, בדיקות DANE, חזרת תאימות וסנכרון עלולים להיכשל בסגירה או להיות חלקית. האפליקציה מסופקת ללא אחריות, אינה שירות פיננסי, והתרומות הן אופציונליות ואינן פותחות תכונות.</string>
-    <string name="legal_privacy_summary">דפדפן HNS DANE אינו כולל מודעות, ערכות SDK לניתוח או חשבונות המופעלים על ידי מפתחים. הוא מאחסן היסטוריית גלישה, עוגיות, רשומות הורדות, הגדרות, אבחון ונתוני סנכרון/מטמון HNS באופן מקומי במכשיר. הוא שולח בקשות רשת הדרושות לפונקציונליות הדפדפן לאתרים שבהם אתה מבקר, עמיתים של HNS, זרעי DNS, שרתי שמות סמכותיים, נקודות קצה סמכותיות של RFC 9461 שהתגלו, ובמצב תאימות בלבד, פותר HNS DoH לאחר כשל בפתרון מקומי/ישיר. מצב HNS קפדני משבית את החזרה של HNS DoH של צד שלישי. ניתן למחוק נתוני גלישה מקומיים מהגדרות.</string>
     <string name="legal_copy_privacy_policy_url">כתובת האתר של מדיניות הפרטיות</string>
     <string name="legal_copy_source_code_url">כתובת האתר של קוד המקור</string>
     <string name="legal_copy_hns_donation_address">כתובת לתרומת HNS</string>
@@ -475,9 +459,6 @@
     <string name="trace_suggested_fix">תיקון מוצע:</string>
     <string name="trace_fix_hns_stale">תן לסנכרון HNS להתעדכן ואז נסה שוב. ההוכחה המקומית תקפה לגוש ההיסטורי שלה, אך אינה עדכנית מספיק כדי להחליט אם השם קיים כעת.</string>
     <string name="trace_fix_hns_unavailable">סנכרן תחילה כותרות/הוכחות ולאחר מכן נסה שוב. לא הייתה הוכחת HNS מאומתת זמינה.</string>
-    <string name="trace_fix_add_delegation">הוסף נתוני האצלת HNS שמישים: NS בתוספת GLUE4/GLUE6 או SYNTH4/SYNTH6. עבור רשתות שחוסמות יציאה 53, פרסם רשומת SVCB של שרת השמות RFC 9461 _dns באזור החתום.</string>
-    <string name="trace_fix_doh_answered">DNS סמכותי ישיר ביציאה 53 נכשל, אך נקודת הקצה הסמכותית של DoH שהתגלתה ב-RFC 9461 נענתה ואומתה. שמור על UDP/TCP 53 נגיש במידת האפשר.</string>
-    <string name="trace_fix_nameserver_unreliable_with_doh">המועמד שלך לשרת השמות לא ענה בצורה מהימנה. ודא שניתן להגיע ל-DNS סמכותי ב-UDP/TCP 53 או פרסם רשומת RFC 9461 _dns SVCB עבור נקודת קצה RFC 8484 DoH באזור החתום.</string>
     <string name="trace_fix_nameserver_unreliable">המועמד שלך לשרת השמות לא ענה בצורה מהימנה. ודא שה-DNS הסמכותי נגיש ב-UDP 53 ו-TCP 53.</string>
     <string name="trace_fix_dnssec_bogus">תקן את שרשרת ה-DNSSEC המואצלת: HNS DS חייב להתאים ל-DNSKEY הבן, החתימות חייבות להיות עדכניות ונתוני ההכחשה חייבים להיות חוקיים.</string>
     <string name="trace_fix_dnssec_before_tlsa">תקן תחילה DNSSEC המואצל. TLSA/DANE לא הוערך מכיוון שפתרון מאובטח נכשל לפני בדיקת ה-TLSA.</string>
@@ -490,7 +471,6 @@
     <string name="trace_fix_icann_dnssec_before_tlsa">תחילה תקן את ICANN DNSSEC. TLSA/DANE לא הוערך מכיוון שאימות DNS מאובטח נכשל.</string>
     <string name="trace_fix_icann_working">הנתיב של ICANN DNSSEC ו-DANE פועל עבור דף זה.</string>
     <string name="trace_fix_no_obvious_icann">אין תיקון ברור מהעקיבה הזו. בדוק את פרטי TLSA/DANE אם אימות HTTPS נכשל.</string>
-    <string name="proof_error_no_host">אין מארח HNS זמין עבור דף זה</string>
     <string name="proof_field_name">שם: %1$s</string>
     <string name="proof_field_name_hash">גיבוב שם: %1$s</string>
     <string name="proof_field_tree_root">שורש עץ: %1$s</string>

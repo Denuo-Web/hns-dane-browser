@@ -2,6 +2,8 @@
 .gradle/
 build/
 target/
+__pycache__/
+*.py[cod]
 android/.gradle/
 android/build/
 android/app/build/
@@ -52,6 +54,7 @@ captures/
 *.prof
 *.profm
 *.sha256
+!scripts/third-party-notices.sha256
 
 # Kotlin/Gradle extras
 .kotlin/

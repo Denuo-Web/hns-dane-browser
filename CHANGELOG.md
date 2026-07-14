@@ -4,11 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added in-app third-party software notices generated deterministically from the locked Android release runtime and shipping Rust dependency closure, with complete license text and integrity checking.
+- Added a release-bundle gate for exact native ABI inventory, 16 KiB bundle/ELF alignment, ELF hardening and bounds, stripped shipping libraries, matching FULL native debug symbols and Build IDs, path sanitization, R8 mapping, notices, and upload-certificate signing.
+
+### Security
+
+- Hardened the native release build against caller-supplied compiler, linker, and Cargo profile overrides; pinned NDK r28c; remapped local checkout, tool-home, and NDK paths; and made AGP responsible for stripping while retaining Play Console symbols.
+
 ### Fixed
 
 - Added proof-anchored `hnsdns=1` authoritative DoH bootstrap metadata so delegated HNS names can reach their RFC 8484 endpoint without first relying on interceptable UDP/TCP port 53; origin answers still require delegated DNSSEC validation against the HNS-proven DS.
 - Added a bounded TEST-NET DNS sentinel probe and resolver-trace field that can positively identify transparent port 53 interception without treating a timeout as proof that the network is clean.
 - Allowed RFC 9461 DNS-server SVCB records to use a distinct WebPKI-authenticated target name while retaining the HNS-proven nameserver glue address for the connection.
+- Expanded the deletion controls to clear WebView origin storage with cookies and to clear the persisted gateway diagnostic log, with updated in-app privacy disclosure.
+- Replaced the automatically loaded remote default homepage with a bundled start page that contains no network resources; user-configured homepages remain supported.
+- Moved adaptive launcher icons to the API-compatible resource directory and removed obsolete notification, service, privacy, resolver-trace, and cookie-only localized strings.
 
 ## 0.3.12 - 2026-07-13
 

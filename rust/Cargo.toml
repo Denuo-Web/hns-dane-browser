@@ -62,5 +62,6 @@ webpki-roots = "1.0.8"
 
 [profile.release]
 codegen-units = 1
+debug = "line-tables-only"
 lto = "thin"
 panic = "abort"

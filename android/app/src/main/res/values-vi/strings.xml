@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">%1$s URL chưa được hỗ trợ</string>
 <string name="download_error_http_https_only">chỉ hỗ trợ tải xuống HTTP và HTTPS</string>
 <string name="download_error_local_assets">không thể tải xuống nội dung ứng dụng cục bộ</string>
-<string name="notification_permission_rationale_title">Hiển thị thông báo đồng bộ hóa?</string>
-<string name="notification_permission_rationale_message">Đồng bộ hóa HNS chạy dưới dạng dịch vụ đồng bộ hóa dữ liệu hiển thị khi trình duyệt đang mở. Thông báo hiển thị tiến trình đồng bộ hóa và cung cấp hành động dừng.</string>
-<string name="notification_permission_rationale_not_now">Không phải bây giờ</string>
-<string name="notification_permission_rationale_continue">Tiếp tục</string>
-<string name="sync_notification_channel">Đồng bộ hóa HNS</string>
-<string name="sync_notification_title">Đồng bộ hóa HNS đang hoạt động</string>
-<string name="sync_notification_starting">Bắt đầu đồng bộ hóa tiêu đề và bằng chứng</string>
-<string name="sync_notification_running">Cập nhật bằng chứng HNS</string>
-<string name="sync_notification_error">Đồng bộ hóa cần khôi phục mạng hoặc ngang hàng</string>
-<string name="sync_notification_stop">Dừng lại</string>
 <string name="sync_status_idle">nhàn rỗi</string>
 <string name="sync_status_syncing">đồng bộ hóa</string>
 <string name="sync_status_up_to_date">cập nhật</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">Sao chép JSON</string>
 <string name="row_copy_markdown">Sao chép Markdown</string>
 <string name="row_copy_markdown_summary">Sao chép báo cáo Markdown nhỏ gọn.</string>
-<string name="row_delete_cookies">Xóa cookie</string>
-<string name="row_delete_cookies_summary">Xóa cookie được lưu trữ bởi các trang web trong trình duyệt này.</string>
 <string name="row_diagnostics">Chẩn đoán</string>
 <string name="row_diagnostics_summary">Chi tiết về bản dựng, thời gian chạy và lõi gốc.</string>
 <string name="row_donate_hns">Đóng góp HNS</string>
@@ -240,8 +228,6 @@
 <item quantity="one">Bản ghi xếp hàng ứng dụng %d</item>
 <item quantity="other">Bản ghi xếp hàng ứng dụng %d</item>
 </plurals>
-<string name="cookie_deleted">Đã xóa cookie</string>
-<string name="cookie_none_to_delete">Không có cookie để xóa</string>
 <string name="cookie_status_after_delete">%1$s. %2$s</string>
 <string name="cookie_summary_blocking">Cho phép cookie của bên thứ nhất. Cookie của bên thứ ba bị chặn.</string>
 <string name="cookie_summary_allowing_all">Cho phép cookie của bên thứ nhất và bên thứ ba.</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">Sẵn sàng xóa các giá trị của trình phân giải được lưu trong bộ nhớ cache.</string>
 <string name="settings_resolver_cache_ready_network">Sẵn sàng xóa các giá trị trình phân giải được lưu trong bộ nhớ đệm cho %1$s.</string>
 <string name="settings_header_resync_ready">Đặt lại tiêu đề cục bộ và đồng bộ hóa lại từ các đồng nghiệp.</string>
-<string name="settings_header_resync_ready_network">Đặt lại tiêu đề %1$s và đồng bộ hóa lại từ các đồng nghiệp.</string>
 <string name="settings_network_choice">%1$s - %2$s</string>
 <string name="settings_network_set">Mạng được đặt thành %1$s</string>
 <string name="settings_homepage_edit_title">Chỉnh sửa trang chủ</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">Đã sao chép sự kiện cổng</string>
 <string name="legal_license_summary">HNS DANE Browser có sẵn nguồn theo Giấy phép Phi thương mại PolyForm 1.0.0. Giấy phép cho phép sử dụng, nghiên cứu, sửa đổi và phân phối lại phi thương mại. Việc sử dụng thương mại cần có sự cho phép riêng bằng văn bản của Denuo Web, LLC.</string>
 <string name="legal_user_agreement">Đây là trình duyệt Handshake thử nghiệm đầu tiên với các bằng chứng HNS cục bộ, truyền tải RFC 8484 DoH và chẩn đoán DNSSEC/DANE. Độ phân giải HNS, xác thực DNSSEC, kiểm tra DANE, dự phòng khả năng tương thích và đồng bộ hóa có thể không đóng được hoặc không đầy đủ. Ứng dụng được cung cấp không có bảo hành, không phải là dịch vụ tài chính và việc đóng góp là tùy chọn và không mở khóa tính năng nào.</string>
-<string name="legal_privacy_summary">HNS DANE Browser không bao gồm quảng cáo, SDK phân tích hoặc tài khoản do nhà phát triển vận hành. Nó lưu trữ lịch sử duyệt web, cookie, bản ghi tải xuống, cài đặt, chẩn đoán và dữ liệu bộ đệm/đồng bộ hóa HNS cục bộ trên thiết bị. Nó gửi các yêu cầu mạng cần thiết cho chức năng của trình duyệt tới các trang web bạn truy cập, HNS ngang hàng, hạt giống DNS, máy chủ tên có thẩm quyền, điểm cuối DoH có thẩm quyền được RFC 9461 phát hiện và, chỉ trong chế độ tương thích, trình phân giải HNS DoH sau khi giải pháp cục bộ/trực tiếp không thành công. Chế độ HNS nghiêm ngặt sẽ vô hiệu hóa dự phòng HNS DoH của bên thứ ba. Dữ liệu duyệt cục bộ có thể bị xóa khỏi Cài đặt.</string>
 <string name="legal_copy_privacy_policy_url">chính sách bảo mật URL</string>
 <string name="legal_copy_source_code_url">mã nguồn URL</string>
 <string name="legal_copy_hns_donation_address">Địa chỉ quyên góp HNS</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">Đề xuất khắc phục:</string>
 <string name="trace_fix_hns_stale">Hãy để quá trình đồng bộ hóa HNS bắt đầu rồi thử lại. Bằng chứng cục bộ hợp lệ cho khối lịch sử của nó, nhưng không đủ hiện tại để quyết định liệu tên đó có tồn tại hay không.</string>
 <string name="trace_fix_hns_unavailable">Đồng bộ hóa tiêu đề/bằng chứng trước rồi thử lại. Không có bằng chứng HNS đã được xác minh.</string>
-<string name="trace_fix_add_delegation">Thêm dữ liệu ủy quyền HNS có thể sử dụng: NS plus GLUE4/GLUE6 hoặc SYNTH4/SYNTH6. Đối với các mạng chặn cổng 53, hãy xuất bản bản ghi SVCB máy chủ tên RFC 9461 _dns trong vùng đã ký.</string>
-<string name="trace_fix_doh_answered">DNS có thẩm quyền trực tiếp trên cổng 53 không thành công nhưng điểm cuối DoH có thẩm quyền do RFC 9461 phát hiện đã trả lời và xác thực. Giữ UDP/TCP 53 ở trạng thái có thể tiếp cận được nếu có thể.</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">Ứng cử viên máy chủ tên được ủy quyền của bạn đã không trả lời một cách đáng tin cậy. Đảm bảo có thể truy cập DNS có thẩm quyền trên UDP/TCP 53 hoặc xuất bản bản ghi RFC 9461 _dns SVCB cho điểm cuối RFC 8484 DoH trong vùng đã ký.</string>
 <string name="trace_fix_nameserver_unreliable">Ứng cử viên máy chủ tên được ủy quyền của bạn đã không trả lời một cách đáng tin cậy. Đảm bảo DNS có thẩm quyền có thể truy cập được trên UDP 53 và TCP 53.</string>
 <string name="trace_fix_dnssec_bogus">Sửa chuỗi DNSSEC được ủy quyền: HNS DS phải khớp với DNSKEY con, chữ ký phải hiện hành và dữ liệu từ chối phải hợp lệ.</string>
 <string name="trace_fix_dnssec_before_tlsa">Trước tiên hãy sửa DNSSEC được ủy quyền. TLSA/DANE không được đánh giá vì độ phân giải an toàn không thành công trước khi tra cứu TLSA.</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">Sửa ICANN DNSSEC trước. TLSA/DANE không được đánh giá vì xác thực DNS an toàn không thành công.</string>
 <string name="trace_fix_icann_working">Đường dẫn ICANN DNSSEC và DANE đang hoạt động cho trang này.</string>
 <string name="trace_fix_no_obvious_icann">Không có sửa chữa rõ ràng từ dấu vết này. Kiểm tra chi tiết TLSA/DANE nếu xác thực HTTPS không thành công.</string>
-<string name="proof_error_no_host">không có máy chủ HNS nào có sẵn cho trang này</string>
 <string name="proof_field_name">Tên: %1$s</string>
 <string name="proof_field_name_hash">Băm tên: %1$s</string>
 <string name="proof_field_tree_root">Gốc cây: %1$s</string>

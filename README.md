@@ -61,7 +61,7 @@ The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 Debug/demo builds are unsigned beyond the default Android debug key and are intended for testing only. The diagnostics screen identifies Denuo Web, LLC as publisher, shows the build channel and license, and states that donations are optional and unlock no app features.
 
-The APK build runs `scripts/build-rust-android.sh` through Gradle, builds `android-ffi` with pinned `cargo-ndk`, strips the generated `.so` files with the configured Android NDK's `llvm-objcopy`, and packages them under `lib/<abi>/libhns_dane_browser_ffi.so`.
+The Android build runs `scripts/build-rust-android.sh` through Gradle and builds `android-ffi` with pinned `cargo-ndk`. Release JNI outputs retain line-table debug information long enough for the Android Gradle Plugin to strip the shipping libraries and package native symbols; the libraries ship under `lib/<abi>/libhns_dane_browser_ffi.so`.
 
 ## Support
 

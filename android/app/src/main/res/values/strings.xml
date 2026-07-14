@@ -1,6 +1,5 @@
 <resources>
     <string name="app_name" translatable="false">HNS DANE</string>
-    <string name="browser_app_name" translatable="false">HNS DANE Browser</string>
 
     <string name="action_analyze">Analyze</string>
     <string name="action_cancel">Cancel</string>
@@ -69,16 +68,6 @@
     <string name="download_error_http_https_only">only HTTP and HTTPS downloads are supported</string>
     <string name="download_error_local_assets">local app assets cannot be downloaded</string>
 
-    <string name="notification_permission_rationale_title">Show sync notifications?</string>
-    <string name="notification_permission_rationale_message">HNS sync runs as a visible data sync service while the browser is open. Notifications show sync progress and provide a stop action.</string>
-    <string name="notification_permission_rationale_not_now">Not now</string>
-    <string name="notification_permission_rationale_continue">Continue</string>
-    <string name="sync_notification_channel">HNS sync</string>
-    <string name="sync_notification_title">HNS sync active</string>
-    <string name="sync_notification_starting">Starting header and proof sync</string>
-    <string name="sync_notification_running">Keeping HNS proofs current</string>
-    <string name="sync_notification_error">Sync needs network or peer recovery</string>
-    <string name="sync_notification_stop">Stop</string>
     <string name="sync_status_idle">idle</string>
     <string name="sync_status_syncing">syncing</string>
     <string name="sync_status_up_to_date">up to date</string>
@@ -104,6 +93,7 @@
     <string name="screen_legal">Legal</string>
     <string name="screen_resolver_trace">Resolver Trace</string>
     <string name="screen_settings">Settings</string>
+    <string name="screen_third_party_notices" translatable="false">Third-party notices</string>
     <string name="screen_tlsa_dane_inspector">TLSA / DANE Inspector</string>
 
     <string name="section_about_legal_support">About, legal, and support</string>
@@ -148,11 +138,13 @@
     <string name="row_copy_diagnostic_bundle_summary">Copy build, runtime, and native core details.</string>
     <string name="row_copy_gateway_events">Copy gateway events</string>
     <string name="row_copy_gateway_events_summary">Copy the current gateway event log.</string>
+    <string name="row_clear_gateway_events" translatable="false">Clear gateway events</string>
+    <string name="row_clear_gateway_events_summary" translatable="false">Delete the persisted recent gateway event log from this device.</string>
     <string name="row_copy_json">Copy JSON</string>
     <string name="row_copy_markdown">Copy Markdown</string>
     <string name="row_copy_markdown_summary">Copy a compact Markdown report.</string>
-    <string name="row_delete_cookies">Delete cookies</string>
-    <string name="row_delete_cookies_summary">Remove cookies stored by websites in this browser.</string>
+    <string name="row_delete_website_data" translatable="false">Delete cookies and website data</string>
+    <string name="row_delete_website_data_summary" translatable="false">Remove all WebView cookies and origin storage, including local storage and IndexedDB.</string>
     <string name="row_diagnostics">Diagnostics</string>
     <string name="row_diagnostics_summary">Build, runtime, and native core details.</string>
     <string name="row_donate_hns">Donate HNS</string>
@@ -192,6 +184,8 @@
     <string name="row_proxy_override">Proxy override</string>
     <string name="row_run_sync_now">Run sync now</string>
     <string name="row_run_sync_now_summary">Start a foreground HNS sync and watch the status update here.</string>
+    <string name="row_third_party_notices" translatable="false">Third-party notices</string>
+    <string name="row_third_party_notices_summary" translatable="false">Open-source components, licenses, and attribution notices included with this app.</string>
     <string name="row_third_party_cookies_blocked">Third-party cookies blocked</string>
     <string name="row_theme">Theme</string>
     <string name="row_theme_summary_dark">Dark theme.</string>
@@ -252,8 +246,8 @@
         <item quantity="other">%d app-queued records</item>
     </plurals>
 
-    <string name="cookie_deleted">Cookies deleted</string>
-    <string name="cookie_none_to_delete">No cookies to delete</string>
+    <string name="website_data_deleted" translatable="false">Cookies and website data deleted</string>
+    <string name="website_data_deletion_requested" translatable="false">Cookies cleared. Website data deletion was requested, but this WebView cannot confirm completion</string>
     <string name="cookie_status_after_delete">%1$s. %2$s</string>
     <string name="cookie_summary_blocking">First-party cookies are allowed. Third-party cookies are blocked.</string>
     <string name="cookie_summary_allowing_all">First-party and third-party cookies are allowed.</string>
@@ -262,7 +256,6 @@
     <string name="settings_resolver_cache_ready">Ready to clear cached resolver values.</string>
     <string name="settings_resolver_cache_ready_network">Ready to clear cached resolver values for %1$s.</string>
     <string name="settings_header_resync_ready">Reset local headers and sync again from peers.</string>
-    <string name="settings_header_resync_ready_network">Reset %1$s headers and sync again from peers.</string>
     <string name="settings_network_choice">%1$s - %2$s</string>
     <string name="settings_network_set">Network set to %1$s</string>
     <string name="settings_homepage_edit_title">Edit homepage</string>
@@ -330,10 +323,12 @@
     <string name="gateway_event_reason">Reason: %1$s</string>
     <string name="gateway_clip_label">HNS DANE Browser gateway events</string>
     <string name="gateway_copied">Gateway events copied</string>
+    <string name="gateway_clear_failed" translatable="false">Could not clear gateway events</string>
+    <string name="gateway_cleared" translatable="false">Gateway events cleared</string>
 
     <string name="legal_license_summary">HNS DANE Browser is source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use, study, modification, and redistribution are allowed under the license. Commercial use requires separate written permission from Denuo Web, LLC.</string>
     <string name="legal_user_agreement">This is an experimental Handshake-first browser with local HNS proofs, RFC 8484 DoH transport, and DNSSEC/DANE diagnostics. HNS resolution, DNSSEC validation, DANE checks, compatibility fallback, and sync may fail closed or be incomplete. The app is provided without warranty, is not a financial service, and donations are optional and unlock no features.</string>
-    <string name="legal_privacy_summary">HNS DANE Browser does not include ads, analytics SDKs, or developer-operated accounts. It stores browsing history, cookies, download records, settings, diagnostics, and HNS sync/cache data locally on the device. It sends network requests needed for browser functionality to websites you visit, HNS peers, DNS seeds, authoritative nameservers, proof-bootstrapped or RFC 9461-discovered authoritative DoH endpoints, and the non-routable 192.0.2.1 TEST-NET DNS sentinel after delegated DNS failure. In compatibility mode only, it may also use the configured HNS DoH resolver after local/direct resolution fails. Strict HNS mode disables that third-party fallback. Local browsing data can be cleared from Settings.</string>
+    <string name="legal_privacy_summary" translatable="false">HNS DANE Browser does not include ads, analytics SDKs, or developer-operated accounts. It stores browsing history, cookies, website data, download records, settings, diagnostics, and HNS sync/cache data locally on the device. It sends network requests needed for browser functionality to websites you visit, HNS peers, DNS seeds, authoritative nameservers, proof-bootstrapped or RFC 9461-discovered authoritative DoH endpoints, WebView Safe Browsing services when supported by the installed WebView provider, and the non-routable 192.0.2.1 TEST-NET DNS sentinel after delegated DNS failure. In compatibility mode only, it may also use the configured HNS DoH resolver after local/direct resolution fails. Strict HNS mode disables that third-party fallback. Local browsing data can be cleared from Settings.</string>
     <string name="legal_license_name" translatable="false">PolyForm Noncommercial 1.0.0</string>
     <string name="legal_copy_privacy_policy_url">privacy policy URL</string>
     <string name="legal_copy_source_code_url">source code URL</string>
@@ -494,10 +489,10 @@
     <string name="trace_suggested_fix">Suggested fix:</string>
     <string name="trace_fix_hns_stale">Let HNS sync catch up, then retry. The local proof is valid for its historical block, but not current enough to decide whether the name exists now.</string>
     <string name="trace_fix_hns_unavailable">Sync headers/proofs first, then retry. No verified HNS proof was available.</string>
-    <string name="trace_fix_add_delegation">Add usable HNS delegation data: NS plus GLUE4/GLUE6 or SYNTH4/SYNTH6. To work without port 53, add a proof-anchored hnsdns=1 authoritative DoH declaration to the HNS resource.</string>
+    <string name="trace_fix_add_delegation" translatable="false">Add usable HNS delegation data: NS plus GLUE4/GLUE6 or SYNTH4/SYNTH6. To work without port 53, add a proof-anchored hnsdns=1 authoritative DoH declaration to the HNS resource.</string>
     <string name="trace_fix_port53_interception" translatable="false">This network returned a DNS reply for a non-routable TEST-NET destination, which confirms transparent port 53 interception. Use authoritative DoH; the HNS owner must publish a proof-anchored hnsdns=1 endpoint so the browser can bootstrap it without DNS.</string>
-    <string name="trace_fix_doh_answered">Direct authoritative DNS on port 53 failed, but the authoritative DoH endpoint answered and validated.</string>
-    <string name="trace_fix_nameserver_unreliable_with_doh">Your delegated nameserver candidate did not answer reliably. Keep authoritative DNS reachable on UDP/TCP 53 and publish proof-anchored hnsdns=1 bootstrap metadata for networks that intercept or block port 53.</string>
+    <string name="trace_fix_doh_answered" translatable="false">Direct authoritative DNS on port 53 failed, but the authoritative DoH endpoint answered and validated.</string>
+    <string name="trace_fix_nameserver_unreliable_with_doh" translatable="false">Your delegated nameserver candidate did not answer reliably. Keep authoritative DNS reachable on UDP/TCP 53 and publish proof-anchored hnsdns=1 bootstrap metadata for networks that intercept or block port 53.</string>
     <string name="trace_fix_nameserver_unreliable">Your delegated nameserver candidate did not answer reliably. Ensure authoritative DNS is reachable on UDP 53 and TCP 53.</string>
     <string name="trace_fix_dnssec_bogus">Fix the delegated DNSSEC chain: HNS DS must match child DNSKEY, signatures must be current, and denial data must be valid.</string>
     <string name="trace_fix_dnssec_before_tlsa">Fix delegated DNSSEC first. TLSA/DANE was not evaluated because secure resolution failed before the TLSA lookup.</string>
@@ -511,7 +506,6 @@
     <string name="trace_fix_icann_working">The ICANN DNSSEC and DANE path is working for this page.</string>
     <string name="trace_fix_no_obvious_icann">No obvious fix from this trace. Check TLSA/DANE details if HTTPS validation fails.</string>
 
-    <string name="proof_error_no_host">no HNS host is available for this page</string>
     <string name="proof_field_name">Name: %1$s</string>
     <string name="proof_field_name_hash">Name hash: %1$s</string>
     <string name="proof_field_tree_root">Tree root: %1$s</string>

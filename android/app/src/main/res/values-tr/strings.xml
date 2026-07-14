@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">%1$s URL\'ler henüz desteklenmiyor</string>
 <string name="download_error_http_https_only">yalnızca HTTP ve HTTPS indirmeleri desteklenir</string>
 <string name="download_error_local_assets">yerel uygulama varlıkları indirilemez</string>
-<string name="notification_permission_rationale_title">Senkronizasyon bildirimleri gösterilsin mi?</string>
-<string name="notification_permission_rationale_message">HNS senkronizasyonu, tarayıcı açıkken görünür bir veri senkronizasyon hizmeti olarak çalışır. Bildirimler senkronizasyonun ilerleme durumunu gösterir ve bir durdurma eylemi sağlar.</string>
-<string name="notification_permission_rationale_not_now">Şimdi değil</string>
-<string name="notification_permission_rationale_continue">Devam et</string>
-<string name="sync_notification_channel">HNS senkronizasyonu</string>
-<string name="sync_notification_title">HNS senkronizasyonu etkin</string>
-<string name="sync_notification_starting">Başlık ve prova senkronizasyonu başlatılıyor</string>
-<string name="sync_notification_running">HNS kanıtlarını güncel tutmak</string>
-<string name="sync_notification_error">Senkronizasyonun ağ veya eş kurtarmaya ihtiyacı var</string>
-<string name="sync_notification_stop">Durdur</string>
 <string name="sync_status_idle">boşta</string>
 <string name="sync_status_syncing">senkronizasyon</string>
 <string name="sync_status_up_to_date">güncel</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">JSON\'i kopyala</string>
 <string name="row_copy_markdown">Markdown\'i kopyala</string>
 <string name="row_copy_markdown_summary">Kompakt bir Markdown raporunu kopyalayın.</string>
-<string name="row_delete_cookies">Çerezleri sil</string>
-<string name="row_delete_cookies_summary">Bu tarayıcıdaki web siteleri tarafından saklanan çerezleri kaldırın.</string>
 <string name="row_diagnostics">Teşhis</string>
 <string name="row_diagnostics_summary">Derleme, çalışma zamanı ve yerel temel ayrıntılar.</string>
 <string name="row_donate_hns">HNS\'i bağışlayın</string>
@@ -240,8 +228,6 @@
 <item quantity="one">%d uygulaması tarafından kuyruğa alınan kayıt</item>
 <item quantity="other">%d uygulaması tarafından kuyruğa alınan kayıtlar</item>
 </plurals>
-<string name="cookie_deleted">Çerezler silindi</string>
-<string name="cookie_none_to_delete">Silinecek çerez yok</string>
 <string name="cookie_status_after_delete">%1$s. %2$s</string>
 <string name="cookie_summary_blocking">Birinci taraf çerezlere izin verilir. Üçüncü taraf çerezleri engellenir.</string>
 <string name="cookie_summary_allowing_all">Birinci taraf ve üçüncü taraf çerezlere izin verilir.</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">Önbelleğe alınmış çözümleyici değerlerini temizlemeye hazır.</string>
 <string name="settings_resolver_cache_ready_network">%1$s için önbelleğe alınmış çözümleyici değerlerini temizlemeye hazır.</string>
 <string name="settings_header_resync_ready">Yerel başlıkları sıfırlayın ve eşlerden tekrar senkronize edin.</string>
-<string name="settings_header_resync_ready_network">%1$s başlıklarını sıfırlayın ve eşlerden tekrar senkronize edin.</string>
 <string name="settings_network_choice">%1$s - %2$s</string>
 <string name="settings_network_set">Ağ %1$s olarak ayarlandı</string>
 <string name="settings_homepage_edit_title">Ana sayfayı düzenle</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">Ağ geçidi etkinlikleri kopyalandı</string>
 <string name="legal_license_summary">HNS DANE Browser, PolyForm Ticari Olmayan Lisans 1.0.0 kapsamında kaynak olarak mevcuttur. Lisans kapsamında ticari olmayan kullanım, çalışma, değişiklik ve yeniden dağıtıma izin verilmektedir. Ticari kullanım Denuo Web, LLC\'nin ayrı yazılı iznini gerektirir.</string>
 <string name="legal_user_agreement">Bu, yerel HNS kanıtlarına, RFC 8484 DoH aktarımına ve DNSSEC/DANE tanılamasına sahip deneysel bir Handshake öncelikli tarayıcıdır. HNS çözünürlüğü, DNSSEC doğrulaması, DANE kontrolleri, uyumluluk geri dönüşü ve senkronizasyon başarısız olarak kapatılabilir veya eksik olabilir. Uygulama garanti olmadan sağlanır, finansal bir hizmet değildir ve bağışlar isteğe bağlıdır ve hiçbir özelliğin kilidini açmaz.</string>
-<string name="legal_privacy_summary">HNS DANE Browser; reklamları, analiz SDK\'larını veya geliştirici tarafından işletilen hesapları içermez. Göz atma geçmişini, çerezleri, indirme kayıtlarını, ayarları, teşhisleri ve HNS senkronizasyon/önbellek verilerini cihazda yerel olarak saklar. Ziyaret ettiğiniz web sitelerine, HNS eşlerine, DNS tohumlarına, yetkili ad sunucularına, RFC 9461 tarafından keşfedilen yetkili DoH uç noktalarına ve yerel/doğrudan çözümleme başarısız olduktan sonra yalnızca uyumluluk modunda bir HNS DoH çözümleyicisine tarayıcı işlevselliği için gereken ağ isteklerini gönderir. Katı HNS modu, üçüncü taraf HNS DoH yedeğini devre dışı bırakır. Yerel tarama verileri Ayarlar\'dan temizlenebilir.</string>
 <string name="legal_copy_privacy_policy_url">gizlilik politikası URL</string>
 <string name="legal_copy_source_code_url">kaynak kodu URL</string>
 <string name="legal_copy_hns_donation_address">HNS bağış adresi</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">Önerilen düzeltme:</string>
 <string name="trace_fix_hns_stale">HNS senkronizasyonunun yetişmesini bekleyin, ardından yeniden deneyin. Yerel kanıt, tarihsel bloğu için geçerlidir, ancak ismin şu anda var olup olmadığına karar verecek kadar güncel değildir.</string>
 <string name="trace_fix_hns_unavailable">Önce başlıkları/provaları senkronize edin, ardından yeniden deneyin. Doğrulanmış HNS kanıtı mevcut değildi.</string>
-<string name="trace_fix_add_delegation">Kullanılabilir HNS yetki verilerini ekleyin: NS artı GLUE4/GLUE6 veya SYNTH4/SYNTH6. Bağlantı noktası 53\'ü engelleyen ağlar için, imzalı bölgede bir RFC 9461 _dns ad sunucusu SVCB kaydını yayınlayın.</string>
-<string name="trace_fix_doh_answered">53 numaralı bağlantı noktasındaki doğrudan yetkili DNS başarısız oldu, ancak RFC 9461 tarafından keşfedilen yetkili DoH uç noktası yanıtlandı ve doğrulandı. Mümkün olduğunca UDP/TCP 53\'ü ulaşılabilir tutun.</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">Yetki verilen ad sunucusu adayınız güvenilir bir şekilde yanıt vermedi. Yetkili DNS\'e UDP/TCP 53 üzerinden erişilebildiğinden emin olun veya imzalı bölgedeki RFC 8484 DoH uç noktası için bir RFC 9461 _dns SVCB kaydı yayınlayın.</string>
 <string name="trace_fix_nameserver_unreliable">Yetki verilen ad sunucusu adayınız güvenilir bir şekilde yanıt vermedi. Yetkili DNS\'e UDP 53 ve TCP 53 üzerinden erişilebildiğinden emin olun.</string>
 <string name="trace_fix_dnssec_bogus">Yetki verilen DNSSEC zincirini düzeltin: HNS DS, alt DNSKEY ile eşleşmeli, imzalar güncel olmalı ve reddetme verileri geçerli olmalıdır.</string>
 <string name="trace_fix_dnssec_before_tlsa">Önce yetki verilen DNSSEC\'i düzeltin. TLSA/DANE, TLSA aramasından önce güvenli çözümleme başarısız olduğundan değerlendirilmedi.</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">Önce ICANN DNSSEC\'yi düzeltin. Güvenli DNS doğrulaması başarısız olduğundan TLSA/DANE değerlendirilmedi.</string>
 <string name="trace_fix_icann_working">ICANN DNSSEC ve DANE yolu bu sayfa için çalışıyor.</string>
 <string name="trace_fix_no_obvious_icann">Bu izde belirgin bir düzeltme yok. HTTPS doğrulaması başarısız olursa TLSA/DANE ayrıntılarını kontrol edin.</string>
-<string name="proof_error_no_host">bu sayfa için HNS ana bilgisayarı mevcut değil</string>
 <string name="proof_field_name">İsim: %1$s</string>
 <string name="proof_field_name_hash">Ad karması: %1$s</string>
 <string name="proof_field_tree_root">Ağaç kökü: %1$s</string>

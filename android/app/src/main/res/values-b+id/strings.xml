@@ -63,16 +63,6 @@
   <string name="download_error_blob_data_urls">%1$s URL belum didukung</string>
   <string name="download_error_http_https_only">hanya unduhan HTTP dan HTTPS yang didukung</string>
   <string name="download_error_local_assets">aset aplikasi lokal tidak dapat diunduh</string>
-  <string name="notification_permission_rationale_title">Tampilkan notifikasi sinkronisasi?</string>
-  <string name="notification_permission_rationale_message">HNS sinkronisasi berjalan sebagai layanan sinkronisasi data yang terlihat saat browser terbuka. Notifikasi menunjukkan kemajuan sinkronisasi dan memberikan tindakan penghentian.</string>
-  <string name="notification_permission_rationale_not_now">Tidak sekarang</string>
-  <string name="notification_permission_rationale_continue">Lanjutkan</string>
-  <string name="sync_notification_channel">HNS sinkronisasi</string>
-  <string name="sync_notification_title">HNS sinkronisasi aktif</string>
-  <string name="sync_notification_starting">Memulai sinkronisasi header dan bukti</string>
-  <string name="sync_notification_running">Menjaga bukti HNS tetap terkini</string>
-  <string name="sync_notification_error">Sinkronisasi memerlukan pemulihan jaringan atau rekan</string>
-  <string name="sync_notification_stop">Berhenti</string>
   <string name="sync_status_idle">menganggur</string>
   <string name="sync_status_syncing">sinkronisasi</string>
   <string name="sync_status_up_to_date">terkini</string>
@@ -142,8 +132,6 @@
   <string name="row_copy_json">Salin JSON</string>
   <string name="row_copy_markdown">Salin Markdown</string>
   <string name="row_copy_markdown_summary">Salin laporan ringkas Markdown.</string>
-  <string name="row_delete_cookies">Hapus cookie</string>
-  <string name="row_delete_cookies_summary">Hapus cookie yang disimpan oleh situs web di browser ini.</string>
   <string name="row_diagnostics">Diagnostik</string>
   <string name="row_diagnostics_summary">Detail build, runtime, dan inti asli.</string>
   <string name="row_donate_hns">Donasi HNS</string>
@@ -240,8 +228,6 @@
     <item quantity="one">%d catatan antrian aplikasi</item>
     <item quantity="other">%d catatan antrian aplikasi</item>
   </plurals>
-  <string name="cookie_deleted">Cookie dihapus</string>
-  <string name="cookie_none_to_delete">Tidak ada cookie untuk dihapus</string>
   <string name="cookie_status_after_delete">%1$s. %2$s</string>
   <string name="cookie_summary_blocking">Cookie pihak pertama diperbolehkan. Cookie pihak ketiga diblokir.</string>
   <string name="cookie_summary_allowing_all">Cookie pihak pertama dan pihak ketiga diperbolehkan.</string>
@@ -249,7 +235,6 @@
   <string name="settings_resolver_cache_ready">Siap untuk menghapus nilai penyelesai cache.</string>
   <string name="settings_resolver_cache_ready_network">Siap menghapus nilai penyelesai cache untuk %1$s.</string>
   <string name="settings_header_resync_ready">Setel ulang header lokal dan sinkronkan lagi dari rekan-rekan.</string>
-  <string name="settings_header_resync_ready_network">Setel ulang %1$s header dan sinkronkan lagi dari rekan-rekan.</string>
   <string name="settings_network_choice">%1$s - %2$s</string>
   <string name="settings_network_set">Jaringan disetel ke %1$s</string>
   <string name="settings_homepage_edit_title">Sunting beranda</string>
@@ -316,7 +301,6 @@
   <string name="gateway_copied">Peristiwa gateway disalin</string>
   <string name="legal_license_summary">HNS DANE Browser tersedia dari sumber di bawah Lisensi Nonkomersial PolyForm 1.0.0. Penggunaan non-komersial, studi, modifikasi, dan redistribusi diperbolehkan berdasarkan lisensi. Penggunaan komersial memerlukan izin tertulis terpisah dari Denuo Web, LLC.</string>
   <string name="legal_user_agreement">Ini adalah browser eksperimental Handshake-pertama dengan bukti HNS lokal, transportasi RFC 8484 DoH, dan diagnostik DNSSEC/DANE. HNS resolusi, DNSSEC validasi, DANE pemeriksaan, fallback kompatibilitas, dan sinkronisasi mungkin gagal ditutup atau tidak lengkap. Aplikasi ini disediakan tanpa jaminan, bukan layanan keuangan, dan donasi bersifat opsional dan tidak membuka fitur apa pun.</string>
-  <string name="legal_privacy_summary">HNS DANE Browser tidak termasuk iklan, SDK analitik, atau akun yang dioperasikan pengembang. Ini menyimpan riwayat penelusuran, cookie, catatan unduhan, pengaturan, diagnostik, dan HNS sinkronisasi/cache data secara lokal di perangkat. Ia mengirimkan permintaan jaringan yang diperlukan untuk fungsionalitas browser ke situs web yang Anda kunjungi, HNS rekan, DNS benih, server nama otoritatif, RFC 9461 titik akhir otoritatif DoH yang ditemukan, dan, hanya dalam mode kompatibilitas, penyelesai HNS DoH setelah resolusi lokal/langsung gagal. Mode ketat HNS menonaktifkan fallback HNS DoH pihak ketiga. Data penjelajahan lokal dapat dihapus dari Pengaturan.</string>
   <string name="legal_copy_privacy_policy_url">kebijakan privasi URL</string>
   <string name="legal_copy_source_code_url">kode sumber URL</string>
   <string name="legal_copy_hns_donation_address">HNS alamat donasi</string>
@@ -469,9 +453,6 @@
   <string name="trace_suggested_fix">Perbaikan yang disarankan:</string>
   <string name="trace_fix_hns_stale">Biarkan sinkronisasi HNS menyusul, lalu coba lagi. Bukti lokal valid untuk blok sejarahnya, tetapi tidak cukup terkini untuk menentukan apakah nama tersebut ada sekarang.</string>
   <string name="trace_fix_hns_unavailable">Sinkronkan header/bukti terlebih dahulu, lalu coba lagi. Tidak ada bukti HNS terverifikasi yang tersedia.</string>
-  <string name="trace_fix_add_delegation">Tambahkan data delegasi HNS yang dapat digunakan: NS plus GLUE4/GLUE6 atau SYNTH4/SYNTH6. Untuk jaringan yang memblokir port 53, publikasikan catatan RFC 9461 _dns server nama SVCB di zona yang ditandatangani.</string>
-  <string name="trace_fix_doh_answered">Otoritatif langsung DNS pada port 53 gagal, tetapi titik akhir otoritatif RFC 9461 yang ditemukan DoH dijawab dan divalidasi. Usahakan UDP/TCP 53 dapat dijangkau jika memungkinkan.</string>
-  <string name="trace_fix_nameserver_unreliable_with_doh">Kandidat server nama yang Anda delegasikan tidak menjawab dengan andal. Pastikan DNS resmi dapat dijangkau di UDP/TCP 53 atau publikasikan catatan RFC 9461 _dns SVCB untuk titik akhir RFC 8484 DoH di zona yang ditandatangani.</string>
   <string name="trace_fix_nameserver_unreliable">Kandidat server nama yang Anda delegasikan tidak menjawab dengan andal. Pastikan DNS resmi dapat dijangkau di UDP 53 dan TCP 53.</string>
   <string name="trace_fix_dnssec_bogus">Perbaiki rantai DNSSEC yang didelegasikan: HNS DS harus cocok dengan anak DNSKEY, tanda tangan harus terkini, dan data penolakan harus valid.</string>
   <string name="trace_fix_dnssec_before_tlsa">Perbaiki delegasi DNSSEC terlebih dahulu. TLSA/DANE tidak dievaluasi karena resolusi aman gagal sebelum pencarian TLSA.</string>
@@ -484,7 +465,6 @@
   <string name="trace_fix_icann_dnssec_before_tlsa">Perbaiki ICANN DNSSEC terlebih dahulu. TLSA/DANE tidak dievaluasi karena validasi aman DNS gagal.</string>
   <string name="trace_fix_icann_working">Jalur ICANN DNSSEC dan DANE berfungsi untuk halaman ini.</string>
   <string name="trace_fix_no_obvious_icann">Tidak ada perbaikan yang jelas dari jejak ini. Periksa detail TLSA/DANE jika validasi HTTPS gagal.</string>
-  <string name="proof_error_no_host">tidak ada host HNS yang tersedia untuk halaman ini</string>
   <string name="proof_field_name">Nama: %1$s</string>
   <string name="proof_field_name_hash">Nama hash: %1$s</string>
   <string name="proof_field_tree_root">Akar pohon: %1$s</string>

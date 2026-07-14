@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>HNS DANE Browser</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, sans-serif;
+      background: #f4f6fa;
+      color: #18202b;
+    }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+    }
+    main {
+      width: min(34rem, calc(100% - 2rem));
+      padding: 2rem;
+      border: 1px solid #ccd3dd;
+      border-radius: 1rem;
+      background: #ffffff;
+      box-shadow: 0 0.5rem 2rem #18202b1a;
+    }
+    h1 { margin-top: 0; }
+    p, li { line-height: 1.55; }
+    .local {
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid #ccd3dd;
+      color: #526071;
+      font-size: 0.9rem;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #11161e; color: #edf2f7; }
+      main { background: #1b2430; border-color: #3a4656; box-shadow: none; }
+      .local { color: #bdc7d4; border-color: #3a4656; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HNS DANE Browser</h1>
+    <p>Enter a web address or Handshake name in the address bar to begin.</p>
+    <ul>
+      <li>Open resolver trace to inspect HNS proofs and DNSSEC decisions.</li>
+      <li>Use the TLSA / DANE inspector to review certificate policy.</li>
+      <li>Enable Strict HNS mode to disable compatibility-resolver fallback.</li>
+    </ul>
+    <p class="local">This start page is bundled with the app, contains no network resources, and does not contact a Denuo Web server. Published by Denuo Web, LLC.</p>
+  </main>
+</body>
+</html>

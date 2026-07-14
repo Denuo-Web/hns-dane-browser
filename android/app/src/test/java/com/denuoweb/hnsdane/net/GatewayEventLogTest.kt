@@ -75,4 +75,35 @@ class GatewayEventLogTest {
         assertTrue(store.readLines().size <= 25)
         store.parentFile?.deleteRecursively()
     }
+
+    @Test
+    fun clearDeletesPersistedEvents() {
+        val root = createTempDirectory("gateway-events-clear").toFile()
+        val store = root.resolve("events.log")
+        GatewayEventLog.configure(store)
+        GatewayEventLog.record("native_response", "welcome", 200, "ok")
+
+        assertTrue(store.isFile)
+        assertTrue(GatewayEventLog.clear())
+        assertTrue(GatewayEventLog.snapshot().isEmpty())
+        assertFalse(store.exists())
+
+        GatewayEventLog.configure(null)
+        root.deleteRecursively()
+    }
+
+    @Test
+    fun clearFailureDoesNotClaimOrHideDeletion() {
+        val root = createTempDirectory("gateway-events-clear-failure").toFile()
+        val store = root.resolve("events.log").apply { mkdirs() }
+        store.resolve("undeletable-child").writeText("still present")
+        GatewayEventLog.configure(store)
+        GatewayEventLog.record("native_response", "welcome", 500, "failure")
+
+        assertFalse(GatewayEventLog.clear())
+        assertEquals(1, GatewayEventLog.snapshot().size)
+
+        GatewayEventLog.configure(null)
+        root.deleteRecursively()
+    }
 }

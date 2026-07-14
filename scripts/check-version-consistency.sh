@@ -54,8 +54,6 @@ exact_checks=(
   "dist/play-store/metadata/README.md:${version_name} release notes"
   "dist/play-store/metadata/README.md:${artifact}"
   "dist/play-store/metadata/en-US/release-notes.txt:${version_name} "
-  "docs/play-store-readiness.md:${artifact}"
-  "docs/production-readiness-audit.md:${artifact}"
   "${diagnostic_test}:debug ${version_name} (${version_code})"
   "${diagnostic_test}:hns-dane-browser-rust-core/${version_name}"
 )
@@ -73,10 +71,12 @@ current_only_files=(
   "scripts/play-upload-closed-testing.sh"
   "dist/play-store/metadata/README.md"
   "dist/play-store/metadata/en-US/release-notes.txt"
-  "docs/play-store-readiness.md"
-  "docs/production-readiness-audit.md"
   "$diagnostic_test"
 )
+
+# Audit documents intentionally compare the candidate with an older live Play
+# release. They must mention the current candidate (checked above), but unlike
+# executable upload metadata they may also contain historical version numbers.
 
 for file in "${current_only_files[@]}"; do
   while IFS= read -r found_version; do

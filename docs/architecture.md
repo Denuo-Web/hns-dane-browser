@@ -36,7 +36,7 @@ Android UI / Browser Shell
 - `HnsDaneApplication`: process-level WebView startup initializer using AndroidX WebKit async startup so WebView work begins before the browser shell constructs its first `WebView`.
 - `BrowserWebViewHardening`: shared WebView settings profile for the browser shell, including local-file isolation, mixed-content blocking, Safe Browsing, WebAuthn browser support when the installed WebView supports it, speculative-loading disablement, and removal of default JavaScript bridge names.
 - `SettingsActivity`: settings dashboard linking to diagnostics, cookie options, legal/user-agreement content, native resolver-cache clearing, and donation links.
-- `CookieSettingsActivity`: cookie preferences with persisted third-party cookie blocking and delete-cookies action.
+- `CookieSettingsActivity`: cookie preferences with persisted third-party cookie blocking and deletion of cookies plus WebView origin storage.
 - `LegalActivity`: license, user agreement, build label, publisher-in-license language, and source-code link.
 - `BrowserUrlClassifier`: classifies searches, normal web URLs, and HNS names. Bare HNS names default to `https://`, and dotted hosts whose final label is not in the vendored IANA root-zone TLD snapshot route through native HNS interception instead of Chromium DNS resolution.
 - `BrowserSecurityPolicy`: maps target kind, proxy availability, native sync outcome status, main-frame HNS gateway response status, DANE/WebPKI policy, and resolver policy into the toolbar security state so HNS names do not stay verified after a native gateway failure and DoH compatibility loads are visibly labeled.

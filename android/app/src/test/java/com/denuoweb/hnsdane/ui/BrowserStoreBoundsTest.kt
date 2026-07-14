@@ -31,6 +31,18 @@ class BrowserStoreBoundsTest {
     }
 
     @Test
+    fun historyParsingSkipsBundledStartPage() {
+        val entries = BrowserHistoryStore.parseEntries(
+            JSONArray()
+                .put(JSONObject().put("url", BrowserPreferences.DEFAULT_HOME))
+                .put(JSONObject().put("url", "https://example.com/"))
+                .toString(),
+        )
+
+        assertEquals(listOf("https://example.com/"), entries.map { it.url })
+    }
+
+    @Test
     fun downloadParsingBoundsCountAndFields() {
         val array = JSONArray()
         repeat(120) { index ->

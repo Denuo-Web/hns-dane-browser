@@ -63,16 +63,6 @@
 <string name="download_error_blob_data_urls">%1$s URLs अभी तक समर्थित नहीं हैं</string>
 <string name="download_error_http_https_only">केवल HTTP और HTTPS डाउनलोड समर्थित हैं</string>
 <string name="download_error_local_assets">स्थानीय ऐप एसेट डाउनलोड नहीं किए जा सकते</string>
-<string name="notification_permission_rationale_title">समन्वयन सूचनाएँ दिखाएँ?</string>
-<string name="notification_permission_rationale_message">ब्राउज़र खुला होने पर HNS सिंक एक दृश्यमान डेटा सिंक सेवा के रूप में चलता है। सूचनाएं सिंक प्रगति दिखाती हैं और रोक कार्रवाई प्रदान करती हैं।</string>
-<string name="notification_permission_rationale_not_now">अभी नहीं</string>
-<string name="notification_permission_rationale_continue">जारी रखें</string>
-<string name="sync_notification_channel">HNS समन्वयन</string>
-<string name="sync_notification_title">HNS समन्वयन सक्रिय</string>
-<string name="sync_notification_starting">हेडर और प्रूफ सिंक शुरू करना</string>
-<string name="sync_notification_running">HNS प्रमाणों को चालू रखना</string>
-<string name="sync_notification_error">सिंक के लिए नेटवर्क या पीयर रिकवरी की आवश्यकता होती है</string>
-<string name="sync_notification_stop">रुकें</string>
 <string name="sync_status_idle">निष्क्रिय</string>
 <string name="sync_status_syncing">सिंक हो रहा है</string>
 <string name="sync_status_up_to_date">अद्यतन</string>
@@ -142,8 +132,6 @@
 <string name="row_copy_json">JSON कॉपी करें</string>
 <string name="row_copy_markdown">Markdown कॉपी करें</string>
 <string name="row_copy_markdown_summary">एक कॉम्पैक्ट Markdown रिपोर्ट कॉपी करें.</string>
-<string name="row_delete_cookies">कुकीज़ हटाएँ</string>
-<string name="row_delete_cookies_summary">इस ब्राउज़र में वेबसाइटों द्वारा संग्रहीत कुकीज़ हटाएँ।</string>
 <string name="row_diagnostics">निदान</string>
 <string name="row_diagnostics_summary">बिल्ड, रनटाइम और मूल मूल विवरण।</string>
 <string name="row_donate_hns">HNS दान करें</string>
@@ -240,8 +228,6 @@
 <item quantity="one">%d ऐप-कतारबद्ध रिकॉर्ड</item>
 <item quantity="other">%d ऐप-कतारबद्ध रिकॉर्ड</item>
 </plurals>
-<string name="cookie_deleted">कुकीज़ हटा दी गईं</string>
-<string name="cookie_none_to_delete">हटाने के लिए कोई कुकीज़ नहीं</string>
 <string name="cookie_status_after_delete">%1$s. %2$s</string>
 <string name="cookie_summary_blocking">प्रथम-पक्ष कुकीज़ की अनुमति है. तृतीय-पक्ष कुकीज़ अवरुद्ध हैं.</string>
 <string name="cookie_summary_allowing_all">प्रथम-पक्ष और तृतीय-पक्ष कुकीज़ की अनुमति है।</string>
@@ -249,7 +235,6 @@
 <string name="settings_resolver_cache_ready">कैश्ड रिज़ॉल्वर मान साफ़ करने के लिए तैयार।</string>
 <string name="settings_resolver_cache_ready_network">%1$s के लिए कैश्ड रिज़ॉल्वर मान साफ़ करने के लिए तैयार।</string>
 <string name="settings_header_resync_ready">स्थानीय हेडर रीसेट करें और साथियों से फिर से सिंक करें।</string>
-<string name="settings_header_resync_ready_network">%1$s हेडर रीसेट करें और साथियों से फिर से सिंक करें।</string>
 <string name="settings_network_choice">%1$s - %2$s</string>
 <string name="settings_network_set">नेटवर्क %1$s पर सेट है</string>
 <string name="settings_homepage_edit_title">मुखपृष्ठ संपादित करें</string>
@@ -316,7 +301,6 @@
 <string name="gateway_copied">गेटवे इवेंट की प्रतिलिपि बनाई गई</string>
 <string name="legal_license_summary">HNS DANE Browser पॉलीफॉर्म गैर-वाणिज्यिक लाइसेंस 1.0.0 के तहत स्रोत-उपलब्ध है। लाइसेंस के तहत गैर-व्यावसायिक उपयोग, अध्ययन, संशोधन और पुनर्वितरण की अनुमति है। व्यावसायिक उपयोग के लिए Denuo Web, LLC से अलग से लिखित अनुमति की आवश्यकता होती है।</string>
 <string name="legal_user_agreement">यह स्थानीय HNS प्रूफ़, RFC 8484 DoH ट्रांसपोर्ट और DNSSEC/DANE डायग्नोस्टिक्स वाला एक प्रयोगात्मक Handshake-पहला ब्राउज़र है। HNS रिज़ॉल्यूशन, DNSSEC सत्यापन, DANE जाँच, संगतता फ़ॉलबैक, और सिंक विफल हो सकता है या अधूरा हो सकता है। ऐप बिना वारंटी के प्रदान किया जाता है, यह एक वित्तीय सेवा नहीं है, और दान वैकल्पिक है और कोई सुविधाएँ अनलॉक नहीं करता है।</string>
-<string name="legal_privacy_summary">HNS DANE Browser में विज्ञापन, एनालिटिक्स SDK या डेवलपर-संचालित खाते शामिल नहीं हैं। यह डिवाइस पर स्थानीय रूप से ब्राउज़िंग इतिहास, कुकीज़, डाउनलोड रिकॉर्ड, सेटिंग्स, डायग्नोस्टिक्स और HNS सिंक/कैश डेटा संग्रहीत करता है। यह आपके द्वारा देखी जाने वाली वेबसाइटों, HNS साथियों, DNS बीजों, आधिकारिक नेमसर्वर, RFC 9461-खोजे गए आधिकारिक DoH एंडपॉइंट्स, और, केवल संगतता मोड में, स्थानीय/प्रत्यक्ष रिज़ॉल्यूशन विफल होने के बाद एक HNS DoH रिज़ॉल्वर को ब्राउज़र कार्यक्षमता के लिए आवश्यक नेटवर्क अनुरोध भेजता है। सख्त HNS मोड तृतीय-पक्ष HNS DoH फ़ॉलबैक को अक्षम कर देता है। स्थानीय ब्राउज़िंग डेटा को सेटिंग्स से साफ़ किया जा सकता है।</string>
 <string name="legal_copy_privacy_policy_url">गोपनीयता नीति URL</string>
 <string name="legal_copy_source_code_url">स्रोत कोड URL</string>
 <string name="legal_copy_hns_donation_address">HNS दान पता</string>
@@ -469,9 +453,6 @@
 <string name="trace_suggested_fix">सुझाया गया समाधान:</string>
 <string name="trace_fix_hns_stale">HNS को सिंक होने दें, फिर पुनः प्रयास करें। स्थानीय प्रमाण इसके ऐतिहासिक ब्लॉक के लिए मान्य है, लेकिन यह तय करने के लिए पर्याप्त वर्तमान नहीं है कि नाम अब मौजूद है या नहीं।</string>
 <string name="trace_fix_hns_unavailable">पहले हेडर/प्रूफ़ सिंक करें, फिर पुनः प्रयास करें। कोई सत्यापित HNS प्रमाण उपलब्ध नहीं था।</string>
-<string name="trace_fix_add_delegation">प्रयोग करने योग्य HNS डेलिगेशन डेटा जोड़ें: NS प्लस GLUE4/GLUE6 या SYNTH4/SYNTH6। पोर्ट 53 को ब्लॉक करने वाले नेटवर्क के लिए, हस्ताक्षरित क्षेत्र में RFC 9461 _dns नेमसर्वर SVCB रिकॉर्ड प्रकाशित करें।</string>
-<string name="trace_fix_doh_answered">पोर्ट 53 पर प्रत्यक्ष आधिकारिक DNS विफल रहा, लेकिन RFC 9461-खोजे गए आधिकारिक DoH समापन बिंदु ने उत्तर दिया और मान्य किया। जहां संभव हो UDP/TCP 53 को पहुंच योग्य रखें।</string>
-<string name="trace_fix_nameserver_unreliable_with_doh">आपके प्रत्यायोजित नेमसर्वर उम्मीदवार ने विश्वसनीय उत्तर नहीं दिया। सुनिश्चित करें कि आधिकारिक DNS UDP/TCP 53 पर पहुंच योग्य है या हस्ताक्षरित क्षेत्र में RFC 8484 DoH समापन बिंदु के लिए RFC 9461 _dns SVCB रिकॉर्ड प्रकाशित करें।</string>
 <string name="trace_fix_nameserver_unreliable">आपके प्रत्यायोजित नेमसर्वर उम्मीदवार ने विश्वसनीय उत्तर नहीं दिया। सुनिश्चित करें कि आधिकारिक DNS, UDP 53 और TCP 53 पर उपलब्ध है।</string>
 <string name="trace_fix_dnssec_bogus">प्रत्यायोजित DNSSEC श्रृंखला को ठीक करें: HNS DS को चाइल्ड DNSKEY से मेल खाना चाहिए, हस्ताक्षर चालू होने चाहिए, और इनकार डेटा मान्य होना चाहिए।</string>
 <string name="trace_fix_dnssec_before_tlsa">पहले प्रत्यायोजित DNSSEC को ठीक करें. TLSA/DANE का मूल्यांकन नहीं किया गया क्योंकि TLSA लुकअप से पहले सुरक्षित रिज़ॉल्यूशन विफल हो गया था।</string>
@@ -484,7 +465,6 @@
 <string name="trace_fix_icann_dnssec_before_tlsa">पहले ICANN DNSSEC ठीक करें. TLSA/DANE का मूल्यांकन नहीं किया गया क्योंकि सुरक्षित DNS सत्यापन विफल रहा।</string>
 <string name="trace_fix_icann_working">इस पृष्ठ के लिए ICANN DNSSEC और DANE पथ कार्य कर रहा है।</string>
 <string name="trace_fix_no_obvious_icann">इस ट्रेस से कोई स्पष्ट समाधान नहीं। यदि HTTPS सत्यापन विफल रहता है तो TLSA/DANE विवरण जांचें।</string>
-<string name="proof_error_no_host">इस पृष्ठ के लिए कोई HNS होस्ट उपलब्ध नहीं है</string>
 <string name="proof_field_name">नाम: %1$s</string>
 <string name="proof_field_name_hash">नाम हैश: %1$s</string>
 <string name="proof_field_tree_root">पेड़ की जड़: %1$s</string>

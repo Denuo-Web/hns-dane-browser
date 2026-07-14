@@ -7,6 +7,7 @@ RUST_TOOLCHAIN="1.92.0"
 CARGO=(cargo "+$RUST_TOOLCHAIN")
 
 "$ROOT_DIR/scripts/verify-supply-chain.sh"
+python3 "$ROOT_DIR/scripts/generate-third-party-notices.py" --check
 "$ROOT_DIR/scripts/check-version-consistency.sh"
 "${CARGO[@]}" fmt --manifest-path "$ROOT_DIR/rust/Cargo.toml" --all -- --check
 "${CARGO[@]}" clippy --locked --manifest-path "$ROOT_DIR/rust/Cargo.toml" --workspace --all-targets -- -D warnings

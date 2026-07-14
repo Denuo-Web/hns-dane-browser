@@ -3,6 +3,7 @@ package com.denuoweb.hnsdane.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.os.Bundle
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.denuoweb.hnsdane.R
@@ -10,6 +11,8 @@ import com.denuoweb.hnsdane.net.GatewayEvent
 import com.denuoweb.hnsdane.net.GatewayEventLog
 
 class GatewayActivity : ComponentActivity() {
+    private lateinit var eventsSummary: TextView
+
     private val url: String
         get() = intent.getStringExtra(EXTRA_URL).orEmpty()
 
@@ -31,7 +34,8 @@ class GatewayActivity : ComponentActivity() {
         ) {
             addView(hnsDiagnosticTabs(HnsDiagnosticTool.Gateway, url, traceJson))
             addView(screenSection(getString(R.string.section_recent_gateway_events)) {
-                addView(fieldReportText(gatewaySummary()))
+                eventsSummary = fieldReportText(gatewaySummary())
+                addView(eventsSummary)
             })
             addView(screenSection(getString(R.string.section_export)) {
                 addScreenRow(preferenceRow(
@@ -40,6 +44,14 @@ class GatewayActivity : ComponentActivity() {
                     actionLabel = getString(R.string.action_copy),
                 ) {
                     copyGatewayEvents()
+                })
+                addScreenRow(preferenceRow(
+                    title = getString(R.string.row_clear_gateway_events),
+                    summary = getString(R.string.row_clear_gateway_events_summary),
+                    actionLabel = getString(R.string.action_clear),
+                    destructive = true,
+                ) {
+                    clearGatewayEvents()
                 })
             })
         }
@@ -69,6 +81,13 @@ class GatewayActivity : ComponentActivity() {
         getSystemService(ClipboardManager::class.java)
             .setPrimaryClip(ClipData.newPlainText(getString(R.string.gateway_clip_label), events))
         Toast.makeText(this, getString(R.string.gateway_copied), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun clearGatewayEvents() {
+        val cleared = GatewayEventLog.clear()
+        eventsSummary.text = gatewaySummary()
+        val message = if (cleared) R.string.gateway_cleared else R.string.gateway_clear_failed
+        Toast.makeText(this, getString(message), Toast.LENGTH_SHORT).show()
     }
 
     companion object {
