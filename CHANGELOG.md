@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.3.16 - 2026-07-14
+
+### Added
+
+- Added generic HNS-proof-pinned RFC 8484 authoritative DoH so an owner can use an HNS hostname such as `https://denuoweb:8443/dns-query`, connect through verified HNS nameserver GLUE, and authenticate a self-signed endpoint without an ICANN domain or WebPKI.
+- Added exact toolbar provenance for `DANE via ADoH`, `DANE via DNS53`, `DANE via 3rd DoH`, `Stateless DANE`, `DANE via ICANN DoH`, and the corresponding non-TLS HNS paths.
+
+### Changed
+
+- Ordered HNS delegated resolution for availability: owner ADoH first, authoritative UDP/TCP 53 second, and the configured third-party HNS DoH resolver last in Compatibility mode; Strict mode omits only that final third-party fallback.
+- Bumped the Android app, Rust core, Play upload defaults, and Play metadata package for the 0.3.16 release.
+
+### Fixed
+
+- Distinguished certificate-carried stateless DANE from DNS-fetched TLSA and made resolver traces follow the exact A/AAAA and TLSA transports, including IPv6-only origins and HTTPS/SVCB-selected ports.
+- Rejected spoofed internal provenance headers and prevented them from being exposed to Chromium or page content.
+
 ## 0.3.15 - 2026-07-14
 
 ### Fixed

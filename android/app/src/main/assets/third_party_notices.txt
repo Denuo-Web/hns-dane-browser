@@ -18,8 +18,8 @@ artifacts. Inclusion here does not imply endorsement by the component authors.
 Generator schema: 1
 Generated input SHA-256:
   scripts/generate-third-party-notices.py = a6fc09cfc0e98246f5592881cf8ef7edb0289c2d89ea36869e49c6a3a8ff5246
-  rust/Cargo.toml = 9568a1d64815dba4a1470e73f43c9e0e42dbb8ab5c05c9ca0f9e51b90c204c18
-  rust/Cargo.lock = ce293c494fe664f8ae68f5947e4403c0327d5d7c3103c275943fb3bf83466327
+  rust/Cargo.toml = f00550d03c242f68ad486a1ce83b3bb8c1f7c26592bf9a51de74b74dfffc402b
+  rust/Cargo.lock = ed982be39eb95f88bfc475c5716d5a5a9a768c0fe11d83353e7b0eaae00b8bbe
   android/gradle/libs.versions.toml = e38501dbbb112b0fa54e67c21f5ecb7d31cd3dfd20e67082cb5be43114c37143
   android/app/gradle.lockfile = 5578fb9e14cb0a44e8e35c6aa2d13026271a2491a47ad2f78681ad0c7adcac98
   android/gradle/verification-metadata.xml = e8d96e747c3b055e3a8252082cecaf335aa2721eb0b0c14dcc647814ced1e3f6
