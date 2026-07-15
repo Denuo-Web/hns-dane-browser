@@ -3,6 +3,7 @@ package com.denuoweb.hnsdane.net
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.locks.ReentrantReadWriteLock
 
 interface HnsGatewayBridge {
     fun httpResponse(
@@ -103,59 +104,61 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         GatewayResponseBodyStore.prune(dataDir)
     }
 
-    @Synchronized
-    override fun syncOnce(dataDir: String): String = if (isLoaded) {
-        nativeSyncOnce(dataDir, DEFAULT_NETWORK)
-    } else {
-        unavailableSyncJson()
-    }
+    override fun syncOnce(dataDir: String): String = syncOnce(dataDir, DEFAULT_NETWORK)
 
-    @Synchronized
-    override fun syncOnce(dataDir: String, network: String): String = if (isLoaded) {
-        nativeSyncOnce(dataDir, network)
-    } else {
-        unavailableSyncJson(network = network)
-    }
+    override fun syncOnce(dataDir: String, network: String): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = unavailableSyncJson(network = network),
+        createFailure = { nativeSyncOnce(dataDir, network) },
+        block = ::nativeRuntimeSyncOnce,
+    )
 
-    fun syncStatus(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
-        nativeSyncStatus(dataDir, network)
-    } else {
-        unavailableSyncJson(network = network)
-    }
+    fun syncStatus(dataDir: String, network: String = DEFAULT_NETWORK): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = unavailableSyncJson(network = network),
+        createFailure = { nativeSyncStatus(dataDir, network) },
+        block = ::nativeRuntimeSyncStatus,
+    )
 
-    fun clearResolverCache(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
-        nativeClearResolverCache(dataDir, network)
-    } else {
-        unavailableSyncJson("rust-core-unavailable", network)
-    }
+    fun clearResolverCache(dataDir: String, network: String = DEFAULT_NETWORK): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = unavailableSyncJson("rust-core-unavailable", network),
+        createFailure = { nativeClearResolverCache(dataDir, network) },
+        block = ::nativeRuntimeClearResolverCache,
+    )
 
-    @Synchronized
     fun installHeaderSnapshot(
         dataDir: String,
         snapshotPath: String,
         network: String = DEFAULT_NETWORK,
-    ): String = if (isLoaded) {
-        nativeInstallHeaderSnapshot(dataDir, snapshotPath, network)
-    } else {
-        unavailableSyncJson("rust-core-unavailable", network)
-    }
+    ): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = unavailableSyncJson("rust-core-unavailable", network),
+        createFailure = { nativeInstallHeaderSnapshot(dataDir, snapshotPath, network) },
+    ) { handle -> nativeRuntimeInstallHeaderSnapshot(handle, snapshotPath) }
 
-    @Synchronized
-    fun resetHeadersFromPeers(dataDir: String, network: String = DEFAULT_NETWORK): String = if (isLoaded) {
-        nativeResetHeadersFromPeers(dataDir, network)
-    } else {
-        unavailableSyncJson("rust-core-unavailable", network)
-    }
+    fun resetHeadersFromPeers(dataDir: String, network: String = DEFAULT_NETWORK): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = unavailableSyncJson("rust-core-unavailable", network),
+        createFailure = { nativeResetHeadersFromPeers(dataDir, network) },
+        block = ::nativeRuntimeResetHeadersFromPeers,
+    )
 
     fun hnsProofDetails(
         dataDir: String,
         host: String,
         network: String = DEFAULT_NETWORK,
-    ): String = if (isLoaded) {
-        nativeHnsProofDetails(dataDir, host, network)
-    } else {
-        """{"host":"${jsonEscape(host)}","name":null,"network":"${jsonEscape(network)}","nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"rust_core_unavailable","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"rust-core-unavailable"}"""
-    }
+    ): String = withRuntime(
+        dataDir = dataDir,
+        network = network,
+        unavailable = """{"host":"${jsonEscape(host)}","name":null,"network":"${jsonEscape(network)}","nameHash":null,"hnsProof":"error","proofStatus":"error","secure":null,"exists":null,"treeRoot":null,"blockHeight":null,"cacheStatus":"rust_core_unavailable","resourceValueHex":null,"recordTypes":[],"resourceRecords":[],"currentTip":null,"error":"rust-core-unavailable"}""",
+        createFailure = { nativeHnsProofDetails(dataDir, host, network) },
+    ) { handle -> nativeRuntimeHnsProofDetails(handle, host) }
 
     override fun localTlsCertificate(host: String): LocalTlsCertificate? = if (isLoaded) {
         nativeLocalTlsCertificate(host)?.let(::parseLocalTlsCertificateBundle)
@@ -243,9 +246,68 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         clientOutput,
     )
 
+    fun closeRuntimes() {
+        if (!isLoaded) return
+        val writeLock = runtimeLifecycleLock.writeLock()
+        writeLock.lock()
+        try {
+            runtimeHandles.values.forEach(::nativeRuntimeDestroy)
+            runtimeHandles.clear()
+        } finally {
+            writeLock.unlock()
+        }
+    }
+
+    private fun <T> withRuntime(
+        dataDir: String,
+        network: String,
+        unavailable: T,
+        createFailure: () -> T,
+        block: (Long) -> T,
+    ): T {
+        if (!isLoaded) return unavailable
+        val key = RuntimeKey(dataDir, network)
+        val readLock = runtimeLifecycleLock.readLock()
+        readLock.lock()
+        try {
+            runtimeHandles[key]?.let { handle -> return block(handle) }
+        } finally {
+            readLock.unlock()
+        }
+
+        val writeLock = runtimeLifecycleLock.writeLock()
+        writeLock.lock()
+        try {
+            val existing = runtimeHandles[key]
+            if (existing != null) return block(existing)
+            val created = nativeRuntimeCreate(dataDir, network)
+            if (created == INVALID_RUNTIME_HANDLE) return createFailure()
+            runtimeHandles[key] = created
+            return block(created)
+        } finally {
+            writeLock.unlock()
+        }
+    }
+
     private external fun nativeVersion(): String
 
     private external fun nativeDiagnostics(): String
+
+    private external fun nativeRuntimeCreate(dataDir: String, network: String): Long
+
+    private external fun nativeRuntimeDestroy(handle: Long)
+
+    private external fun nativeRuntimeSyncOnce(handle: Long): String
+
+    private external fun nativeRuntimeSyncStatus(handle: Long): String
+
+    private external fun nativeRuntimeClearResolverCache(handle: Long): String
+
+    private external fun nativeRuntimeInstallHeaderSnapshot(handle: Long, snapshotPath: String): String
+
+    private external fun nativeRuntimeResetHeadersFromPeers(handle: Long): String
+
+    private external fun nativeRuntimeHnsProofDetails(handle: Long, host: String): String
 
     private external fun nativeSyncOnce(dataDir: String, network: String): String
 
@@ -355,5 +417,11 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
             .replace("\t", "\\t")
 
     private const val LOCAL_TLS_FINGERPRINT_BYTES = 32
+    private const val INVALID_RUNTIME_HANDLE = 0L
     private const val DEFAULT_NETWORK = "mainnet"
+
+    private data class RuntimeKey(val dataDir: String, val network: String)
+
+    private val runtimeLifecycleLock = ReentrantReadWriteLock()
+    private val runtimeHandles = mutableMapOf<RuntimeKey, Long>()
 }

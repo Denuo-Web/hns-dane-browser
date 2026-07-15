@@ -9,12 +9,35 @@ use hns_browser_runtime::*;
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jbyteArray, jint, jstring};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 const TUNNEL_COPY_BUFFER_BYTES: usize = 16 * 1024;
+
+fn runtime_error_message(error: RuntimeError) -> String {
+    match error {
+        RuntimeError::InvalidConfiguration(message) | RuntimeError::Operation(message) => message,
+        error @ RuntimeError::Synchronization(_) => error.to_string(),
+    }
+}
+
+fn runtime_status_json(network: NetworkKind, result: Result<SyncStatus, RuntimeError>) -> String {
+    result
+        .unwrap_or_else(|error| NativeSyncStatus::error_for(network, runtime_error_message(error)))
+        .to_json()
+}
+
+fn runtime_from_handle(handle: jlong) -> Option<BrowserRuntime> {
+    if handle == 0 {
+        return None;
+    }
+    let runtime = handle as usize as *const BrowserRuntime;
+    // SAFETY: handles are created from Box<BrowserRuntime> below. Platform callers serialize
+    // destroy against calls, and cloning only retains the Arc-backed runtime inner state.
+    unsafe { runtime.as_ref().cloned() }
+}
 
 struct JniGatewayHttpRequest<'local> {
     data_dir: JString<'local>,
@@ -445,6 +468,139 @@ fn jni_gateway_http_upgrade_tunnel(
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeCreate(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    data_dir: JString<'_>,
+    network: JString<'_>,
+) -> jlong {
+    let (Ok(data_dir), Ok(network)) = (env.get_string(&data_dir), env.get_string(&network)) else {
+        return 0;
+    };
+    let Ok(network) = parse_network_kind(&network.to_string_lossy()) else {
+        return 0;
+    };
+    let Ok(runtime) = BrowserRuntime::open(RuntimeConfiguration::new(
+        data_dir.to_string_lossy().into_owned(),
+        network,
+    )) else {
+        return 0;
+    };
+    Box::into_raw(Box::new(runtime)) as usize as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeDestroy(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    if handle == 0 {
+        return;
+    }
+    let runtime = handle as usize as *mut BrowserRuntime;
+    // SAFETY: the pointer was returned by nativeRuntimeCreate and the platform lifecycle lock
+    // guarantees exactly one destroy after all calls have released their cloned runtime.
+    unsafe { drop(Box::from_raw(runtime)) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeSyncOnce(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let status = runtime_from_handle(handle)
+        .map(|runtime| runtime_status_json(runtime.network(), runtime.sync_once()))
+        .unwrap_or_else(|| NativeSyncStatus::error("invalid runtime handle".to_owned()).to_json());
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeSyncStatus(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let status = runtime_from_handle(handle)
+        .map(|runtime| runtime_status_json(runtime.network(), runtime.sync_status()))
+        .unwrap_or_else(|| NativeSyncStatus::error("invalid runtime handle".to_owned()).to_json());
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeClearResolverCache(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let status = runtime_from_handle(handle)
+        .map(|runtime| runtime_status_json(runtime.network(), runtime.clear_resolver_cache()))
+        .unwrap_or_else(|| NativeSyncStatus::error("invalid runtime handle".to_owned()).to_json());
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeInstallHeaderSnapshot(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    snapshot_path: JString<'_>,
+) -> jstring {
+    let status = match (runtime_from_handle(handle), env.get_string(&snapshot_path)) {
+        (Some(runtime), Ok(snapshot_path)) => runtime_status_json(
+            runtime.network(),
+            runtime.install_header_snapshot(snapshot_path.to_string_lossy().as_ref()),
+        ),
+        _ => NativeSyncStatus::error("invalid runtime snapshot input".to_owned()).to_json(),
+    };
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeResetHeadersFromPeers(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let status = runtime_from_handle(handle)
+        .map(|runtime| runtime_status_json(runtime.network(), runtime.reset_headers_from_peers()))
+        .unwrap_or_else(|| NativeSyncStatus::error("invalid runtime handle".to_owned()).to_json());
+    env.new_string(status)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeRuntimeHnsProofDetails(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    host: JString<'_>,
+) -> jstring {
+    let details = match (runtime_from_handle(handle), env.get_string(&host)) {
+        (Some(runtime), Ok(host)) => {
+            let host = host.to_string_lossy();
+            runtime.proof_details(&host).unwrap_or_else(|error| {
+                hns_proof_details_error_json(&host, &runtime_error_message(error))
+            })
+        }
+        _ => hns_proof_details_error_json("", "invalid runtime proof detail input"),
+    };
+    env.new_string(details)
+        .map(|value| value.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeDiagnostics(
     env: JNIEnv<'_>,
     _class: JClass<'_>,
@@ -618,6 +774,7 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeLocalTls
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn java_input_stream_rejects_invalid_read_count() {
@@ -630,5 +787,31 @@ mod tests {
             checked_java_read_len(-2, 4, 4).unwrap_err().kind(),
             ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn runtime_handle_call_clone_outlives_platform_handle() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!(
+            "hns-dane-browser-android-runtime-handle-{}-{unique}",
+            std::process::id()
+        ));
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let handle = Box::into_raw(Box::new(runtime)) as usize as jlong;
+
+        let call_runtime = runtime_from_handle(handle).unwrap();
+        // SAFETY: this test owns the unique Box pointer and destroys it exactly once.
+        unsafe { drop(Box::from_raw(handle as usize as *mut BrowserRuntime)) };
+
+        assert_eq!(
+            call_runtime.sync_status().unwrap().network,
+            NetworkKind::Regtest
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

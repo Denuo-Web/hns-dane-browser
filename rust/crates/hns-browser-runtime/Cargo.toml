@@ -17,3 +17,4 @@ hns-transport.workspace = true
 hns-urkel.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
+thiserror.workspace = true

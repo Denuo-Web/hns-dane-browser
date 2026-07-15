@@ -10,7 +10,7 @@ use hns_core::dns::{
     DnsEncodeConfig, DnsFlags, DnsHeader, DnsMessage, DnsName, DnsQuestion, RecordType,
     ResourceRecord,
 };
-use hns_core::network::NetworkKind;
+pub use hns_core::network::NetworkKind;
 use hns_core::{BlockHeader, HEADER_SIZE, Height, NameHash};
 use hns_dane::{
     DaneDecision, MAX_STATELESS_DANE_ROOTS, StatelessDaneConfig, TlsaMatching, TlsaRecord,
@@ -45,10 +45,11 @@ use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 
 pub const DEFAULT_RESOURCE_CACHE_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub const MAX_GATEWAY_HEADER_TEXT_BYTES: usize = 64 * 1024;
@@ -111,6 +112,546 @@ pub struct GatewayHttpRequestInput<'a> {
     pub path_and_query: &'a str,
     pub header_text: &'a str,
     pub body: &'a [u8],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConfiguration {
+    data_dir: PathBuf,
+    network: NetworkKind,
+    sync: SyncOptions,
+    initial_policy: RuntimePolicy,
+}
+
+impl RuntimeConfiguration {
+    pub fn new(data_dir: impl Into<PathBuf>, network: NetworkKind) -> Self {
+        Self {
+            data_dir: data_dir.into(),
+            network,
+            sync: SyncOptions::default(),
+            initial_policy: RuntimePolicy::compatibility(),
+        }
+    }
+
+    pub fn with_sync_options(mut self, sync: SyncOptions) -> Self {
+        self.sync = sync;
+        self
+    }
+
+    pub fn with_initial_policy(mut self, policy: RuntimePolicy) -> Self {
+        self.initial_policy = policy;
+        self
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    pub fn network(&self) -> NetworkKind {
+        self.network
+    }
+
+    pub fn sync_options(&self) -> &SyncOptions {
+        &self.sync
+    }
+
+    pub fn initial_policy(&self) -> &RuntimePolicy {
+        &self.initial_policy
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncOptions {
+    pub seed_peers: bool,
+    pub timeout: Duration,
+    pub resource_cache_limit_bytes: usize,
+}
+
+impl Default for SyncOptions {
+    fn default() -> Self {
+        Self {
+            seed_peers: true,
+            timeout: Duration::from_secs(3),
+            resource_cache_limit_bytes: DEFAULT_RESOURCE_CACHE_LIMIT_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimePolicy {
+    pub resolution_mode: ResolutionMode,
+    pub hns_doh_resolver: Option<String>,
+    pub stateless_dane_certificates: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionMode {
+    Strict,
+    Compatibility,
+}
+
+impl RuntimePolicy {
+    pub fn compatibility() -> Self {
+        Self {
+            resolution_mode: ResolutionMode::Compatibility,
+            hns_doh_resolver: None,
+            stateless_dane_certificates: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GatewayHttpRequest {
+    pub method: String,
+    pub scheme: String,
+    pub host: String,
+    pub port: u16,
+    pub path_and_query: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GatewayHttpResponse {
+    pub encoded_http: Vec<u8>,
+}
+
+impl GatewayHttpResponse {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.encoded_http
+    }
+}
+
+struct GeneratedLocalCertificate {
+    certificate_der: Vec<u8>,
+    private_key_pkcs8_der: Vec<u8>,
+    certificate_sha256: [u8; LOCAL_TLS_CERT_FINGERPRINT_BYTES],
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum RuntimeError {
+    #[error("invalid runtime configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("runtime operation failed: {0}")]
+    Operation(String),
+    #[error("runtime synchronization state is poisoned: {0}")]
+    Synchronization(&'static str),
+}
+
+#[derive(Clone)]
+pub struct BrowserRuntime {
+    inner: Arc<RuntimeInner>,
+}
+
+struct RuntimeInner {
+    configuration: RuntimeConfiguration,
+    policy: RwLock<RuntimePolicy>,
+    data_dir: String,
+    transport: TcpHttpTransport,
+    coordination: Arc<RuntimeCoordination>,
+    policy_revision: AtomicU64,
+}
+
+struct RuntimeCoordination {
+    sync_lock: Mutex<()>,
+    maintenance: RwLock<()>,
+    peer_state: Arc<Mutex<()>>,
+}
+
+static RUNTIME_COORDINATION: OnceLock<Mutex<HashMap<PathBuf, Weak<RuntimeCoordination>>>> =
+    OnceLock::new();
+
+fn runtime_coordination(base: &Path) -> Result<Arc<RuntimeCoordination>, RuntimeError> {
+    let identity = fs::canonicalize(base).map_err(|error| {
+        RuntimeError::Operation(format!("canonicalize runtime storage directory: {error}"))
+    })?;
+    let registry = RUNTIME_COORDINATION.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut registry = registry
+        .lock()
+        .map_err(|_| RuntimeError::Synchronization("runtime coordination registry"))?;
+    registry.retain(|_, coordination| coordination.strong_count() != 0);
+    if let Some(coordination) = registry.get(&identity).and_then(Weak::upgrade) {
+        return Ok(coordination);
+    }
+    let coordination = Arc::new(RuntimeCoordination {
+        sync_lock: Mutex::new(()),
+        maintenance: RwLock::new(()),
+        peer_state: Arc::new(Mutex::new(())),
+    });
+    registry.insert(identity, Arc::downgrade(&coordination));
+    Ok(coordination)
+}
+
+impl BrowserRuntime {
+    pub fn open(mut configuration: RuntimeConfiguration) -> Result<Self, RuntimeError> {
+        let configured_data_dir = configuration
+            .data_dir
+            .to_str()
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                RuntimeError::InvalidConfiguration(
+                    "data directory must be a non-empty UTF-8 path".to_owned(),
+                )
+            })?
+            .to_owned();
+        fs::create_dir_all(&configured_data_dir).map_err(|error| {
+            RuntimeError::Operation(format!("create runtime data directory: {error}"))
+        })?;
+        let canonical_data_dir = fs::canonicalize(&configured_data_dir).map_err(|error| {
+            RuntimeError::Operation(format!("canonicalize runtime data directory: {error}"))
+        })?;
+        let data_dir = canonical_data_dir
+            .to_str()
+            .ok_or_else(|| {
+                RuntimeError::InvalidConfiguration(
+                    "canonical data directory must be a UTF-8 path".to_owned(),
+                )
+            })?
+            .to_owned();
+        configuration.data_dir = canonical_data_dir;
+        let mut policy = configuration.initial_policy.clone();
+        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
+            policy.hns_doh_resolver = Some(
+                HnsDohEndpoint::parse(endpoint)
+                    .map_err(|error| RuntimeError::InvalidConfiguration(error.to_owned()))?
+                    .display(),
+            );
+        }
+        let base = network_base_path(&data_dir, configuration.network);
+        fs::create_dir_all(&base).map_err(|error| {
+            RuntimeError::Operation(format!("create runtime directory: {error}"))
+        })?;
+        let coordination = runtime_coordination(&base)?;
+
+        configuration.initial_policy = policy.clone();
+        Ok(Self {
+            inner: Arc::new(RuntimeInner {
+                configuration,
+                policy: RwLock::new(policy),
+                data_dir,
+                transport: TcpHttpTransport::default(),
+                coordination,
+                policy_revision: AtomicU64::new(0),
+            }),
+        })
+    }
+
+    pub fn configuration(&self) -> Result<RuntimeConfiguration, RuntimeError> {
+        let mut configuration = self.inner.configuration.clone();
+        let policy = self.policy()?;
+        configuration.initial_policy = policy;
+        Ok(configuration)
+    }
+
+    pub fn network(&self) -> NetworkKind {
+        self.inner.configuration.network
+    }
+
+    pub fn policy(&self) -> Result<RuntimePolicy, RuntimeError> {
+        self.policy_snapshot().map(|(policy, _)| policy)
+    }
+
+    pub fn policy_snapshot(&self) -> Result<(RuntimePolicy, u64), RuntimeError> {
+        let policy = self
+            .inner
+            .policy
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("policy lock"))?;
+        let revision = self.inner.policy_revision.load(Ordering::Acquire);
+        Ok((policy.clone(), revision))
+    }
+
+    pub fn set_policy(&self, mut policy: RuntimePolicy) -> Result<u64, RuntimeError> {
+        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
+            policy.hns_doh_resolver = Some(
+                HnsDohEndpoint::parse(endpoint)
+                    .map_err(|error| RuntimeError::InvalidConfiguration(error.to_owned()))?
+                    .display(),
+            );
+        }
+        let mut current = self
+            .inner
+            .policy
+            .write()
+            .map_err(|_| RuntimeError::Synchronization("policy lock"))?;
+        *current = policy;
+        let revision = self.inner.policy_revision.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok(revision)
+    }
+
+    pub fn policy_revision(&self) -> u64 {
+        self.inner.policy_revision.load(Ordering::Acquire)
+    }
+
+    pub fn sync_once(&self) -> Result<SyncStatus, RuntimeError> {
+        let _sync = self
+            .inner
+            .coordination
+            .sync_lock
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("sync lock"))?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let _peer_state = self
+            .inner
+            .coordination
+            .peer_state
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("peer state lock"))?;
+        run_sync_once(
+            &self.inner.data_dir,
+            self.inner.configuration.network,
+            self.inner.configuration.sync.seed_peers,
+            self.inner.configuration.sync.timeout,
+            self.inner.configuration.sync.resource_cache_limit_bytes,
+        )
+        .map_err(RuntimeError::Operation)
+    }
+
+    pub fn sync_status(&self) -> Result<SyncStatus, RuntimeError> {
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        read_sync_status(&self.inner.data_dir, self.inner.configuration.network)
+            .map_err(RuntimeError::Operation)
+    }
+
+    pub fn clear_resolver_cache(&self) -> Result<SyncStatus, RuntimeError> {
+        let _sync = self
+            .inner
+            .coordination
+            .sync_lock
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("sync lock"))?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .write()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        clear_resolver_cache_inner(&self.inner.data_dir, self.inner.configuration.network)
+            .map_err(RuntimeError::Operation)
+    }
+
+    pub fn install_header_snapshot(
+        &self,
+        snapshot_path: impl AsRef<Path>,
+    ) -> Result<SyncStatus, RuntimeError> {
+        let snapshot_path = snapshot_path.as_ref().to_str().ok_or_else(|| {
+            RuntimeError::InvalidConfiguration("snapshot must be a UTF-8 path".to_owned())
+        })?;
+        let _sync = self
+            .inner
+            .coordination
+            .sync_lock
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("sync lock"))?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .write()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        install_header_snapshot_inner(
+            &self.inner.data_dir,
+            snapshot_path,
+            self.inner.configuration.network,
+        )
+        .map_err(RuntimeError::Operation)
+    }
+
+    pub fn reset_headers_from_peers(&self) -> Result<SyncStatus, RuntimeError> {
+        let _sync = self
+            .inner
+            .coordination
+            .sync_lock
+            .lock()
+            .map_err(|_| RuntimeError::Synchronization("sync lock"))?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .write()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        reset_headers_from_peers_inner(&self.inner.data_dir, self.inner.configuration.network)
+            .map_err(RuntimeError::Operation)
+    }
+
+    pub fn proof_details(&self, host_or_url: &str) -> Result<String, RuntimeError> {
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        Ok(hns_proof_details_for_network(
+            &self.inner.data_dir,
+            host_or_url,
+            self.inner.configuration.network,
+        ))
+    }
+
+    pub fn gateway_request(
+        &self,
+        request: GatewayHttpRequest,
+    ) -> Result<GatewayHttpResponse, RuntimeError> {
+        self.validate_gateway_request(&request)?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let header_text = self.gateway_header_text(&request.headers)?;
+        let encoded_http = gateway_http_response_with_transport(
+            GatewayHttpRequestInput {
+                data_dir: &self.inner.data_dir,
+                method: &request.method,
+                scheme: &request.scheme,
+                host: &request.host,
+                port: request.port,
+                path_and_query: &request.path_and_query,
+                header_text: &header_text,
+                body: &request.body,
+            },
+            self.inner.transport.clone(),
+            Some(Arc::clone(&self.inner.coordination.peer_state)),
+        );
+        Ok(GatewayHttpResponse { encoded_http })
+    }
+
+    pub fn gateway_request_body_to_file(
+        &self,
+        request: GatewayHttpRequest,
+        body_path: impl AsRef<Path>,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        self.validate_gateway_request(&request)?;
+        let _maintenance = self
+            .inner
+            .coordination
+            .maintenance
+            .read()
+            .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let header_text = self.gateway_header_text(&request.headers)?;
+        gateway_http_response_body_to_file_with_transport(
+            GatewayHttpRequestInput {
+                data_dir: &self.inner.data_dir,
+                method: &request.method,
+                scheme: &request.scheme,
+                host: &request.host,
+                port: request.port,
+                path_and_query: &request.path_and_query,
+                header_text: &header_text,
+                body: &request.body,
+            },
+            body_path.as_ref(),
+            self.inner.transport.clone(),
+            Some(Arc::clone(&self.inner.coordination.peer_state)),
+        )
+        .map_err(RuntimeError::Operation)
+    }
+
+    fn validate_gateway_request(&self, request: &GatewayHttpRequest) -> Result<(), RuntimeError> {
+        if request.body.len() > DEFAULT_MAX_REQUEST_BODY_BYTES {
+            return Err(RuntimeError::InvalidConfiguration(format!(
+                "gateway request body exceeds {DEFAULT_MAX_REQUEST_BODY_BYTES} bytes"
+            )));
+        }
+        let header_bytes = request
+            .headers
+            .iter()
+            .try_fold(0usize, |total, (name, value)| {
+                total
+                    .checked_add(name.len())
+                    .and_then(|total| total.checked_add(value.len()))
+                    .and_then(|total| total.checked_add(4))
+            });
+        if header_bytes.is_none_or(|bytes| bytes > MAX_GATEWAY_HEADER_TEXT_BYTES) {
+            return Err(RuntimeError::InvalidConfiguration(format!(
+                "gateway request headers exceed {MAX_GATEWAY_HEADER_TEXT_BYTES} bytes"
+            )));
+        }
+        Ok(())
+    }
+
+    fn gateway_header_text(&self, headers: &[(String, String)]) -> Result<String, RuntimeError> {
+        let policy = self.policy()?;
+        let mut header_text = String::new();
+        for (name, value) in headers {
+            if !is_valid_gateway_header_name(name) || !is_valid_gateway_header_value(value) {
+                return Err(RuntimeError::InvalidConfiguration(
+                    "gateway request contains an invalid header".to_owned(),
+                ));
+            }
+            if is_gateway_control_header(name) {
+                continue;
+            }
+            header_text.push_str(name);
+            header_text.push_str(": ");
+            header_text.push_str(value);
+            header_text.push_str("\r\n");
+        }
+        if policy.resolution_mode == ResolutionMode::Strict {
+            header_text.push_str(HNS_GATEWAY_STRICT_MODE_HEADER);
+            header_text.push_str(": 1\r\n");
+        }
+        if let Some(endpoint) = policy.hns_doh_resolver.as_deref() {
+            header_text.push_str(HNS_GATEWAY_DOH_RESOLVER_HEADER);
+            header_text.push_str(": ");
+            header_text.push_str(endpoint);
+            header_text.push_str("\r\n");
+        }
+        if policy.stateless_dane_certificates {
+            header_text.push_str(HNS_GATEWAY_STATELESS_DANE_HEADER);
+            header_text.push_str(": 1\r\n");
+        }
+        header_text.push_str(HNS_GATEWAY_NETWORK_HEADER);
+        header_text.push_str(": ");
+        header_text.push_str(self.inner.configuration.network.as_str());
+        header_text.push_str("\r\n");
+        Ok(header_text)
+    }
+}
+
+fn is_gateway_control_header(name: &str) -> bool {
+    name.get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("X-HNS-"))
+}
+
+fn is_valid_gateway_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn is_valid_gateway_header_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
 }
 
 struct ParsedGatewayHeaders {
@@ -328,6 +869,7 @@ struct GatewayProofProvider {
     preferred_peers: usize,
     timeout: Duration,
     seed_on_empty: bool,
+    peer_state: Option<Arc<Mutex<()>>>,
 }
 
 impl GatewayProofProvider {
@@ -339,7 +881,13 @@ impl GatewayProofProvider {
             preferred_peers: DEFAULT_GATEWAY_PROOF_PEERS,
             timeout: DEFAULT_GATEWAY_PROOF_TIMEOUT,
             seed_on_empty: true,
+            peer_state: None,
         }
+    }
+
+    fn with_peer_state(mut self, peer_state: Option<Arc<Mutex<()>>>) -> Self {
+        self.peer_state = peer_state;
+        self
     }
 
     fn cached_records(
@@ -387,6 +935,14 @@ impl GatewayProofProvider {
         root_name: &str,
         name_hash: NameHash,
     ) -> Result<(), ResolverError> {
+        let _peer_state = match self.peer_state.as_ref() {
+            Some(peer_state) => Some(
+                peer_state
+                    .lock()
+                    .map_err(|_| ResolverError::CachePoisoned)?,
+            ),
+            None => None,
+        };
         let best = best_synced_header(&self.base, self.network)?;
         let network = self.network.network();
         let peer_store = SqlitePeerStore::open(self.base.join("peers.sqlite"))
@@ -544,10 +1100,10 @@ struct AndroidAuthoritativeDnsTransport {
 }
 
 impl AndroidAuthoritativeDnsTransport {
-    fn new(direct: UdpTcpDnsTransport, trace: DnsTraceRecorder) -> Self {
+    fn new(direct: UdpTcpDnsTransport, trace: DnsTraceRecorder, http: TcpHttpTransport) -> Self {
         Self {
             direct,
-            doh_http: Arc::new(shared_http_transport()),
+            doh_http: Arc::new(http),
             trace,
             interception_probe: Arc::new(Mutex::new(None)),
         }
@@ -1011,6 +1567,7 @@ struct HnsDohDnsTransport {
     endpoint: HnsDohEndpoint,
     trace: DnsTraceRecorder,
     endpoint_policy: DnsEndpointPolicy,
+    http: TcpHttpTransport,
 }
 
 impl HnsDohDnsTransport {
@@ -1018,18 +1575,20 @@ impl HnsDohDnsTransport {
         endpoint: HnsDohEndpoint,
         trace: DnsTraceRecorder,
         endpoint_policy: DnsEndpointPolicy,
+        http: TcpHttpTransport,
     ) -> Self {
         Self {
             endpoint,
             trace,
             endpoint_policy,
+            http,
         }
     }
 
     fn exchange_doh(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
         let (query, original_id) = recursive_doh_query(query)?;
         let started = Instant::now();
-        let response = fetch_doh_message(&self.endpoint, query.clone());
+        let response = fetch_doh_message(&self.http, &self.endpoint, query.clone());
         self.trace.push(doh_trace_event(
             "hns_doh",
             self.endpoint.display(),
@@ -1071,17 +1630,26 @@ impl DnsTransport for HnsDohDnsTransport {
 struct HnsDohResolver {
     endpoint: HnsDohEndpoint,
     trace: DnsTraceRecorder,
+    http: TcpHttpTransport,
 }
 
 impl Default for HnsDohResolver {
     fn default() -> Self {
-        Self::new(HnsDohEndpoint::default(), DnsTraceRecorder::default())
+        Self::new(
+            HnsDohEndpoint::default(),
+            DnsTraceRecorder::default(),
+            shared_http_transport(),
+        )
     }
 }
 
 impl HnsDohResolver {
-    fn new(endpoint: HnsDohEndpoint, trace: DnsTraceRecorder) -> Self {
-        Self { endpoint, trace }
+    fn new(endpoint: HnsDohEndpoint, trace: DnsTraceRecorder, http: TcpHttpTransport) -> Self {
+        Self {
+            endpoint,
+            trace,
+            http,
+        }
     }
 }
 
@@ -1093,7 +1661,7 @@ impl Resolver for HnsDohResolver {
         let id = DOH_DNS_ID;
         let query = build_doh_query(id, &qname, qtype)?;
         let started = Instant::now();
-        let response = fetch_doh_message(&self.endpoint, query.clone());
+        let response = fetch_doh_message(&self.http, &self.endpoint, query.clone());
         self.trace.push(doh_trace_event(
             "hns_doh",
             self.endpoint.display(),
@@ -1122,13 +1690,15 @@ impl Resolver for HnsDohResolver {
 struct IcannDohResolver {
     endpoint: HnsDohEndpoint,
     trace: DnsTraceRecorder,
+    http: TcpHttpTransport,
 }
 
 impl IcannDohResolver {
-    fn new(trace: DnsTraceRecorder) -> Self {
+    fn new(trace: DnsTraceRecorder, http: TcpHttpTransport) -> Self {
         Self {
             endpoint: default_icann_doh_endpoint(),
             trace,
+            http,
         }
     }
 }
@@ -1141,7 +1711,7 @@ impl Resolver for IcannDohResolver {
         let id = DOH_DNS_ID;
         let query = build_doh_query(id, &qname, qtype)?;
         let started = Instant::now();
-        let response = fetch_doh_message(&self.endpoint, query.clone());
+        let response = fetch_doh_message(&self.http, &self.endpoint, query.clone());
         self.trace.push(doh_trace_event(
             "icann_doh",
             self.endpoint.display(),
@@ -1194,10 +1764,11 @@ fn delegated_doh_transport_fallback_reason(error: &ResolverError) -> Option<&'st
 }
 
 fn fetch_doh_message(
+    http: &TcpHttpTransport,
     endpoint: &HnsDohEndpoint,
     body: Vec<u8>,
 ) -> Result<OriginResponse, TransportError> {
-    shared_http_transport().fetch(&OriginRequest {
+    http.fetch(&OriginRequest {
         method: "POST".to_owned(),
         scheme: "https".to_owned(),
         host: endpoint.host.clone(),
@@ -1403,7 +1974,7 @@ pub fn sync_status(data_dir: &str) -> String {
 
 pub fn sync_status_for_network(data_dir: &str, network: NetworkKind) -> String {
     read_sync_status(data_dir, network)
-        .unwrap_or_else(NativeSyncStatus::error)
+        .unwrap_or_else(|error| NativeSyncStatus::error_for(network, error))
         .to_json()
 }
 
@@ -1413,7 +1984,7 @@ pub fn clear_resolver_cache(data_dir: &str) -> String {
 
 pub fn clear_resolver_cache_for_network(data_dir: &str, network: NetworkKind) -> String {
     clear_resolver_cache_inner(data_dir, network)
-        .unwrap_or_else(NativeSyncStatus::error)
+        .unwrap_or_else(|error| NativeSyncStatus::error_for(network, error))
         .to_json()
 }
 
@@ -1427,7 +1998,7 @@ pub fn install_header_snapshot_for_network(
     network: NetworkKind,
 ) -> String {
     install_header_snapshot_inner(data_dir, snapshot_path, network)
-        .unwrap_or_else(NativeSyncStatus::error)
+        .unwrap_or_else(|error| NativeSyncStatus::error_for(network, error))
         .to_json()
 }
 
@@ -1437,26 +2008,48 @@ pub fn reset_headers_from_peers(data_dir: &str) -> String {
 
 pub fn reset_headers_from_peers_for_network(data_dir: &str, network: NetworkKind) -> String {
     reset_headers_from_peers_inner(data_dir, network)
-        .unwrap_or_else(NativeSyncStatus::error)
+        .unwrap_or_else(|error| NativeSyncStatus::error_for(network, error))
         .to_json()
 }
 
 pub fn local_tls_certificate_bundle(host: &str) -> Option<Vec<u8>> {
-    let host = normalized_local_tls_host(host)?;
-    let rcgen::CertifiedKey { cert, signing_key } =
-        rcgen::generate_simple_self_signed(vec![host]).ok()?;
-    let cert_der = cert.der().as_ref();
-    let key_der = signing_key.serialize_der();
-    let fingerprint = Sha256::digest(cert_der);
+    let certificate = generate_local_tls_certificate(host).ok()?;
     let mut bundle = Vec::with_capacity(
-        4 + cert_der.len() + 4 + key_der.len() + LOCAL_TLS_CERT_FINGERPRINT_BYTES,
+        4 + certificate.certificate_der.len()
+            + 4
+            + certificate.private_key_pkcs8_der.len()
+            + LOCAL_TLS_CERT_FINGERPRINT_BYTES,
     );
-    bundle.extend(u32::try_from(cert_der.len()).ok()?.to_be_bytes());
-    bundle.extend(cert_der);
-    bundle.extend(u32::try_from(key_der.len()).ok()?.to_be_bytes());
-    bundle.extend(&key_der);
-    bundle.extend(fingerprint);
+    bundle.extend(
+        u32::try_from(certificate.certificate_der.len())
+            .ok()?
+            .to_be_bytes(),
+    );
+    bundle.extend(&certificate.certificate_der);
+    bundle.extend(
+        u32::try_from(certificate.private_key_pkcs8_der.len())
+            .ok()?
+            .to_be_bytes(),
+    );
+    bundle.extend(&certificate.private_key_pkcs8_der);
+    bundle.extend(certificate.certificate_sha256);
     Some(bundle)
+}
+
+fn generate_local_tls_certificate(host: &str) -> Result<GeneratedLocalCertificate, RuntimeError> {
+    let host = normalized_local_tls_host(host).ok_or_else(|| {
+        RuntimeError::InvalidConfiguration("local TLS host is invalid".to_owned())
+    })?;
+    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(vec![host])
+        .map_err(|error| RuntimeError::Operation(format!("generate local certificate: {error}")))?;
+    let certificate_der = cert.der().as_ref().to_vec();
+    let private_key_pkcs8_der = signing_key.serialize_der();
+    let certificate_sha256 = Sha256::digest(&certificate_der).into();
+    Ok(GeneratedLocalCertificate {
+        certificate_der,
+        private_key_pkcs8_der,
+        certificate_sha256,
+    })
 }
 
 fn normalized_local_tls_host(host: &str) -> Option<String> {
@@ -1513,11 +2106,19 @@ fn sync_once_with_options(
         resource_cache_limit_bytes,
     ) {
         Ok(status) => status,
-        Err(error) => NativeSyncStatus::error(error),
+        Err(error) => NativeSyncStatus::error_for(network, error),
     }
 }
 
 pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
+    gateway_http_response_with_transport(input, shared_http_transport(), None)
+}
+
+fn gateway_http_response_with_transport(
+    input: GatewayHttpRequestInput<'_>,
+    transport: TcpHttpTransport,
+    peer_state: Option<Arc<Mutex<()>>>,
+) -> Vec<u8> {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
         Err(error) => return plain_response_for_request(&input, 400, "Bad Request", error),
@@ -1551,9 +2152,13 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
-        network,
-        mode,
-        parsed_headers.doh_endpoint,
+        GatewayResolverContext {
+            network,
+            mode,
+            doh_endpoint: parsed_headers.doh_endpoint,
+            peer_state,
+            http: transport.clone(),
+        },
         fallback_marker.clone(),
         dns_trace.clone(),
     );
@@ -1567,7 +2172,7 @@ pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
             ..GatewayConfig::default()
         },
         resolver,
-        shared_http_transport(),
+        transport,
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -1632,6 +2237,20 @@ pub fn gateway_http_response_body_to_file(
     input: GatewayHttpRequestInput<'_>,
     body_path: &Path,
 ) -> Result<Vec<u8>, String> {
+    gateway_http_response_body_to_file_with_transport(
+        input,
+        body_path,
+        shared_http_transport(),
+        None,
+    )
+}
+
+fn gateway_http_response_body_to_file_with_transport(
+    input: GatewayHttpRequestInput<'_>,
+    body_path: &Path,
+    transport: TcpHttpTransport,
+    peer_state: Option<Arc<Mutex<()>>>,
+) -> Result<Vec<u8>, String> {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
         Err(error) => {
@@ -1675,9 +2294,13 @@ pub fn gateway_http_response_body_to_file(
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
-        network,
-        mode,
-        parsed_headers.doh_endpoint,
+        GatewayResolverContext {
+            network,
+            mode,
+            doh_endpoint: parsed_headers.doh_endpoint,
+            peer_state,
+            http: transport.clone(),
+        },
         fallback_marker.clone(),
         dns_trace.clone(),
     );
@@ -1691,7 +2314,7 @@ pub fn gateway_http_response_body_to_file(
             ..GatewayConfig::default()
         },
         resolver,
-        shared_http_transport(),
+        transport,
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -1763,8 +2386,24 @@ pub fn gateway_http_response_body_to_file(
 
 pub fn gateway_http_upgrade_tunnel(
     input: GatewayHttpRequestInput<'_>,
+    client_input: impl Read + Send + 'static,
+    client_output: impl Write + Send + 'static,
+) -> bool {
+    gateway_http_upgrade_tunnel_with_transport(
+        input,
+        client_input,
+        client_output,
+        shared_http_transport(),
+        None,
+    )
+}
+
+fn gateway_http_upgrade_tunnel_with_transport(
+    input: GatewayHttpRequestInput<'_>,
     mut client_input: impl Read + Send + 'static,
     mut client_output: impl Write + Send + 'static,
+    transport: TcpHttpTransport,
+    peer_state: Option<Arc<Mutex<()>>>,
 ) -> bool {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
@@ -1810,9 +2449,13 @@ pub fn gateway_http_upgrade_tunnel(
     let resolver = android_gateway_resolver(
         base.clone(),
         values,
-        network,
-        mode,
-        parsed_headers.doh_endpoint,
+        GatewayResolverContext {
+            network,
+            mode,
+            doh_endpoint: parsed_headers.doh_endpoint,
+            peer_state,
+            http: transport.clone(),
+        },
         fallback_marker.clone(),
         dns_trace.clone(),
     );
@@ -1826,7 +2469,7 @@ pub fn gateway_http_upgrade_tunnel(
             ..GatewayConfig::default()
         },
         resolver,
-        shared_http_transport(),
+        transport,
     ) {
         Ok(gateway) => gateway,
         Err(error) => {
@@ -2034,25 +2677,30 @@ fn recent_stateless_dane_tree_roots(base: &Path) -> Result<Vec<[u8; 32]>, Resolv
 fn android_gateway_resolver(
     base: PathBuf,
     values: SqliteResourceValueProvider,
-    network: NetworkKind,
-    mode: GatewayResolutionMode,
-    doh_endpoint: HnsDohEndpoint,
+    context: GatewayResolverContext,
     fallback_marker: FallbackMarker,
     dns_trace: DnsTraceRecorder,
 ) -> AndroidGatewayResolver {
+    let GatewayResolverContext {
+        network,
+        mode,
+        doh_endpoint,
+        peer_state,
+        http,
+    } = context;
     let endpoint_policy = DnsEndpointPolicy::for_network(network);
     let authoritative_dns_transport =
-        android_authoritative_dns_transport(mode, dns_trace.clone(), endpoint_policy);
+        android_authoritative_dns_transport(mode, dns_trace.clone(), endpoint_policy, http.clone());
     match mode {
         GatewayResolutionMode::Strict => {
             let primary = DelegatingResolver::new(
-                GatewayProofProvider::new(base, values, network),
+                GatewayProofProvider::new(base, values, network).with_peer_state(peer_state),
                 AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
                     .with_authoritative_doh_preferred(),
             );
             AndroidGatewayResolver::Strict(Box::new(CompositeResolver::new(
                 primary,
-                IcannDohResolver::new(dns_trace),
+                IcannDohResolver::new(dns_trace, http),
             )))
         }
         GatewayResolutionMode::Compatibility => {
@@ -2060,31 +2708,45 @@ fn android_gateway_resolver(
                 AuthoritativeDnssecResolver::new(authoritative_dns_transport, SystemDnssecVerifier)
                     .with_authoritative_doh_preferred();
             let doh = AuthoritativeDnssecResolver::new(
-                HnsDohDnsTransport::new(doh_endpoint.clone(), dns_trace.clone(), endpoint_policy),
+                HnsDohDnsTransport::new(
+                    doh_endpoint.clone(),
+                    dns_trace.clone(),
+                    endpoint_policy,
+                    http.clone(),
+                ),
                 SystemDnssecVerifier,
             );
             let delegated = FallbackDelegatedResolver::new(direct, doh, fallback_marker.clone());
             let primary = DelegatingResolver::new(
-                GatewayProofProvider::new(base, values, network),
+                GatewayProofProvider::new(base, values, network).with_peer_state(peer_state),
                 delegated,
             );
             let hns = FallbackResolver::with_marker(
                 primary,
-                HnsDohResolver::new(doh_endpoint, dns_trace.clone()),
+                HnsDohResolver::new(doh_endpoint, dns_trace.clone(), http.clone()),
                 fallback_marker,
             );
             AndroidGatewayResolver::Compatibility(Box::new(CompositeResolver::new(
                 hns,
-                IcannDohResolver::new(dns_trace),
+                IcannDohResolver::new(dns_trace, http),
             )))
         }
     }
+}
+
+struct GatewayResolverContext {
+    network: NetworkKind,
+    mode: GatewayResolutionMode,
+    doh_endpoint: HnsDohEndpoint,
+    peer_state: Option<Arc<Mutex<()>>>,
+    http: TcpHttpTransport,
 }
 
 fn android_authoritative_dns_transport(
     mode: GatewayResolutionMode,
     dns_trace: DnsTraceRecorder,
     endpoint_policy: DnsEndpointPolicy,
+    http: TcpHttpTransport,
 ) -> AndroidAuthoritativeDnsTransport {
     let mut transport = UdpTcpDnsTransport {
         endpoint_policy,
@@ -2093,7 +2755,7 @@ fn android_authoritative_dns_transport(
     if mode == GatewayResolutionMode::Compatibility {
         transport.timeout = ANDROID_COMPAT_AUTHORITATIVE_DNS_TIMEOUT;
     }
-    AndroidAuthoritativeDnsTransport::new(transport, dns_trace)
+    AndroidAuthoritativeDnsTransport::new(transport, dns_trace, http)
 }
 
 fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'static str> {
@@ -2112,14 +2774,7 @@ fn parse_gateway_headers(header_text: &str) -> Result<ParsedGatewayHeaders, &'st
         };
         let name = line[..separator].trim();
         let value = line[separator + 1..].trim();
-        if name.is_empty()
-            || name
-                .bytes()
-                .any(|byte| byte.is_ascii_control() || byte == b' ' || byte == b':')
-            || value
-                .bytes()
-                .any(|byte| byte != b'\t' && byte.is_ascii_control())
-        {
+        if !is_valid_gateway_header_name(name) || !is_valid_gateway_header_value(value) {
             return Err("request header is invalid");
         }
         if name.eq_ignore_ascii_case(HNS_GATEWAY_STRICT_MODE_HEADER) {
@@ -4655,32 +5310,36 @@ fn now_unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-pub struct NativeSyncStatus {
-    network: NetworkKind,
-    status: &'static str,
-    attempted: usize,
-    successful: usize,
-    accepted: usize,
-    failed: usize,
-    peer_count: usize,
-    peer_groups: usize,
-    best_height: Option<u32>,
-    best_peer_height: Option<u32>,
-    estimated_tip_height: Option<u32>,
-    resource_cache_entries: usize,
-    resource_cache_bytes: usize,
-    resource_cache_evicted: usize,
-    error: Option<String>,
-    failures: Vec<NativePeerFailure>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SyncStatus {
+    pub network: NetworkKind,
+    pub status: &'static str,
+    pub attempted: usize,
+    pub successful: usize,
+    pub accepted: usize,
+    pub failed: usize,
+    pub peer_count: usize,
+    pub peer_groups: usize,
+    pub best_height: Option<u32>,
+    pub best_peer_height: Option<u32>,
+    pub estimated_tip_height: Option<u32>,
+    pub resource_cache_entries: usize,
+    pub resource_cache_bytes: usize,
+    pub resource_cache_evicted: usize,
+    pub error: Option<String>,
+    pub failures: Vec<NativePeerFailure>,
 }
 
-struct NativePeerFailure {
-    address: String,
-    stage: &'static str,
-    error: String,
+pub type NativeSyncStatus = SyncStatus;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativePeerFailure {
+    pub address: String,
+    pub stage: &'static str,
+    pub error: String,
 }
 
-impl NativeSyncStatus {
+impl SyncStatus {
     fn empty_for(network: NetworkKind) -> Self {
         Self {
             network,
@@ -4703,8 +5362,12 @@ impl NativeSyncStatus {
     }
 
     pub fn error(error: String) -> Self {
+        Self::error_for(NetworkKind::Mainnet, error)
+    }
+
+    pub fn error_for(network: NetworkKind, error: String) -> Self {
         Self {
-            network: NetworkKind::Mainnet,
+            network,
             status: "error",
             attempted: 0,
             successful: 0,
@@ -4819,6 +5482,201 @@ mod tests {
             core_version(),
             concat!("hns-dane-browser-rust-core/", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    #[test]
+    fn browser_runtime_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<BrowserRuntime>();
+    }
+
+    #[test]
+    fn browser_runtime_owns_network_and_storage_configuration() {
+        let data_dir = temp_dir_path("browser-runtime-status");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+
+        let status = runtime.sync_status().unwrap();
+
+        let configuration = runtime.configuration().unwrap();
+        assert_eq!(configuration.data_dir(), data_dir);
+        assert_eq!(configuration.network(), NetworkKind::Regtest);
+        assert_eq!(status.network, NetworkKind::Regtest);
+        assert_eq!(status.best_height, Some(0));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtimes_share_coordination_for_the_same_storage() {
+        let data_dir = temp_dir_path("browser-runtime-shared-coordination");
+        let first =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let second = BrowserRuntime::open(RuntimeConfiguration::new(
+            data_dir.join("."),
+            NetworkKind::Regtest,
+        ))
+        .unwrap();
+
+        assert!(Arc::ptr_eq(
+            &first.inner.coordination,
+            &second.inner.coordination
+        ));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_status_remains_available_while_peer_state_is_busy() {
+        let data_dir = temp_dir_path("browser-runtime-concurrent-status");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        runtime.sync_status().unwrap();
+        let peer_state = Arc::clone(&runtime.inner.coordination.peer_state);
+        let peer_state_guard = peer_state.lock().unwrap();
+        let call_runtime = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let call = thread::spawn(move || sender.send(call_runtime.sync_status()).unwrap());
+
+        let status = receiver.recv_timeout(Duration::from_secs(2));
+        drop(peer_state_guard);
+        call.join().unwrap();
+
+        assert!(status.unwrap().is_ok());
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_configuration_replaces_untrusted_control_headers() {
+        let data_dir = temp_dir_path("browser-runtime-headers");
+        let configuration = RuntimeConfiguration::new(&data_dir, NetworkKind::Testnet)
+            .with_initial_policy(RuntimePolicy {
+                resolution_mode: ResolutionMode::Strict,
+                hns_doh_resolver: Some("https://resolver.example/dns-query".to_owned()),
+                stateless_dane_certificates: true,
+            });
+        let runtime = BrowserRuntime::open(configuration).unwrap();
+        let header_text = runtime
+            .gateway_header_text(&[
+                ("Accept".to_owned(), "text/html".to_owned()),
+                (HNS_GATEWAY_NETWORK_HEADER.to_owned(), "regtest".to_owned()),
+                (HNS_GATEWAY_STRICT_MODE_HEADER.to_owned(), "0".to_owned()),
+                (
+                    "x-hns-unrecognized-metadata".to_owned(),
+                    "spoofed".to_owned(),
+                ),
+            ])
+            .unwrap();
+
+        let parsed = parse_gateway_headers(&header_text).unwrap();
+        assert_eq!(
+            parsed.headers,
+            vec![("Accept".to_owned(), "text/html".to_owned())]
+        );
+        assert!(parsed.strict_hns_mode);
+        assert!(parsed.stateless_dane_certificates);
+        assert_eq!(parsed.network, NetworkKind::Testnet);
+        assert_eq!(
+            parsed.doh_endpoint.display(),
+            "https://resolver.example/dns-query"
+        );
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_rejects_header_injection_before_adding_control_metadata() {
+        let data_dir = temp_dir_path("browser-runtime-header-injection");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+
+        let error = runtime
+            .gateway_header_text(&[(
+                "Accept".to_owned(),
+                "text/html\r\nX-HNS-Browser-Network: mainnet".to_owned(),
+            )])
+            .unwrap_err();
+
+        assert!(matches!(error, RuntimeError::InvalidConfiguration(_)));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_policy_updates_are_revisioned_and_normalized() {
+        let data_dir = temp_dir_path("browser-runtime-policy");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Mainnet))
+                .unwrap();
+        assert_eq!(runtime.policy_revision(), 0);
+
+        let revision = runtime
+            .set_policy(RuntimePolicy {
+                resolution_mode: ResolutionMode::Strict,
+                hns_doh_resolver: Some("https://Resolver.Example:443/dns-query".to_owned()),
+                stateless_dane_certificates: true,
+            })
+            .unwrap();
+        let (policy, snapshot_revision) = runtime.policy_snapshot().unwrap();
+
+        assert_eq!(revision, 1);
+        assert_eq!(snapshot_revision, revision);
+        assert_eq!(policy.resolution_mode, ResolutionMode::Strict);
+        assert_eq!(
+            policy.hns_doh_resolver.as_deref(),
+            Some("https://resolver.example/dns-query")
+        );
+        assert!(policy.stateless_dane_certificates);
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_rejects_oversized_gateway_inputs_before_execution() {
+        let data_dir = temp_dir_path("browser-runtime-gateway-limits");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let mut request = GatewayHttpRequest {
+            method: "POST".to_owned(),
+            scheme: "http".to_owned(),
+            host: "example".to_owned(),
+            port: 80,
+            path_and_query: "/".to_owned(),
+            headers: Vec::new(),
+            body: vec![0; DEFAULT_MAX_REQUEST_BODY_BYTES + 1],
+        };
+        assert!(matches!(
+            runtime.gateway_request(request.clone()),
+            Err(RuntimeError::InvalidConfiguration(_))
+        ));
+
+        request.body.clear();
+        request.headers.push((
+            "X-Large".to_owned(),
+            "a".repeat(MAX_GATEWAY_HEADER_TEXT_BYTES),
+        ));
+        assert!(matches!(
+            runtime.gateway_request(request),
+            Err(RuntimeError::InvalidConfiguration(_))
+        ));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn generated_local_certificate_matches_legacy_bundle() {
+        let certificate = generate_local_tls_certificate("example").unwrap();
+        assert!(!certificate.certificate_der.is_empty());
+        assert!(!certificate.private_key_pkcs8_der.is_empty());
+        assert_eq!(
+            Sha256::digest(&certificate.certificate_der).as_slice(),
+            certificate.certificate_sha256
+        );
+
+        let bundle = local_tls_certificate_bundle("example").unwrap();
+        let (cert_der, key_der, fingerprint) = parse_local_tls_bundle(&bundle);
+        assert!(!cert_der.is_empty());
+        assert!(!key_der.is_empty());
+        assert_eq!(Sha256::digest(cert_der).as_slice(), fingerprint);
     }
 
     #[test]
@@ -5408,6 +6266,14 @@ mod tests {
 
         assert!(json.contains(r#""status":"error""#));
         assert!(json.contains(r#""error":"bad \"path\"\n""#));
+    }
+
+    #[test]
+    fn sync_status_error_preserves_the_requested_network() {
+        let json = NativeSyncStatus::error_for(NetworkKind::Testnet, "failed".to_owned()).to_json();
+
+        assert!(json.contains(r#""network":"testnet""#));
+        assert!(json.contains(r#""status":"error""#));
     }
 
     #[test]

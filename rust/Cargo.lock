@@ -567,6 +567,7 @@ dependencies = [
  "hns-urkel",
  "rcgen",
  "sha2",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

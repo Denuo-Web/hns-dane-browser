@@ -1,17 +1,21 @@
 # Architecture
 
-The product is an Android browser with a Rust core, not a system-wide resolver. The browser owns URL interpretation, HNS resolution policy, DANE policy, transport policy, and validation error UX.
+The shipping product is currently an Android browser, not a system-wide resolver. Its security engine is a platform-neutral Rust runtime so native browser shells can share URL resolution, HNS and DANE policy, transport policy, persistent state, and validation results while retaining platform-native UI and WebView integration.
 
 ## Layers
 
 ```text
-Android UI / Browser Shell
-  -> Kotlin app services
-  -> WebView + AndroidX ProxyController
-  -> Local loopback gateway
-  -> Rust core via JNI/FFI
+Android UI / Browser Shell                         [shipping]
+  -> Kotlin app services + WebView interception
+  -> AndroidX ProxyController + Kotlin loopback proxy/TLS terminator
+  -> NativeBridge + thin android-ffi JNI adapter
+  -> persistent hns-browser-runtime handle
   -> HNS resolver, DNSSEC, DANE, transport, cache
   -> HNS peers, ICANN DNS, TCP TLS, QUIC/HTTP3
+
+iOS UI / Browser Shell                             [planned]
+  -> WKWebView integration + ios-ffi C ABI         [planned]
+  -> the same hns-browser-runtime API
 ```
 
 ## Rust Crates
@@ -27,8 +31,17 @@ Android UI / Browser Shell
 - `hns-transport`: bounded HTTP/1.1 origin transport over TCP or rustls TLS with same-origin keep-alive pooling, HTTPS rustls session resumption scoped to the active certificate policy, optional stateless DANE certificate evidence fallback when enabled and resolver TLSA records are absent, safe same-port Alt-Svc promotion to HTTP/2 or HTTP/3, HTTPS HTTP/2 origin transport over Tokio/Rustls, HTTPS HTTP/3 origin transport over Quinn/h3 with QUIC TLS bound to the same DNSSEC-gated TLSA/DANE certificate policy, WebPKI fallback, fail-closed response framing for unsupported transfer codings or ambiguous lengths, decoded response body streaming to caller-provided writers, and native HTTP/1.1 Upgrade tunnel opening for WebSocket/Upgrade streams after request validation.
 - `hns-gateway`: loopback gateway interfaces, secure-resolution checks, owner-scoped resolved A/AAAA connect-address routing with validated CNAME-chain terminal address support, delegated origin A/AAAA lookup for all-record Android gateway starts and origin-focused A/AAAA requests, separate HTTPS/SVCB service lookup for address-only answers, HTTPS/SVCB ALPN and service-port policy selection constrained to configured origin protocol support, HTTP/1.1 default fallback when SVCB does not disable default ALPN, tunnel-specific HTTPS/SVCB policy that requires HTTP/1.1 support for WebSocket/Upgrade streams, fail-closed HNS no-address/nameserver handling, exact service-owner DNSSEC-secure TLSA lookup, strict and compatibility HNS HTTPS policy modes, and validation error mapping.
 - `hns-cache`: bounded TTL cache primitives.
-- `android-ffi`: Android diagnostics and error mapping, native sync and cache controls, persistent proof-backed gateway resolution, authoritative DNSSEC resolution, proof-bootstrapped or RFC 9461-discovered authoritative DoH routed over HNS-proven glue, bounded TEST-NET port 53 interception diagnostics, AD-gated compatibility fallback, DANE/WebPKI resolver-policy reporting, bounded request/response forwarding, file-backed WebView response bodies, and HNS WebSocket/HTTP Upgrade tunneling.
+- `hns-browser-runtime`: platform-neutral, JNI-free ownership boundary for immutable network and storage configuration, revisioned runtime policy, per-handle HTTP transport, synchronization and maintenance coordination, peer-state serialization, header sync and snapshots, resolver cache controls, proof diagnostics, gateway requests, and local certificate generation. `BrowserRuntime` is cloneable through an internal `Arc`, allowing platform adapters to retain a call-scoped reference while the owning shell coordinates handle teardown.
+- `android-ffi`: thin Android JNI adapter for string/byte/stream conversion, error mapping, opaque `BrowserRuntime` handle creation and destruction, and compatibility exports still used by gateway, certificate, diagnostics, and Upgrade paths during the proxy migration. Platform-neutral resolution, synchronization, storage, transport, and policy orchestration belongs in `hns-browser-runtime`, not this crate.
 - `rust/fuzz`: parser fuzz smoke targets for DNS messages/names/SVCB, HNS resource values, P2P frames/payloads, Urkel proofs, TLSA records, and X.509 SPKI extraction.
+
+## Cross-Platform Migration Status
+
+- The shared `hns-browser-runtime` crate and its persistent `BrowserRuntime` API are in place and have no JNI dependency or exported Java symbols.
+- Runtime identity, configuration, policy, transport reuse, and storage coordination are handle-backed. Proof details still use the compatibility JSON schema and gateway responses still use the compatibility encoded HTTP envelope; those surfaces remain transitional until the Rust proxy introduces typed execution and security metadata.
+- Android currently keeps process-lifetime runtime handles keyed by storage directory and network. Sync, status, cache maintenance, snapshot installation, peer reset, and proof diagnostics use those handles.
+- The Kotlin `LoopbackProxyServer` and `LocalTlsHnsConnectTerminator` remain the shipping proxy/TLS implementation and parity oracle. Gateway forwarding, local certificates, diagnostics, and Upgrade tunnels still enter Rust through compatibility JNI exports while their handle-based replacements are developed.
+- The next migration boundary is a Rust-owned loopback proxy with equivalent authentication, host scoping, limits, lifecycle, and certificate publication. Only after Android parity is proven will the duplicate Kotlin proxy/TLS implementation be removed; the iOS C ABI and native shell follow that boundary.
 
 ## Android Modules
 
@@ -45,8 +58,9 @@ Android UI / Browser Shell
 - `HnsWebViewGatewayInterceptor`: Shared WebView and Service Worker request interception for bodyless HNS HTTP/HTTPS requests, routing them through the native gateway without Chromium CONNECT so explicit HNS HTTPS can use Rust TLS/DANE policy, with file-backed decoded response bodies, bounded same-origin redirect following, main-frame status reporting for toolbar state, and fail-closed handling for body-bearing Service Worker requests that cannot complete authenticated proxy fallback.
 - `HnsServiceWorkerGatewayClient`: Service Worker fetch interception that reuses the WebView HNS gateway policy instead of letting worker fetches bypass native HNS validation.
 - `GatewayEventLog`: App-private, bounded, sanitized gateway failure event store used by diagnostics so support can inspect recent HNS gateway failures after process restarts without retaining paths, query strings, headers, or bodies.
-- `LoopbackProxyServer`: app-owned randomized-port loopback HTTP/CONNECT proxy used only for the active HNS host/subdomains. It rejects all non-HNS HTTP, CONNECT, and Upgrade requests with `403 Proxy Scope Denied`; normal ICANN traffic remains on WebView's direct path. For in-scope HNS traffic it rejects unsupported transfer-encoded or ambiguous-length requests before native routing, routes bounded HTTP requests and HNS WebSocket/HTTP Upgrade requests through the native gateway, and terminates HNS CONNECT locally with per-host native self-signed certificates whose fingerprints must be pinned before WebView may proceed past the expected local certificate error.
-- `NativeBridge`: JNI/FFI load boundary for the Rust shared library.
+- `LoopbackProxyServer`: current app-owned randomized-port loopback HTTP/CONNECT proxy used only for the active HNS host/subdomains. It rejects all non-HNS HTTP, CONNECT, and Upgrade requests with `403 Proxy Scope Denied`; normal ICANN traffic remains on WebView's direct path. For in-scope HNS traffic it rejects unsupported transfer-encoded or ambiguous-length requests before native routing, routes bounded HTTP requests and HNS WebSocket/HTTP Upgrade requests through the native gateway, and delegates HNS CONNECT termination to `LocalTlsHnsConnectTerminator`. This Kotlin implementation remains in place until the Rust proxy passes the same parity tests.
+- `LocalTlsHnsConnectTerminator`: current Kotlin TLS server for in-scope CONNECT requests. It consumes per-host certificates from Rust and requires their fingerprints to be pinned before WebView may proceed past the expected local certificate error; private-key ownership moves fully into Rust with the proxy migration.
+- `NativeBridge`: JNI load boundary for the Rust shared library. It owns process-lifetime opaque runtime handles for handle-backed operations and retains compatibility entry points for gateway, certificate, diagnostics, and Upgrade operations that have not yet migrated.
 
 Android builds are compiled through APK Workbench on this ARM64 host so Gradle receives the managed SDK/NDK, page-size profile, and ARM64 `aapt2` override. Gradle also invokes `scripts/build-rust-android.sh` to cross-compile and package `libhns_dane_browser_ffi.so` for `arm64-v8a` and `x86_64`.
 
