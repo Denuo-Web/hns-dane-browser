@@ -55,6 +55,14 @@ impl AsRef<str> for NormalizedHost {
     }
 }
 
+impl std::ops::Deref for NormalizedHost {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
 impl std::fmt::Debug for NormalizedHost {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("NormalizedHost([REDACTED])")

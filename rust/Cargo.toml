@@ -11,6 +11,7 @@ members = [
     "crates/hns-dnssec",
     "crates/hns-gateway",
     "crates/hns-loopback-proxy",
+    "crates/ios-ffi",
     "crates/hns-p2p",
     "crates/hns-resolver",
     "crates/hns-sync",
@@ -73,3 +74,10 @@ codegen-units = 1
 debug = "line-tables-only"
 lto = "thin"
 panic = "abort"
+
+# FFI exports contain explicit panic boundaries. Apple release artifacts keep
+# unwinding enabled so a panic can be translated into a fail-closed ABI result
+# instead of crossing the C boundary or aborting the host application.
+[profile.ios-release]
+inherits = "release"
+panic = "unwind"

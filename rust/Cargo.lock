@@ -645,6 +645,7 @@ name = "hns-loopback-proxy"
 version = "0.3.16"
 dependencies = [
  "base64",
+ "hns-core",
  "hns-resolver",
  "httparse",
  "idna",
@@ -845,6 +846,13 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "ios-ffi"
+version = "0.3.16"
+dependencies = [
+ "hns-browser-runtime",
 ]
 
 [[package]]

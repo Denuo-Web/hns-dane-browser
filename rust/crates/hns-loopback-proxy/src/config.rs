@@ -68,6 +68,18 @@ pub enum LoopbackBind {
     Ipv4,
 }
 
+/// Determines which browser requests one proxy generation may route.
+///
+/// The default remains the Android-compatible immutable HNS scope. Whole
+/// browser routing is an explicit opt-in for browser engines whose proxy
+/// configuration cannot safely express an HNS-only match rule.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ProxyRoutingMode {
+    #[default]
+    ScopedHns,
+    WholeBrowser,
+}
+
 impl LoopbackBind {
     pub const fn socket_addr(self) -> SocketAddrV4 {
         match self {
@@ -269,20 +281,36 @@ impl Default for ProxyTimeouts {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProxyConfig {
     instance: ProxyInstanceId,
-    scope: HostScope,
+    hns_scope: Option<HostScope>,
     limits: ProxyLimits,
     timeouts: ProxyTimeouts,
     bind: LoopbackBind,
+    routing_mode: ProxyRoutingMode,
 }
 
 impl ProxyConfig {
     pub fn new(instance: ProxyInstanceId, scope: HostScope) -> Self {
         Self {
             instance,
-            scope,
+            hns_scope: Some(scope),
             limits: ProxyLimits::default(),
             timeouts: ProxyTimeouts::default(),
             bind: LoopbackBind::default(),
+            routing_mode: ProxyRoutingMode::default(),
+        }
+    }
+
+    /// Creates a whole-browser generation. `None` is an explicit deny-all HNS
+    /// policy for an ICANN top-level page; `Some` admits only that immutable
+    /// HNS root and its subdomains.
+    pub fn whole_browser(instance: ProxyInstanceId, hns_scope: Option<HostScope>) -> Self {
+        Self {
+            instance,
+            hns_scope,
+            limits: ProxyLimits::default(),
+            timeouts: ProxyTimeouts::default(),
+            bind: LoopbackBind::default(),
+            routing_mode: ProxyRoutingMode::WholeBrowser,
         }
     }
 
@@ -295,10 +323,11 @@ impl ProxyConfig {
     ) -> Self {
         Self {
             instance,
-            scope,
+            hns_scope: Some(scope),
             limits,
             timeouts,
             bind,
+            routing_mode: ProxyRoutingMode::default(),
         }
     }
 
@@ -306,8 +335,8 @@ impl ProxyConfig {
         &self.instance
     }
 
-    pub fn scope(&self) -> &HostScope {
-        &self.scope
+    pub fn hns_scope(&self) -> Option<&HostScope> {
+        self.hns_scope.as_ref()
     }
 
     pub const fn limits(&self) -> ProxyLimits {
@@ -320,6 +349,10 @@ impl ProxyConfig {
 
     pub const fn bind(&self) -> LoopbackBind {
         self.bind
+    }
+
+    pub const fn routing_mode(&self) -> ProxyRoutingMode {
+        self.routing_mode
     }
 }
 
@@ -461,10 +494,15 @@ mod tests {
         let config = ProxyConfig::new(instance.clone(), scope.clone());
 
         assert_eq!(config.instance(), &instance);
-        assert_eq!(config.scope(), &scope);
+        assert_eq!(config.hns_scope(), Some(&scope));
+        assert_eq!(config.routing_mode(), ProxyRoutingMode::ScopedHns);
         assert_eq!(config.bind(), LoopbackBind::Ipv4);
         assert_eq!(config.limits(), ProxyLimits::default());
         assert_eq!(config.timeouts(), ProxyTimeouts::default());
         assert!(!format!("{config:?}").contains(scope.root().as_str()));
+
+        let icann_only = ProxyConfig::whole_browser(instance, None);
+        assert_eq!(icann_only.hns_scope(), None);
+        assert_eq!(icann_only.routing_mode(), ProxyRoutingMode::WholeBrowser);
     }
 }

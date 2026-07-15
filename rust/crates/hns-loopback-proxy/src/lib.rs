@@ -12,6 +12,7 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod http1;
+pub mod icann;
 pub mod metadata;
 pub mod rate_limit;
 pub mod response;
@@ -32,8 +33,8 @@ pub use backend::{
 };
 pub use certificate::{CertificateSha256, LocalCertificatePin};
 pub use config::{
-    LoopbackBind, ProxyConfig, ProxyInstanceId, ProxyLimits, ProxyLimitsError, ProxySessionId,
-    ProxyTimeouts, ProxyTimeoutsError, SessionIdGenerationError,
+    LoopbackBind, ProxyConfig, ProxyInstanceId, ProxyLimits, ProxyLimitsError, ProxyRoutingMode,
+    ProxySessionId, ProxyTimeouts, ProxyTimeoutsError, SessionIdGenerationError,
 };
 pub use endpoint::ProxyEndpoint;
 pub use event::{
@@ -48,6 +49,7 @@ pub use http1::{
     read_chunked_body, read_request_body, read_request_head, sanitize_forward_headers,
     sanitize_upgrade_forward_headers,
 };
+pub use icann::{FailClosedIcannNetwork, IcannNetwork, IcannNetworkError};
 pub use metadata::{
     NoopProxyResponseMetadataObserver, ProxyResponseMetadataObservation,
     ProxyResponseMetadataObserver,

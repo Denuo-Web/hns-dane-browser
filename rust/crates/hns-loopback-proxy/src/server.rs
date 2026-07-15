@@ -6,7 +6,7 @@ use crate::backend::{
     ProxyResponse, ProxyResponseBody, ProxyTunnel, ProxyTunnelOpen,
 };
 use crate::certificate::LocalTlsIdentityStore;
-use crate::config::{ProxyConfig, ProxyLimits, ProxyTimeouts};
+use crate::config::{ProxyConfig, ProxyLimits, ProxyRoutingMode, ProxyTimeouts};
 use crate::endpoint::ProxyEndpoint;
 use crate::event::{
     BackendFailureKind, ClientRejectionReason, LifecycleEvent, ObservedHost, ObservedMethod,
@@ -17,6 +17,9 @@ use crate::http1::{
     AbsoluteTarget, Authority, BodyFraming, Http1Error, RequestHead, RequestTarget, Scheme,
     determine_body_framing, read_request_body, read_request_head, sanitize_forward_headers,
     sanitize_upgrade_forward_headers,
+};
+use crate::icann::{
+    FailClosedIcannNetwork, IcannNetwork, IcannNetworkError, MAX_RESOLVED_ADDRESSES,
 };
 use crate::listener::{
     ClientHandler, ListenerExitHandler, ListenerExitPhase, ListenerExitReason, OwnedListener,
@@ -33,6 +36,11 @@ use crate::response::{
     encode_response_head, encode_upgrade_response_head, sanitize_response_headers,
 };
 use crate::tls::{TlsStream, accept_local_tls};
+use hns_core::network_policy::{
+    is_browser_blocked_port, is_browser_special_use_host, is_publicly_routable,
+};
+use hns_resolver::{NameClass, classify_name};
+use std::collections::HashSet;
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
@@ -47,6 +55,10 @@ const RESPONSE_COPY_BUFFER_BYTES: usize = 16 * 1024;
 const TUNNEL_COPY_BUFFER_BYTES: usize = 16 * 1024;
 const TUNNEL_CLIENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const CONNECT_ESTABLISHED_RESPONSE: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
+const MAX_INFORMATIONAL_RESPONSES: usize = 8;
+const MAX_ICANN_RESPONSE_HEADERS: usize = 256;
+const MAX_ICANN_CHUNK_LINE_BYTES: usize = 8 * 1024;
+const MAX_ICANN_TRAILER_BYTES: usize = 64 * 1024;
 
 /// Failure to start a proxy generation. No listener or credential is retained
 /// after this error is returned.
@@ -94,6 +106,25 @@ impl RunningProxy {
         observer: Arc<dyn ProxyObserver>,
         metadata_observer: Arc<dyn ProxyResponseMetadataObserver>,
     ) -> Result<Self, ProxyError> {
+        Self::start_with_metadata_observer_and_icann_network(
+            config,
+            backend,
+            observer,
+            metadata_observer,
+            Arc::new(FailClosedIcannNetwork),
+        )
+    }
+
+    /// Starts with an injectable ICANN resolver/dialer. Scoped generations
+    /// never invoke this boundary; whole-browser generations invoke it only
+    /// after shared name classification and destination policy checks.
+    pub fn start_with_metadata_observer_and_icann_network(
+        config: ProxyConfig,
+        backend: Arc<dyn ProxyBackend>,
+        observer: Arc<dyn ProxyObserver>,
+        metadata_observer: Arc<dyn ProxyResponseMetadataObserver>,
+        icann_network: Arc<dyn IcannNetwork>,
+    ) -> Result<Self, ProxyError> {
         let authorization =
             Arc::new(ProxyAuthorization::generate().map_err(ProxyError::Authorization)?);
         let limits = config.limits();
@@ -106,7 +137,8 @@ impl RunningProxy {
         let stop_state = Arc::new(ProxyStopState::new());
         let context = Arc::new(ServerContext {
             authorization: Arc::clone(&authorization),
-            scope: config.scope().clone(),
+            hns_scope: config.hns_scope().cloned(),
+            routing_mode: config.routing_mode(),
             limits,
             timeouts,
             backend,
@@ -115,6 +147,7 @@ impl RunningProxy {
             generation,
             rate_limiter,
             tls_identities: Arc::clone(&tls_identities),
+            icann_network,
         });
 
         let client_context = Arc::clone(&context);
@@ -191,6 +224,18 @@ impl RunningProxy {
 
     pub fn is_stopped(&self) -> bool {
         self.stop_state.completed.load(Ordering::Acquire)
+    }
+
+    pub fn is_stop_requested(&self) -> bool {
+        self.stop_state.requested.load(Ordering::Acquire)
+    }
+
+    /// Matches a platform proxy-authentication challenge only while this
+    /// generation remains live and unrevoked.
+    pub fn matches_authentication_challenge(&self, host: &str, port: u16, realm: &str) -> bool {
+        !self.is_stop_requested()
+            && self.endpoint.matches_challenge(host, port, realm)
+            && !self.is_stop_requested()
     }
 
     /// Returns informational, generation-bound pin metadata after an
@@ -422,7 +467,8 @@ impl Drop for RunningProxy {
 
 struct ServerContext {
     authorization: Arc<ProxyAuthorization>,
-    scope: crate::HostScope,
+    hns_scope: Option<crate::HostScope>,
+    routing_mode: ProxyRoutingMode,
     limits: ProxyLimits,
     timeouts: ProxyTimeouts,
     backend: Arc<dyn ProxyBackend>,
@@ -431,6 +477,7 @@ struct ServerContext {
     generation: u64,
     rate_limiter: RequestRateLimiter,
     tls_identities: Arc<LocalTlsIdentityStore>,
+    icann_network: Arc<dyn IcannNetwork>,
 }
 
 fn handle_client(
@@ -502,10 +549,10 @@ fn handle_client(
         }
     };
     let method = ObservedMethod::from_token(head.method());
-    let canonical_host = match context.scope.authorize(target.authority().host()) {
+    let admitted_host = match admit_target_host(context, target.authority().host()) {
         Ok(host) => host,
         Err(error) => {
-            let (status_reason, rejection) = scope_rejection(error);
+            let (status_reason, rejection) = route_rejection(error);
             if let Ok(host) = crate::NormalizedHost::parse(target.authority().host()) {
                 observe_request(
                     context,
@@ -518,20 +565,26 @@ fn handle_client(
             return;
         }
     };
+    observe_request(
+        context,
+        admitted_host.as_str(),
+        method,
+        RequestPhase::Accepted,
+    );
 
-    observe_request(context, &canonical_host, method, RequestPhase::Accepted);
-
-    match target {
-        RequestTarget::Absolute(absolute) => handle_direct_http(
-            &mut stream,
-            &head,
-            &absolute,
-            &canonical_host,
-            method,
-            &cancellation,
-            context,
-        ),
-        RequestTarget::Connect(authority) => handle_connect(
+    match (admitted_host, target) {
+        (AdmittedHost::Hns(canonical_host), RequestTarget::Absolute(absolute)) => {
+            handle_direct_http(
+                &mut stream,
+                &head,
+                &absolute,
+                &canonical_host,
+                method,
+                &cancellation,
+                context,
+            )
+        }
+        (AdmittedHost::Hns(canonical_host), RequestTarget::Connect(authority)) => handle_connect(
             stream,
             &head,
             authority,
@@ -540,15 +593,116 @@ fn handle_client(
             &cancellation,
             context,
         ),
-        RequestTarget::Origin(_) => reject_scoped_request(
+        (AdmittedHost::Icann(icann_host), RequestTarget::Absolute(absolute)) => handle_icann_http(
+            &mut stream,
+            &head,
+            &absolute,
+            &icann_host,
+            method,
+            &cancellation,
+            context,
+        ),
+        (AdmittedHost::Icann(icann_host), RequestTarget::Connect(authority)) => {
+            handle_icann_connect(
+                stream,
+                &head,
+                authority,
+                icann_host,
+                method,
+                &cancellation,
+                context,
+            )
+        }
+        (host, RequestTarget::Origin(_)) => reject_routed_request(
             &mut stream,
             context,
-            &canonical_host,
+            host.as_str(),
             method,
             400,
             "Bad Request",
             RequestRejectionReason::InvalidRequest,
+            false,
         ),
+    }
+}
+
+enum AdmittedHost {
+    Hns(crate::NormalizedHost),
+    Icann(IcannHost),
+}
+
+impl AdmittedHost {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Hns(host) => host.as_str(),
+            Self::Icann(host) => host.as_str(),
+        }
+    }
+}
+
+enum IcannHost {
+    Name(crate::NormalizedHost),
+    Address {
+        address: std::net::IpAddr,
+        text: String,
+    },
+}
+
+impl IcannHost {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Name(host) => host.as_str(),
+            Self::Address { text, .. } => text,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RouteRejection {
+    Scope(HostScopeError),
+    SpecialUse,
+    PrivateAddress,
+    InvalidClass,
+}
+
+fn admit_target_host(
+    context: &ServerContext,
+    raw_host: &str,
+) -> Result<AdmittedHost, RouteRejection> {
+    if context.routing_mode == ProxyRoutingMode::ScopedHns {
+        return context
+            .hns_scope
+            .as_ref()
+            .ok_or(RouteRejection::InvalidClass)?
+            .authorize(raw_host)
+            .map(AdmittedHost::Hns)
+            .map_err(RouteRejection::Scope);
+    }
+
+    if let Ok(address) = raw_host.parse::<std::net::IpAddr>() {
+        if classify_name(raw_host) != NameClass::Icann || !is_publicly_routable(address) {
+            return Err(RouteRejection::PrivateAddress);
+        }
+        return Ok(AdmittedHost::Icann(IcannHost::Address {
+            address,
+            text: address.to_string(),
+        }));
+    }
+    let host = crate::NormalizedHost::parse(raw_host)
+        .map_err(|error| RouteRejection::Scope(HostScopeError::InvalidHost(error)))?;
+    match classify_name(host.as_str()) {
+        NameClass::Hns => context
+            .hns_scope
+            .as_ref()
+            .ok_or(RouteRejection::Scope(HostScopeError::OutOfScope))?
+            .authorize(host.as_str())
+            .map(AdmittedHost::Hns)
+            .map_err(RouteRejection::Scope),
+        NameClass::Icann if is_browser_special_use_host(host.as_str()) => {
+            Err(RouteRejection::SpecialUse)
+        }
+        NameClass::Icann => Ok(AdmittedHost::Icann(IcannHost::Name(host))),
+        NameClass::Search => Err(RouteRejection::InvalidClass),
     }
 }
 
@@ -602,6 +756,1083 @@ fn handle_direct_http(
             cancellation,
             context,
         );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_icann_http(
+    stream: &mut TcpStream,
+    head: &RequestHead,
+    absolute: &AbsoluteTarget,
+    host: &IcannHost,
+    method: ObservedMethod,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) {
+    let route = HttpRoute {
+        scheme: absolute.scheme(),
+        authority: absolute.authority(),
+        path_and_query: absolute.path_and_query(),
+    };
+    if !matches!(route.scheme, Scheme::Http | Scheme::Ws) {
+        reject_routed_request(
+            stream,
+            context,
+            host.as_str(),
+            method,
+            400,
+            "ICANN HTTPS Requires CONNECT",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    if is_browser_blocked_port(route.authority.port()) {
+        reject_routed_request(
+            stream,
+            context,
+            host.as_str(),
+            method,
+            403,
+            "ICANN Destination Port Denied",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    let is_upgrade = route.scheme == Scheme::Ws || requests_upgrade(head);
+    let likely_main_frame =
+        !is_upgrade && is_likely_main_frame_navigation(head, route.path_and_query);
+    if !admit_rate(stream, context, host.as_str(), method, likely_main_frame) {
+        return;
+    }
+    if is_upgrade {
+        handle_icann_upgrade(stream, head, route, host, method, cancellation, context);
+    } else {
+        handle_icann_request(
+            stream,
+            head,
+            route,
+            host,
+            method,
+            likely_main_frame,
+            cancellation,
+            context,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_icann_connect(
+    mut client: TcpStream,
+    head: &RequestHead,
+    authority: Authority,
+    host: IcannHost,
+    method: ObservedMethod,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) {
+    if requests_upgrade(head) || head.header_values("expect").next().is_some() {
+        reject_routed_request(
+            &mut client,
+            context,
+            host.as_str(),
+            method,
+            400,
+            "Invalid ICANN CONNECT",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    let framing = match determine_body_framing(head.headers()) {
+        Ok(framing) => framing,
+        Err(error) => {
+            let (status, reason) = request_error_status(&error);
+            reject_routed_request(
+                &mut client,
+                context,
+                host.as_str(),
+                method,
+                status,
+                reason,
+                RequestRejectionReason::InvalidRequest,
+                false,
+            );
+            return;
+        }
+    };
+    if !matches!(framing, BodyFraming::None | BodyFraming::ContentLength(0)) {
+        reject_routed_request(
+            &mut client,
+            context,
+            host.as_str(),
+            method,
+            400,
+            "ICANN CONNECT Body Unsupported",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    if is_browser_blocked_port(authority.port()) {
+        reject_routed_request(
+            &mut client,
+            context,
+            host.as_str(),
+            method,
+            403,
+            "ICANN Destination Port Denied",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    if !admit_rate(&mut client, context, host.as_str(), method, false) {
+        return;
+    }
+
+    let started = Instant::now();
+    let mut origin = match dial_icann(&host, authority.port(), cancellation, context) {
+        Ok(origin) => origin,
+        Err(error) => {
+            observe_icann_failure(context, host.as_str(), method, started, error);
+            if !cancellation.is_cancelled() {
+                let (status, reason) = icann_route_error_response(error);
+                let _result = write_error_response(&mut client, status, reason, &[]);
+            }
+            return;
+        }
+    };
+    if client.clear_client_read_deadline().is_err()
+        || client.write_all(CONNECT_ESTABLISHED_RESPONSE).is_err()
+        || client.flush().is_err()
+    {
+        return;
+    }
+    observe_request(
+        context,
+        host.as_str(),
+        method,
+        RequestPhase::Completed {
+            status_code: 200,
+            elapsed: started.elapsed(),
+        },
+    );
+    let _outcome = pump_tunnel(&mut client, origin.as_mut(), cancellation);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IcannRouteError {
+    Cancelled,
+    Resolution,
+    AddressDenied,
+    Connection,
+    InvalidResponse,
+}
+
+fn dial_icann(
+    host: &IcannHost,
+    port: u16,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) -> Result<Box<dyn crate::ProxyTunnelIo>, IcannRouteError> {
+    if cancellation.is_cancelled() {
+        return Err(IcannRouteError::Cancelled);
+    }
+    let addresses = match host {
+        IcannHost::Address { address, .. } => vec![SocketAddr::new(*address, port)],
+        IcannHost::Name(host) => catch_unwind(AssertUnwindSafe(|| {
+            context
+                .icann_network
+                .resolve(host.as_str(), port, cancellation)
+        }))
+        .unwrap_or(Err(IcannNetworkError::ResolutionFailed))
+        .map_err(icann_network_resolution_error)?,
+    };
+    if addresses.is_empty() || addresses.len() > MAX_RESOLVED_ADDRESSES {
+        return Err(IcannRouteError::Resolution);
+    }
+    let mut unique = HashSet::new();
+    let mut public = Vec::new();
+    for address in addresses {
+        if address.port() != port || !is_publicly_routable(address.ip()) {
+            continue;
+        }
+        if unique.insert(address) {
+            public.push(address);
+        }
+    }
+    if public.is_empty() {
+        return Err(IcannRouteError::AddressDenied);
+    }
+
+    let now = Instant::now();
+    let deadline = now
+        .checked_add(context.timeouts.socket_timeout())
+        .unwrap_or(now);
+    for address in public {
+        if cancellation.is_cancelled() {
+            return Err(IcannRouteError::Cancelled);
+        }
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(IcannRouteError::Connection);
+        };
+        if remaining.is_zero() {
+            return Err(IcannRouteError::Connection);
+        }
+        let connected = catch_unwind(AssertUnwindSafe(|| {
+            context
+                .icann_network
+                .connect(address, remaining, cancellation)
+        }))
+        .unwrap_or(Err(IcannNetworkError::ConnectionFailed));
+        match connected {
+            Ok(stream) => return Ok(stream),
+            Err(IcannNetworkError::Cancelled) => return Err(IcannRouteError::Cancelled),
+            Err(IcannNetworkError::ResolutionFailed | IcannNetworkError::ConnectionFailed) => {}
+        }
+    }
+    Err(IcannRouteError::Connection)
+}
+
+fn icann_network_resolution_error(error: IcannNetworkError) -> IcannRouteError {
+    match error {
+        IcannNetworkError::Cancelled => IcannRouteError::Cancelled,
+        IcannNetworkError::ResolutionFailed | IcannNetworkError::ConnectionFailed => {
+            IcannRouteError::Resolution
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_icann_request(
+    client: &mut TcpStream,
+    head: &RequestHead,
+    route: HttpRoute<'_>,
+    host: &IcannHost,
+    method: ObservedMethod,
+    likely_main_frame: bool,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) {
+    let started = Instant::now();
+    let framing = match determine_body_framing(head.headers()) {
+        Ok(framing) => framing,
+        Err(error) => {
+            reject_icann_http_error(client, context, host, method, likely_main_frame, &error);
+            return;
+        }
+    };
+    if matches!(framing, BodyFraming::ContentLength(length) if length > context.limits.max_body_bytes())
+    {
+        reject_icann_http_error(
+            client,
+            context,
+            host,
+            method,
+            likely_main_frame,
+            &Http1Error::BodyTooLarge,
+        );
+        return;
+    }
+    let expects_continue = match expects_continue(head) {
+        Ok(value) => value,
+        Err(()) => {
+            reject_routed_request(
+                client,
+                context,
+                host.as_str(),
+                method,
+                417,
+                "Expectation Failed",
+                RequestRejectionReason::InvalidRequest,
+                likely_main_frame,
+            );
+            return;
+        }
+    };
+    let headers = match build_icann_forward_headers(head, route, host.as_str(), false) {
+        Ok(headers) => headers,
+        Err(error) => {
+            reject_icann_http_error(client, context, host, method, likely_main_frame, &error);
+            return;
+        }
+    };
+    if expects_continue
+        && !matches!(framing, BodyFraming::None)
+        && (client.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() || client.flush().is_err())
+    {
+        return;
+    }
+    let body = {
+        let mut reader = DeadlineReader::new(client, context.timeouts.socket_timeout());
+        match read_request_body(&mut reader, framing, context.limits.max_body_bytes()) {
+            Ok(body) => body,
+            Err(error) => {
+                reject_icann_http_error(client, context, host, method, likely_main_frame, &error);
+                return;
+            }
+        }
+    };
+    if client.clear_client_read_deadline().is_err() || cancellation.is_cancelled() {
+        return;
+    }
+    let request = match encode_icann_request(
+        head.method(),
+        route.path_and_query,
+        &headers,
+        (!matches!(framing, BodyFraming::None)).then_some(body.len()),
+        false,
+        context.limits.max_header_bytes(),
+    ) {
+        Ok(request) => request,
+        Err(()) => {
+            reject_routed_request(
+                client,
+                context,
+                host.as_str(),
+                method,
+                400,
+                "Invalid ICANN Request",
+                RequestRejectionReason::InvalidRequest,
+                likely_main_frame,
+            );
+            return;
+        }
+    };
+    let mut origin = match dial_icann(host, route.authority.port(), cancellation, context) {
+        Ok(origin) => origin,
+        Err(error) => {
+            observe_icann_failure(context, host.as_str(), method, started, error);
+            if !cancellation.is_cancelled() {
+                let (status, reason) = icann_route_error_response(error);
+                observe_proxy_generated_response(
+                    context,
+                    host.as_str(),
+                    method,
+                    status,
+                    likely_main_frame,
+                );
+                let _result = write_error_response(client, status, reason, &[]);
+            }
+            return;
+        }
+    };
+    if origin.write_all(&request).is_err()
+        || (!body.is_empty() && origin.write_all(&body).is_err())
+        || origin.flush().is_err()
+    {
+        observe_icann_failure(
+            context,
+            host.as_str(),
+            method,
+            started,
+            IcannRouteError::Connection,
+        );
+        if !cancellation.is_cancelled() {
+            let _result = write_error_response(client, 502, "ICANN Upstream Unavailable", &[]);
+        }
+        return;
+    }
+
+    let result = relay_icann_response(
+        client,
+        origin.as_mut(),
+        head.method(),
+        cancellation,
+        context,
+    );
+    match result {
+        Ok(status_code) => observe_request(
+            context,
+            host.as_str(),
+            method,
+            RequestPhase::Completed {
+                status_code,
+                elapsed: started.elapsed(),
+            },
+        ),
+        Err(error) => {
+            observe_icann_failure(context, host.as_str(), method, started, error);
+            if !cancellation.is_cancelled() {
+                observe_proxy_generated_response(
+                    context,
+                    host.as_str(),
+                    method,
+                    502,
+                    likely_main_frame,
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_icann_upgrade(
+    client: &mut TcpStream,
+    head: &RequestHead,
+    route: HttpRoute<'_>,
+    host: &IcannHost,
+    method: ObservedMethod,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) {
+    let started = Instant::now();
+    let framing = match determine_body_framing(head.headers()) {
+        Ok(framing) => framing,
+        Err(error) => {
+            reject_icann_http_error(client, context, host, method, false, &error);
+            return;
+        }
+    };
+    if !matches!(framing, BodyFraming::None | BodyFraming::ContentLength(0))
+        || head.header_values("expect").next().is_some()
+    {
+        reject_routed_request(
+            client,
+            context,
+            host.as_str(),
+            method,
+            400,
+            "ICANN Protocol Upgrade Body Unsupported",
+            RequestRejectionReason::InvalidRequest,
+            false,
+        );
+        return;
+    }
+    let headers = match build_icann_forward_headers(head, route, host.as_str(), true) {
+        Ok(headers) => headers,
+        Err(error) => {
+            reject_icann_http_error(client, context, host, method, false, &error);
+            return;
+        }
+    };
+    let request = match encode_icann_request(
+        head.method(),
+        route.path_and_query,
+        &headers,
+        None,
+        true,
+        context.limits.max_header_bytes(),
+    ) {
+        Ok(request) => request,
+        Err(()) => {
+            reject_routed_request(
+                client,
+                context,
+                host.as_str(),
+                method,
+                400,
+                "Invalid ICANN Upgrade Request",
+                RequestRejectionReason::InvalidRequest,
+                false,
+            );
+            return;
+        }
+    };
+    if client.clear_client_read_deadline().is_err() || cancellation.is_cancelled() {
+        return;
+    }
+    let mut origin = match dial_icann(host, route.authority.port(), cancellation, context) {
+        Ok(origin) => origin,
+        Err(error) => {
+            observe_icann_failure(context, host.as_str(), method, started, error);
+            if !cancellation.is_cancelled() {
+                let (status, reason) = icann_route_error_response(error);
+                let _result = write_error_response(client, status, reason, &[]);
+            }
+            return;
+        }
+    };
+    if origin.write_all(&request).is_err() || origin.flush().is_err() {
+        observe_icann_failure(
+            context,
+            host.as_str(),
+            method,
+            started,
+            IcannRouteError::Connection,
+        );
+        return;
+    }
+    let response = {
+        let mut reader = InactivityReader::new(
+            origin.as_mut(),
+            cancellation,
+            context.timeouts.socket_timeout(),
+        );
+        read_icann_response_head(
+            &mut reader,
+            head.method(),
+            true,
+            context.limits.max_header_bytes(),
+        )
+    };
+    let response = match response {
+        Ok(response) if response.status == 101 => response,
+        Ok(_) | Err(_) => {
+            observe_icann_failure(
+                context,
+                host.as_str(),
+                method,
+                started,
+                IcannRouteError::InvalidResponse,
+            );
+            if !cancellation.is_cancelled() {
+                let _result =
+                    write_error_response(client, 502, "Invalid ICANN Upgrade Response", &[]);
+            }
+            return;
+        }
+    };
+    let encoded =
+        match encode_upgrade_response_head(response.status, &response.reason, &response.headers) {
+            Ok(encoded) => encoded,
+            Err(_error) => {
+                observe_icann_failure(
+                    context,
+                    host.as_str(),
+                    method,
+                    started,
+                    IcannRouteError::InvalidResponse,
+                );
+                if !cancellation.is_cancelled() {
+                    let _result =
+                        write_error_response(client, 502, "Invalid ICANN Upgrade Response", &[]);
+                }
+                return;
+            }
+        };
+    if client.write_all(encoded.as_bytes()).is_err() || client.flush().is_err() {
+        return;
+    }
+    match pump_tunnel(client, origin.as_mut(), cancellation) {
+        TunnelPumpOutcome::Completed => observe_request(
+            context,
+            host.as_str(),
+            method,
+            RequestPhase::Completed {
+                status_code: 101,
+                elapsed: started.elapsed(),
+            },
+        ),
+        TunnelPumpOutcome::OriginIo => observe_icann_failure(
+            context,
+            host.as_str(),
+            method,
+            started,
+            IcannRouteError::Connection,
+        ),
+        TunnelPumpOutcome::ClientIo | TunnelPumpOutcome::Cancelled => {}
+    }
+}
+
+fn build_icann_forward_headers(
+    head: &RequestHead,
+    route: HttpRoute<'_>,
+    host: &str,
+    upgrade: bool,
+) -> Result<Vec<ProxyHeader>, Http1Error> {
+    let sanitized = if upgrade {
+        sanitize_upgrade_forward_headers(head.headers())?
+    } else {
+        sanitize_forward_headers(head.headers())?
+    };
+    let mut headers: Vec<_> = sanitized
+        .into_iter()
+        .filter(|header| {
+            !header.name().eq_ignore_ascii_case("host")
+                && !header.name().eq_ignore_ascii_case("content-length")
+                && !header.name().eq_ignore_ascii_case("expect")
+                && (upgrade || !header.name().eq_ignore_ascii_case("connection"))
+        })
+        .map(|header| ProxyHeader::new(header.name(), header.value()))
+        .collect();
+    let host_value = if host.contains(':') {
+        if route.authority.port() == route.scheme.default_port() {
+            format!("[{host}]")
+        } else {
+            format!("[{host}]:{}", route.authority.port())
+        }
+    } else if route.authority.port() == route.scheme.default_port() {
+        host.to_owned()
+    } else {
+        format!("{host}:{}", route.authority.port())
+    };
+    headers.push(ProxyHeader::new("Host", host_value));
+    Ok(headers)
+}
+
+fn encode_icann_request(
+    method: &str,
+    path_and_query: &str,
+    headers: &[ProxyHeader],
+    body_len: Option<usize>,
+    upgrade: bool,
+    max_header_bytes: usize,
+) -> Result<Vec<u8>, ()> {
+    let mut out = format!("{method} {path_and_query} HTTP/1.1\r\n").into_bytes();
+    for header in headers {
+        out.extend_from_slice(header.name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(header.value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    if !upgrade {
+        out.extend_from_slice(b"Connection: close\r\n");
+    }
+    if let Some(body_len) = body_len {
+        out.extend_from_slice(format!("Content-Length: {body_len}\r\n").as_bytes());
+    }
+    out.extend_from_slice(b"\r\n");
+    if out.len() > max_header_bytes {
+        return Err(());
+    }
+    Ok(out)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IcannResponseFraming {
+    NoBody { declared_length: Option<u64> },
+    ContentLength(u64),
+    Chunked,
+    CloseDelimited,
+    Upgrade,
+}
+
+struct IcannResponseHead {
+    status: u16,
+    reason: String,
+    headers: Vec<(String, String)>,
+    framing: IcannResponseFraming,
+}
+
+fn relay_icann_response(
+    client: &mut TcpStream,
+    origin: &mut dyn crate::ProxyTunnelIo,
+    request_method: &str,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) -> Result<u16, IcannRouteError> {
+    let mut reader = InactivityReader::new(origin, cancellation, context.timeouts.socket_timeout());
+    let response = match read_icann_response_head(
+        &mut reader,
+        request_method,
+        false,
+        context.limits.max_header_bytes(),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            if !cancellation.is_cancelled() {
+                let _result = write_error_response(client, 502, "Invalid ICANN Response", &[]);
+            }
+            return Err(error);
+        }
+    };
+    let status = response.status;
+    let sanitized = match sanitize_response_headers(&response.headers) {
+        Ok(headers) => headers,
+        Err(_error) => {
+            if !cancellation.is_cancelled() {
+                let _result = write_error_response(client, 502, "Invalid ICANN Response", &[]);
+            }
+            return Err(IcannRouteError::InvalidResponse);
+        }
+    };
+    let encoded = match encode_icann_response_head(&response, &sanitized, request_method) {
+        Ok(encoded) => encoded,
+        Err(()) => {
+            if !cancellation.is_cancelled() {
+                let _result = write_error_response(client, 502, "Invalid ICANN Response", &[]);
+            }
+            return Err(IcannRouteError::InvalidResponse);
+        }
+    };
+    client
+        .write_all(&encoded)
+        .map_err(|_error| IcannRouteError::Connection)?;
+    match response.framing {
+        IcannResponseFraming::NoBody { .. } => {}
+        IcannResponseFraming::ContentLength(length) => {
+            relay_exact_body(&mut reader, client, length)?;
+        }
+        IcannResponseFraming::Chunked => {
+            relay_chunked_body(&mut reader, client)?;
+        }
+        IcannResponseFraming::CloseDelimited => {
+            relay_close_delimited_body(&mut reader, client)?;
+        }
+        IcannResponseFraming::Upgrade => return Err(IcannRouteError::InvalidResponse),
+    }
+    client
+        .flush()
+        .map_err(|_error| IcannRouteError::Connection)?;
+    Ok(status)
+}
+
+fn read_icann_response_head(
+    reader: &mut impl Read,
+    request_method: &str,
+    allow_upgrade: bool,
+    max_header_bytes: usize,
+) -> Result<IcannResponseHead, IcannRouteError> {
+    let mut informational = 0_usize;
+    loop {
+        let bytes = read_icann_head_bytes(reader, max_header_bytes)?;
+        let mut parsed_headers = [httparse::EMPTY_HEADER; MAX_ICANN_RESPONSE_HEADERS];
+        let mut parsed = httparse::Response::new(&mut parsed_headers);
+        let parsed_len = match parsed.parse(&bytes) {
+            Ok(httparse::Status::Complete(length)) => length,
+            Ok(httparse::Status::Partial) | Err(_) => {
+                return Err(IcannRouteError::InvalidResponse);
+            }
+        };
+        if parsed_len != bytes.len() || !has_strict_crlf(&bytes) {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        let status = parsed.code.ok_or(IcannRouteError::InvalidResponse)?;
+        let version = parsed.version.ok_or(IcannRouteError::InvalidResponse)?;
+        if version > 1 || !(100..=599).contains(&status) {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        let reason = parsed.reason.unwrap_or_default().to_owned();
+        let mut headers = Vec::with_capacity(parsed.headers.len());
+        for header in parsed.headers {
+            let value = std::str::from_utf8(header.value)
+                .map_err(|_error| IcannRouteError::InvalidResponse)?;
+            headers.push((header.name.to_owned(), value.to_owned()));
+        }
+        if (100..200).contains(&status) {
+            if status == 101 {
+                if !allow_upgrade {
+                    return Err(IcannRouteError::InvalidResponse);
+                }
+                return Ok(IcannResponseHead {
+                    status,
+                    reason,
+                    headers,
+                    framing: IcannResponseFraming::Upgrade,
+                });
+            }
+            if response_content_length(&headers)?.is_some()
+                || response_is_chunked(&headers)?.is_some()
+            {
+                return Err(IcannRouteError::InvalidResponse);
+            }
+            informational = informational.saturating_add(1);
+            if informational > MAX_INFORMATIONAL_RESPONSES {
+                return Err(IcannRouteError::InvalidResponse);
+            }
+            continue;
+        }
+        let content_length = response_content_length(&headers)?;
+        let chunked = response_is_chunked(&headers)?;
+        if chunked.is_some() && content_length.is_some() {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        let no_body =
+            request_method.eq_ignore_ascii_case("HEAD") || matches!(status, 204 | 205 | 304);
+        if matches!(status, 204 | 205)
+            && (content_length.is_some_and(|length| length != 0) || chunked.is_some())
+        {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        let framing = if no_body {
+            IcannResponseFraming::NoBody {
+                declared_length: content_length,
+            }
+        } else if chunked.is_some() {
+            IcannResponseFraming::Chunked
+        } else if let Some(length) = content_length {
+            IcannResponseFraming::ContentLength(length)
+        } else {
+            IcannResponseFraming::CloseDelimited
+        };
+        return Ok(IcannResponseHead {
+            status,
+            reason,
+            headers,
+            framing,
+        });
+    }
+}
+
+fn read_icann_head_bytes(
+    reader: &mut impl Read,
+    max_header_bytes: usize,
+) -> Result<Vec<u8>, IcannRouteError> {
+    let mut bytes = Vec::with_capacity(max_header_bytes.min(8 * 1024));
+    let mut byte = [0_u8; 1];
+    while bytes.len() < max_header_bytes {
+        match reader.read(&mut byte) {
+            Ok(0) => return Err(IcannRouteError::InvalidResponse),
+            Ok(1) => bytes.push(byte[0]),
+            Ok(_) => return Err(IcannRouteError::InvalidResponse),
+            Err(_error) => return Err(IcannRouteError::Connection),
+        }
+        if bytes.ends_with(b"\r\n\r\n") {
+            return Ok(bytes);
+        }
+    }
+    Err(IcannRouteError::InvalidResponse)
+}
+
+fn has_strict_crlf(bytes: &[u8]) -> bool {
+    bytes.iter().enumerate().all(|(index, byte)| match byte {
+        b'\r' => bytes.get(index + 1) == Some(&b'\n'),
+        b'\n' => index > 0 && bytes.get(index - 1) == Some(&b'\r'),
+        _ => true,
+    })
+}
+
+fn response_content_length(headers: &[(String, String)]) -> Result<Option<u64>, IcannRouteError> {
+    let mut values = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .map(|(_, value)| value.as_str());
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some()
+        || value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(IcannRouteError::InvalidResponse);
+    }
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_error| IcannRouteError::InvalidResponse)
+}
+
+fn response_is_chunked(headers: &[(String, String)]) -> Result<Option<()>, IcannRouteError> {
+    let values: Vec<_> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    if values.is_empty() {
+        return Ok(None);
+    }
+    if values.len() != 1 || !values[0].eq_ignore_ascii_case("chunked") {
+        return Err(IcannRouteError::InvalidResponse);
+    }
+    Ok(Some(()))
+}
+
+fn encode_icann_response_head(
+    response: &IcannResponseHead,
+    headers: &crate::SanitizedResponseHeaders,
+    request_method: &str,
+) -> Result<Vec<u8>, ()> {
+    if !(200..=599).contains(&response.status)
+        || !response
+            .reason
+            .bytes()
+            .all(|byte| byte == b'\t' || (0x20..=0x7e).contains(&byte))
+    {
+        return Err(());
+    }
+    let mut encoded = format!("HTTP/1.1 {} {}\r\n", response.status, response.reason).into_bytes();
+    for (name, value) in headers.forwarded() {
+        encoded.extend_from_slice(name.as_bytes());
+        encoded.extend_from_slice(b": ");
+        encoded.extend_from_slice(value.as_bytes());
+        encoded.extend_from_slice(b"\r\n");
+    }
+    encoded.extend_from_slice(b"Connection: close\r\n");
+    match response.framing {
+        IcannResponseFraming::ContentLength(length) => {
+            encoded.extend_from_slice(format!("Content-Length: {length}\r\n").as_bytes());
+        }
+        IcannResponseFraming::NoBody {
+            declared_length: Some(length),
+        } if request_method.eq_ignore_ascii_case("HEAD") => {
+            encoded.extend_from_slice(format!("Content-Length: {length}\r\n").as_bytes());
+        }
+        IcannResponseFraming::NoBody { .. }
+        | IcannResponseFraming::Chunked
+        | IcannResponseFraming::CloseDelimited => {}
+        IcannResponseFraming::Upgrade => return Err(()),
+    }
+    encoded.extend_from_slice(b"\r\n");
+    if encoded.len() > ProxyLimits::DEFAULT_MAX_HEADER_BYTES {
+        return Err(());
+    }
+    Ok(encoded)
+}
+
+fn relay_exact_body(
+    reader: &mut impl Read,
+    client: &mut impl Write,
+    mut remaining: u64,
+) -> Result<(), IcannRouteError> {
+    let mut buffer = [0_u8; RESPONSE_COPY_BUFFER_BYTES];
+    while remaining != 0 {
+        let limit = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_error| IcannRouteError::InvalidResponse)?;
+        let count = reader
+            .read(&mut buffer[..limit])
+            .map_err(|_error| IcannRouteError::Connection)?;
+        if count == 0 || count > limit {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        client
+            .write_all(&buffer[..count])
+            .map_err(|_error| IcannRouteError::Connection)?;
+        remaining = remaining
+            .checked_sub(count as u64)
+            .ok_or(IcannRouteError::InvalidResponse)?;
+    }
+    Ok(())
+}
+
+fn relay_close_delimited_body(
+    reader: &mut impl Read,
+    client: &mut impl Write,
+) -> Result<(), IcannRouteError> {
+    let mut buffer = [0_u8; RESPONSE_COPY_BUFFER_BYTES];
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|_error| IcannRouteError::Connection)?;
+        if count == 0 {
+            return Ok(());
+        }
+        if count > buffer.len() {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        client
+            .write_all(&buffer[..count])
+            .map_err(|_error| IcannRouteError::Connection)?;
+    }
+}
+
+fn relay_chunked_body(
+    reader: &mut impl Read,
+    client: &mut impl Write,
+) -> Result<(), IcannRouteError> {
+    loop {
+        let line = read_icann_crlf_line(reader, MAX_ICANN_CHUNK_LINE_BYTES)?;
+        let (size, extensions) = match line.iter().position(|byte| *byte == b';') {
+            Some(index) => (&line[..index], &line[index + 1..]),
+            None => (line.as_slice(), [].as_slice()),
+        };
+        if size.is_empty()
+            || !size.iter().all(u8::is_ascii_hexdigit)
+            || extensions.iter().any(|byte| !(0x20..=0x7e).contains(byte))
+        {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+        let size = std::str::from_utf8(size)
+            .ok()
+            .and_then(|size| u64::from_str_radix(size, 16).ok())
+            .ok_or(IcannRouteError::InvalidResponse)?;
+        if size == 0 {
+            read_icann_trailers(reader)?;
+            return Ok(());
+        }
+        relay_exact_body(reader, client, size)?;
+        let mut crlf = [0_u8; 2];
+        reader
+            .read_exact(&mut crlf)
+            .map_err(|_error| IcannRouteError::InvalidResponse)?;
+        if crlf != *b"\r\n" {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+    }
+}
+
+fn read_icann_trailers(reader: &mut impl Read) -> Result<(), IcannRouteError> {
+    let mut consumed = 0_usize;
+    let mut fields = 0_usize;
+    loop {
+        let remaining = MAX_ICANN_TRAILER_BYTES
+            .checked_sub(consumed)
+            .ok_or(IcannRouteError::InvalidResponse)?;
+        let line = read_icann_crlf_line(reader, remaining.min(MAX_ICANN_CHUNK_LINE_BYTES))?;
+        consumed = consumed
+            .checked_add(line.len() + 2)
+            .ok_or(IcannRouteError::InvalidResponse)?;
+        if line.is_empty() {
+            return Ok(());
+        }
+        fields = fields.saturating_add(1);
+        if fields > MAX_ICANN_RESPONSE_HEADERS
+            || !line.contains(&b':')
+            || line.iter().any(|byte| *byte < 0x20 && *byte != b'\t')
+        {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+    }
+}
+
+fn read_icann_crlf_line(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>, IcannRouteError> {
+    let mut line = Vec::with_capacity(limit.min(256));
+    let mut byte = [0_u8; 1];
+    while line.len() < limit {
+        reader
+            .read_exact(&mut byte)
+            .map_err(|_error| IcannRouteError::InvalidResponse)?;
+        line.push(byte[0]);
+        if line.ends_with(b"\r\n") {
+            line.truncate(line.len() - 2);
+            return Ok(line);
+        }
+        if byte[0] == b'\n' {
+            return Err(IcannRouteError::InvalidResponse);
+        }
+    }
+    Err(IcannRouteError::InvalidResponse)
+}
+
+struct InactivityReader<'a> {
+    inner: &'a mut dyn crate::ProxyTunnelIo,
+    cancellation: &'a CancellationToken,
+    timeout: Duration,
+    deadline: Instant,
+}
+
+impl<'a> InactivityReader<'a> {
+    fn new(
+        inner: &'a mut dyn crate::ProxyTunnelIo,
+        cancellation: &'a CancellationToken,
+        timeout: Duration,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            inner,
+            cancellation,
+            timeout,
+            deadline: now.checked_add(timeout).unwrap_or(now),
+        }
+    }
+}
+
+impl Read for InactivityReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if self.cancellation.is_cancelled() {
+                return Err(io::Error::new(
+                    // `Read::read_exact` transparently retries `Interrupted`.
+                    // Cancellation must be terminal so chunk framing and
+                    // trailer reads unwind instead of spinning forever.
+                    io::ErrorKind::ConnectionAborted,
+                    "proxy cancelled",
+                ));
+            }
+            match self.inner.read(buffer) {
+                Ok(count) => {
+                    if count != 0 {
+                        let now = Instant::now();
+                        self.deadline = now.checked_add(self.timeout).unwrap_or(now);
+                    }
+                    return Ok(count);
+                }
+                Err(error) if retryable_tunnel_read(&error) && Instant::now() < self.deadline => {}
+                Err(error) => return Err(error),
+            }
+        }
     }
 }
 
@@ -756,9 +1987,15 @@ fn handle_connected_http(
             return;
         }
     };
-    let canonical_host = match context.scope.authorize(target.authority().host()) {
-        Ok(host) if host == *outer_host && target.authority().port() == connected_to.port() => host,
-        Ok(_) | Err(_) => {
+    let canonical_host = match context
+        .hns_scope
+        .as_ref()
+        .and_then(|scope| scope.authorize(target.authority().host()).ok())
+    {
+        Some(host) if host == *outer_host && target.authority().port() == connected_to.port() => {
+            host
+        }
+        Some(_) | None => {
             reject_scoped_request(
                 stream,
                 context,
@@ -936,14 +2173,11 @@ fn handle_admitted_upgrade<S: ClientIo + ?Sized>(
 fn admit_rate<W: Write + ?Sized>(
     stream: &mut W,
     context: &ServerContext,
-    canonical_host: &crate::NormalizedHost,
+    canonical_host: &str,
     method: ObservedMethod,
     likely_main_frame: bool,
 ) -> bool {
-    match context
-        .rate_limiter
-        .check(canonical_host.as_str(), Instant::now())
-    {
+    match context.rate_limiter.check(canonical_host, Instant::now()) {
         RateLimitDecision::Allowed => true,
         RateLimitDecision::Limited { scope, retry_after } => {
             let reason = match scope {
@@ -1633,6 +2867,88 @@ fn reject_http_request_with_status<W: Write + ?Sized>(
     );
 }
 
+fn reject_icann_http_error(
+    stream: &mut TcpStream,
+    context: &ServerContext,
+    host: &IcannHost,
+    method: ObservedMethod,
+    likely_main_frame: bool,
+    error: &Http1Error,
+) {
+    let rejection = if matches!(error, Http1Error::BodyTooLarge) {
+        RequestRejectionReason::RequestTooLarge
+    } else {
+        RequestRejectionReason::InvalidRequest
+    };
+    let (status, reason) = request_error_status(error);
+    reject_routed_request(
+        stream,
+        context,
+        host.as_str(),
+        method,
+        status,
+        reason,
+        rejection,
+        likely_main_frame,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reject_routed_request<W: Write + ?Sized>(
+    stream: &mut W,
+    context: &ServerContext,
+    host: &str,
+    method: ObservedMethod,
+    status: u16,
+    reason: &'static str,
+    rejection: RequestRejectionReason,
+    likely_main_frame: bool,
+) {
+    observe_request(
+        context,
+        host,
+        method,
+        RequestPhase::Rejected { reason: rejection },
+    );
+    observe_proxy_generated_response(context, host, method, status, likely_main_frame);
+    let _result = write_error_response(stream, status, reason, &[]);
+}
+
+fn observe_icann_failure(
+    context: &ServerContext,
+    host: &str,
+    method: ObservedMethod,
+    started: Instant,
+    error: IcannRouteError,
+) {
+    let kind = match error {
+        IcannRouteError::Cancelled => BackendFailureKind::Cancelled,
+        IcannRouteError::Resolution => BackendFailureKind::Resolution,
+        IcannRouteError::AddressDenied => BackendFailureKind::PolicyDenied,
+        IcannRouteError::Connection => BackendFailureKind::Upstream,
+        IcannRouteError::InvalidResponse => BackendFailureKind::InvalidResponse,
+    };
+    observe_request(
+        context,
+        host,
+        method,
+        RequestPhase::BackendFailed {
+            kind,
+            elapsed: started.elapsed(),
+        },
+    );
+}
+
+fn icann_route_error_response(error: IcannRouteError) -> (u16, &'static str) {
+    match error {
+        IcannRouteError::Cancelled => (503, "Proxy Request Cancelled"),
+        IcannRouteError::Resolution => (502, "ICANN Resolution Failed"),
+        IcannRouteError::AddressDenied => (403, "ICANN Destination Denied"),
+        IcannRouteError::Connection => (502, "ICANN Upstream Unavailable"),
+        IcannRouteError::InvalidResponse => (502, "Invalid ICANN Response"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reject_scoped_request<W: Write + ?Sized>(
     stream: &mut W,
@@ -1669,13 +2985,16 @@ fn reject_scoped_request_with_status<W: Write + ?Sized>(
     let _result = write_error_response(stream, status, reason, &[]);
 }
 
-fn scope_rejection(error: HostScopeError) -> (&'static str, RequestRejectionReason) {
+fn route_rejection(error: RouteRejection) -> (&'static str, RequestRejectionReason) {
     match error {
-        HostScopeError::OutOfScope => (
+        RouteRejection::Scope(HostScopeError::OutOfScope) => (
             "HNS Proxy Scope Denied",
             RequestRejectionReason::HostOutsideScope,
         ),
-        HostScopeError::NotHns | HostScopeError::InvalidHost(_) => (
+        RouteRejection::Scope(HostScopeError::NotHns | HostScopeError::InvalidHost(_))
+        | RouteRejection::SpecialUse
+        | RouteRejection::PrivateAddress
+        | RouteRejection::InvalidClass => (
             "Proxy Scope Denied",
             RequestRejectionReason::HostOutsideScope,
         ),
@@ -1833,11 +3152,11 @@ fn observe_client_rejection(context: &ServerContext, reason: ClientRejectionReas
 
 fn observe_request(
     context: &ServerContext,
-    host: &crate::NormalizedHost,
+    host: &str,
     method: ObservedMethod,
     phase: RequestPhase,
 ) {
-    let Ok(host) = ObservedHost::new(host.as_str()) else {
+    let Ok(host) = ObservedHost::new(host) else {
         return;
     };
     observe(
@@ -1853,13 +3172,13 @@ fn observe_request(
 
 fn observe_response_metadata(
     context: &ServerContext,
-    host: &crate::NormalizedHost,
+    host: &str,
     method: ObservedMethod,
     status_code: u16,
     likely_main_frame: bool,
     metadata: &crate::InternalResponseMetadata,
 ) {
-    let Ok(host) = ObservedHost::new(host.as_str()) else {
+    let Ok(host) = ObservedHost::new(host) else {
         return;
     };
     let observation = ProxyResponseMetadataObservation::new(
@@ -1877,7 +3196,7 @@ fn observe_response_metadata(
 
 fn observe_proxy_generated_response(
     context: &ServerContext,
-    host: &crate::NormalizedHost,
+    host: &str,
     method: ObservedMethod,
     status_code: u16,
     likely_main_frame: bool,
@@ -1904,7 +3223,7 @@ mod tests {
     use super::*;
     use crate::{
         NoopProxyObserver, ProxyInstanceId, ProxyResponseHead, ProxyResponseMetadataObservation,
-        ProxySessionId, ProxyTunnel,
+        ProxySessionId, ProxyTunnel, ProxyTunnelIo,
     };
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -1914,6 +3233,7 @@ mod tests {
     };
     use std::collections::VecDeque;
     use std::io::Cursor;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::sync::{Mutex, mpsc};
     use std::thread;
 
@@ -2231,6 +3551,178 @@ mod tests {
                 let _result = self.0.send(());
             }
         }
+    }
+
+    struct CountingIcannNetwork {
+        resolve_calls: AtomicUsize,
+        connect_calls: AtomicUsize,
+        addresses: Vec<SocketAddr>,
+        responses: Mutex<VecDeque<Vec<u8>>>,
+        written: Arc<Mutex<Vec<u8>>>,
+        idle_after_connect: bool,
+    }
+
+    impl CountingIcannNetwork {
+        fn new(addresses: Vec<SocketAddr>, responses: Vec<Vec<u8>>) -> Self {
+            Self {
+                resolve_calls: AtomicUsize::new(0),
+                connect_calls: AtomicUsize::new(0),
+                addresses,
+                responses: Mutex::new(responses.into()),
+                written: Arc::new(Mutex::new(Vec::new())),
+                idle_after_connect: false,
+            }
+        }
+
+        fn idle(addresses: Vec<SocketAddr>) -> Self {
+            Self {
+                idle_after_connect: true,
+                ..Self::new(addresses, Vec::new())
+            }
+        }
+
+        fn resolve_calls(&self) -> usize {
+            self.resolve_calls.load(AtomicOrdering::Acquire)
+        }
+
+        fn connect_calls(&self) -> usize {
+            self.connect_calls.load(AtomicOrdering::Acquire)
+        }
+
+        fn written(&self) -> Vec<u8> {
+            self.written
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    impl IcannNetwork for CountingIcannNetwork {
+        fn resolve(
+            &self,
+            _host: &str,
+            _port: u16,
+            cancellation: &CancellationToken,
+        ) -> Result<Vec<SocketAddr>, IcannNetworkError> {
+            self.resolve_calls.fetch_add(1, AtomicOrdering::AcqRel);
+            if cancellation.is_cancelled() {
+                Err(IcannNetworkError::Cancelled)
+            } else {
+                Ok(self.addresses.clone())
+            }
+        }
+
+        fn connect(
+            &self,
+            _address: SocketAddr,
+            _timeout: Duration,
+            cancellation: &CancellationToken,
+        ) -> Result<Box<dyn ProxyTunnelIo>, IcannNetworkError> {
+            self.connect_calls.fetch_add(1, AtomicOrdering::AcqRel);
+            if cancellation.is_cancelled() {
+                return Err(IcannNetworkError::Cancelled);
+            }
+            let response = self
+                .responses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .unwrap_or_default();
+            Ok(Box::new(ScriptedIcannStream {
+                response: Cursor::new(response),
+                written: Arc::clone(&self.written),
+                idle_after_response: self.idle_after_connect,
+            }))
+        }
+    }
+
+    struct ScriptedIcannStream {
+        response: Cursor<Vec<u8>>,
+        written: Arc<Mutex<Vec<u8>>>,
+        idle_after_response: bool,
+    }
+
+    impl Read for ScriptedIcannStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = self.response.read(buffer)?;
+            if count == 0 && self.idle_after_response {
+                thread::sleep(Duration::from_millis(5));
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "idle ICANN test stream",
+                ))
+            } else {
+                Ok(count)
+            }
+        }
+    }
+
+    impl Write for ScriptedIcannStream {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.written
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct PendingChunkStream {
+        prefix: Cursor<Vec<u8>>,
+        pending: Option<mpsc::Sender<()>>,
+    }
+
+    impl Read for PendingChunkStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = self.prefix.read(buffer)?;
+            if count != 0 {
+                return Ok(count);
+            }
+            if let Some(pending) = self.pending.take() {
+                let _result = pending.send(());
+            }
+            thread::sleep(Duration::from_millis(5));
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "pending chunk framing test read",
+            ))
+        }
+    }
+
+    impl Write for PendingChunkStream {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn whole_browser_config(scope: Option<&str>) -> ProxyConfig {
+        ProxyConfig::whole_browser(
+            ProxyInstanceId::new(ProxySessionId::generate().unwrap(), 1),
+            scope.map(|root| crate::HostScope::new(root).unwrap()),
+        )
+    }
+
+    fn start_proxy_with_icann_network(
+        config: ProxyConfig,
+        backend: Arc<dyn ProxyBackend>,
+        network: Arc<dyn IcannNetwork>,
+    ) -> RunningProxy {
+        RunningProxy::start_with_metadata_observer_and_icann_network(
+            config,
+            backend,
+            Arc::new(NoopProxyObserver),
+            Arc::new(NoopProxyResponseMetadataObserver),
+            network,
+        )
+        .unwrap()
     }
 
     fn start_recording_proxy(backend: Arc<RecordingBackend>) -> RunningProxy {
@@ -4015,5 +5507,412 @@ mod tests {
             ),
             Err(WriteBackendError::InvalidAfterHead)
         );
+    }
+
+    #[test]
+    fn whole_browser_never_resolves_or_dials_out_of_scope_hns() {
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:443".parse().unwrap()],
+            Vec::new(),
+        ));
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("unused")));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(Some("welcome")),
+            backend.clone(),
+            network.clone(),
+        );
+        for host in ["other", "sub.other"] {
+            let request = format!(
+                "CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        }
+        assert_eq!(network.resolve_calls(), 0);
+        assert_eq!(network.connect_calls(), 0);
+        assert_eq!(backend.request_count(), 0);
+        proxy.stop();
+
+        let deny_all_network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:443".parse().unwrap()],
+            Vec::new(),
+        ));
+        let deny_all = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            deny_all_network.clone(),
+        );
+        let request = format!(
+            "CONNECT welcome:443 HTTP/1.1\r\nHost: welcome:443\r\n{}\r\n",
+            auth_header(&deny_all)
+        );
+        assert_eq!(
+            response_status(&send_raw(&deny_all, request.as_bytes())),
+            403
+        );
+        assert_eq!(deny_all_network.resolve_calls(), 0);
+        assert_eq!(deny_all_network.connect_calls(), 0);
+    }
+
+    #[test]
+    fn default_scoped_mode_still_rejects_icann_without_network_or_backend() {
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:443".parse().unwrap()],
+            Vec::new(),
+        ));
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("unused")));
+        let proxy = start_proxy_with_icann_network(test_config(), backend.clone(), network.clone());
+        let request = format!(
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        assert_eq!(network.resolve_calls(), 0);
+        assert_eq!(network.connect_calls(), 0);
+        assert_eq!(backend.request_count(), 0);
+    }
+
+    #[test]
+    fn whole_browser_icann_connect_is_an_opaque_explicit_address_tunnel() {
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:443".parse().unwrap()],
+            vec![Vec::new()],
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network.clone(),
+        );
+        let request = format!(
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 200);
+        assert_eq!(network.resolve_calls(), 1);
+        assert_eq!(network.connect_calls(), 1);
+    }
+
+    #[test]
+    fn whole_browser_rejects_special_private_and_unsafe_targets_before_dial() {
+        let private_network = Arc::new(CountingIcannNetwork::new(
+            vec!["127.0.0.1:443".parse().unwrap()],
+            Vec::new(),
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            private_network.clone(),
+        );
+        let private_dns = format!(
+            "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(
+            response_status(&send_raw(&proxy, private_dns.as_bytes())),
+            403
+        );
+        assert_eq!(private_network.resolve_calls(), 1);
+        assert_eq!(private_network.connect_calls(), 0);
+
+        for authority in [
+            "example.com:22",
+            "localhost:443",
+            "127.0.0.1:443",
+            "[::1]:443",
+        ] {
+            let request = format!(
+                "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 403);
+        }
+        assert_eq!(private_network.resolve_calls(), 1);
+        assert_eq!(private_network.connect_calls(), 0);
+    }
+
+    #[test]
+    fn whole_browser_forwards_icann_http_with_bounded_canonical_framing() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: keep-alive\r\nX-Test: yes\r\n\r\nhello".to_vec();
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:80".parse().unwrap()],
+            vec![response],
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network.clone(),
+        );
+        let request = format!(
+            "GET http://example.com/path?q=1 HTTP/1.1\r\nHost: example.com\r\n{}X-HNS-Forged: no\r\nProxy-Future: no\r\n\r\n",
+            auth_header(&proxy)
+        );
+        let response = send_raw(&proxy, request.as_bytes());
+        let (head, body) = response_parts(&response);
+        assert_eq!(response_status(&response), 200);
+        assert_eq!(body, b"hello");
+        assert!(head.contains("Content-Length: 5\r\n"));
+        assert!(head.contains("Connection: close\r\n"));
+        let forwarded = String::from_utf8(network.written()).unwrap();
+        assert!(forwarded.starts_with("GET /path?q=1 HTTP/1.1\r\n"));
+        assert!(forwarded.contains("Host: example.com\r\n"));
+        assert!(!forwarded.to_ascii_lowercase().contains("proxy-"));
+        assert!(!forwarded.to_ascii_lowercase().contains("x-hns-"));
+        assert_eq!(network.resolve_calls(), 1);
+        assert_eq!(network.connect_calls(), 1);
+    }
+
+    #[test]
+    fn whole_browser_streams_large_and_chunked_icann_bodies_without_total_cap() {
+        let large_len = 8 * 1024 * 1024 + 17;
+        let mut fixed =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {large_len}\r\n\r\n").into_bytes();
+        fixed.resize(fixed.len() + large_len, b'x');
+        let chunked = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\n0\r\nX-Trailer: ignored\r\n\r\n".to_vec();
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:80".parse().unwrap()],
+            vec![fixed, chunked],
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network,
+        );
+        for (path, expected_len) in [("large", large_len), ("chunked", 9)] {
+            let request = format!(
+                "GET http://example.com/{path} HTTP/1.1\r\nHost: example.com\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            let response = send_raw(&proxy, request.as_bytes());
+            let (head, body) = response_parts(&response);
+            assert_eq!(response_status(&response), 200);
+            assert_eq!(body.len(), expected_len);
+            if path == "chunked" {
+                assert_eq!(body, b"Wikipedia");
+                assert!(!head.to_ascii_lowercase().contains("transfer-encoding"));
+            }
+        }
+    }
+
+    #[test]
+    fn whole_browser_icann_response_framing_handles_head_bodyless_close_and_invalid_lengths() {
+        let responses = vec![
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n".to_vec(),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 304 Not Modified\r\nContent-Length: 123\r\n\r\n".to_vec(),
+            b"HTTP/1.1 200 OK\r\nX-Mode: close\r\n\r\nclose body".to_vec(),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 1\r\n\r\nx".to_vec(),
+            b"HTTP/1.1 205 Reset Content\r\nContent-Length: 1\r\n\r\nx".to_vec(),
+        ];
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:80".parse().unwrap()],
+            responses,
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network,
+        );
+        let cases = [
+            ("HEAD", "head", 200, 0),
+            ("GET", "204", 204, 0),
+            ("GET", "205", 205, 0),
+            ("GET", "304", 304, 0),
+            ("GET", "close", 200, 10),
+            ("GET", "bad-204", 502, "Invalid ICANN Response".len()),
+            ("GET", "bad-205", 502, "Invalid ICANN Response".len()),
+        ];
+        for (method, path, status, body_len) in cases {
+            let request = format!(
+                "{method} http://example.com/{path} HTTP/1.1\r\nHost: example.com\r\n{}\r\n",
+                auth_header(&proxy)
+            );
+            let response = send_raw(&proxy, request.as_bytes());
+            let (head, body) = response_parts(&response);
+            assert_eq!(response_status(&response), status, "{path}: {head}");
+            assert_eq!(body.len(), body_len, "{path}: {head}");
+            if path == "head" {
+                assert!(head.contains("Content-Length: 5\r\n"));
+            }
+            if path == "close" {
+                assert_eq!(body, b"close body");
+                assert!(!head.to_ascii_lowercase().contains("content-length"));
+            }
+        }
+    }
+
+    #[test]
+    fn whole_browser_supports_icann_upgrade_and_public_ip_literals_without_dns() {
+        let upgrade = b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: accepted\r\n\r\n".to_vec();
+        let ip_response = b"HTTP/1.1 204 No Content\r\n\r\n".to_vec();
+        let ipv6_response = b"HTTP/1.1 204 No Content\r\n\r\n".to_vec();
+        let network = Arc::new(CountingIcannNetwork::new(
+            vec!["1.1.1.1:80".parse().unwrap()],
+            vec![upgrade, ip_response, ipv6_response],
+        ));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network.clone(),
+        );
+        let websocket = format!(
+            "GET ws://example.com/socket HTTP/1.1\r\nHost: example.com\r\n{}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: key\r\nSec-WebSocket-Version: 13\r\n\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(
+            response_status(&send_raw(&proxy, websocket.as_bytes())),
+            101
+        );
+        assert_eq!(network.resolve_calls(), 1);
+
+        let ip = format!(
+            "GET http://1.1.1.1/ HTTP/1.1\r\nHost: 1.1.1.1\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(response_status(&send_raw(&proxy, ip.as_bytes())), 204);
+        assert_eq!(network.resolve_calls(), 1, "public IP literal bypasses DNS");
+        let ipv6 = format!(
+            "GET http://[2606:4700:4700::1111]/ HTTP/1.1\r\nHost: [2606:4700:4700::1111]\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(response_status(&send_raw(&proxy, ipv6.as_bytes())), 204);
+        assert_eq!(
+            network.resolve_calls(),
+            1,
+            "public IPv6 literal bypasses DNS"
+        );
+        assert_eq!(network.connect_calls(), 3);
+
+        let legacy_ipv4 = format!(
+            "GET http://0177.0.0.1/ HTTP/1.1\r\nHost: 0177.0.0.1\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        assert_eq!(
+            response_status(&send_raw(&proxy, legacy_ipv4.as_bytes())),
+            400
+        );
+        assert_eq!(network.resolve_calls(), 1);
+        assert_eq!(network.connect_calls(), 3);
+    }
+
+    #[test]
+    fn whole_browser_keeps_active_hns_scope_on_the_existing_backend_path() {
+        let network = Arc::new(CountingIcannNetwork::new(Vec::new(), Vec::new()));
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain("hns")));
+        let proxy = start_proxy_with_icann_network(
+            whole_browser_config(Some("welcome")),
+            backend.clone(),
+            network.clone(),
+        );
+        let request = format!(
+            "GET http://sub.welcome/ HTTP/1.1\r\nHost: sub.welcome\r\n{}\r\n",
+            auth_header(&proxy)
+        );
+        let response = send_raw(&proxy, request.as_bytes());
+        assert_eq!(response_status(&response), 200);
+        assert_eq!(response_parts(&response).1, b"hns");
+        assert_eq!(backend.request_count(), 1);
+        assert_eq!(network.resolve_calls(), 0);
+        assert_eq!(network.connect_calls(), 0);
+    }
+
+    #[test]
+    fn stop_cancels_and_joins_idle_icann_response_work() {
+        let network = Arc::new(CountingIcannNetwork::idle(vec![
+            "1.1.1.1:80".parse().unwrap(),
+        ]));
+        let proxy = Arc::new(start_proxy_with_icann_network(
+            whole_browser_config(None),
+            Arc::new(UnusedBackend),
+            network.clone(),
+        ));
+        let worker_proxy = Arc::clone(&proxy);
+        let client = thread::spawn(move || {
+            let request = format!(
+                "GET http://example.com/idle HTTP/1.1\r\nHost: example.com\r\n{}\r\n",
+                auth_header(&worker_proxy)
+            );
+            send_raw(&worker_proxy, request.as_bytes())
+        });
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        while network.connect_calls() == 0 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(network.connect_calls(), 1);
+        let started = Instant::now();
+        proxy.stop();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(proxy.is_stopped());
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn cancellation_interrupts_all_pending_icann_chunk_framing_reads() {
+        for (stage, prefix) in [
+            ("chunk-size", b"".as_slice()),
+            ("chunk-crlf", b"1\r\nx".as_slice()),
+            ("trailer", b"0\r\n".as_slice()),
+        ] {
+            let cancellation = CancellationToken::new();
+            let worker_cancellation = cancellation.clone();
+            let (pending_tx, pending_rx) = mpsc::channel();
+            let (result_tx, result_rx) = mpsc::channel();
+            let prefix = prefix.to_vec();
+            let worker = thread::spawn(move || {
+                let mut origin = PendingChunkStream {
+                    prefix: Cursor::new(prefix),
+                    pending: Some(pending_tx),
+                };
+                let mut reader = InactivityReader::new(
+                    &mut origin,
+                    &worker_cancellation,
+                    Duration::from_secs(5),
+                );
+                let mut client = Vec::new();
+                let started = Instant::now();
+                let result = relay_chunked_body(&mut reader, &mut client);
+                let _result = result_tx.send((result, started.elapsed()));
+            });
+
+            pending_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .unwrap_or_else(|error| panic!("{stage} read did not become pending: {error}"));
+            assert!(cancellation.cancel(), "{stage} cancellation was not new");
+            let (result, elapsed) = result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or_else(|error| panic!("{stage} read ignored cancellation: {error}"));
+
+            assert_eq!(result, Err(IcannRouteError::InvalidResponse), "{stage}");
+            assert!(elapsed < Duration::from_secs(1), "{stage}: {elapsed:?}");
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn authentication_challenge_matching_is_revoked_on_stop_request() {
+        let proxy = RunningProxy::start(
+            test_config(),
+            Arc::new(UnusedBackend),
+            Arc::new(NoopProxyObserver),
+        )
+        .unwrap();
+        assert!(proxy.matches_authentication_challenge(
+            "127.0.0.1",
+            proxy.endpoint().port(),
+            proxy.endpoint().realm(),
+        ));
+        assert!(!proxy.matches_authentication_challenge(
+            "localhost",
+            proxy.endpoint().port(),
+            proxy.endpoint().realm(),
+        ));
+        proxy.request_stop();
+        assert!(proxy.is_stop_requested());
+        assert!(!proxy.matches_authentication_challenge(
+            "127.0.0.1",
+            proxy.endpoint().port(),
+            proxy.endpoint().realm(),
+        ));
+        proxy.stop();
     }
 }

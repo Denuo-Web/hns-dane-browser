@@ -19,10 +19,11 @@ use hns_dane::{
 use hns_gateway::{Gateway, GatewayConfig, GatewayError, GatewayRequest, HnsHttpsMode};
 use hns_loopback_proxy::{
     BackendError as ProxyBackendError, CancellationToken as ProxyCancellationToken, HostScope,
-    HostScopeError, InternalResponseMetadata, NoopProxyObserver, ProxyBackend, ProxyError,
-    ProxyHeader, ProxyInstanceId, ProxyRequest as LoopbackProxyRequest, ProxyRequestBody,
-    ProxyResponse, ProxyResponseBody, ProxyResponseHead, ProxyResponseMetadataObservation,
-    ProxyResponseMetadataObserver, ProxySessionId, ProxyTunnel, ProxyTunnelOpen, RunningProxy,
+    HostScopeError, IcannNetwork, IcannNetworkError, InternalResponseMetadata, NoopProxyObserver,
+    NormalizedHost, ProxyBackend, ProxyConfig, ProxyError, ProxyHeader, ProxyInstanceId,
+    ProxyRequest as LoopbackProxyRequest, ProxyRequestBody, ProxyResponse, ProxyResponseBody,
+    ProxyResponseHead, ProxyResponseMetadataObservation, ProxyResponseMetadataObserver,
+    ProxySessionId, ProxyTunnel, ProxyTunnelIo, ProxyTunnelOpen, RunningProxy,
     SessionIdGenerationError,
 };
 use hns_p2p::{
@@ -35,7 +36,7 @@ use hns_resolver::{
     DnsInterceptionStatus, DnsTransport, HnsDelegation, HnsProofProvider, HnsResourceValueProvider,
     NameClass, ProvenNameRecords, ResolutionAnswer, ResolutionRequest, Resolver, ResolverError,
     ResourceValueAnchor, SqliteResourceValueProvider, SystemDnssecVerifier, UdpTcpDnsTransport,
-    classify_name,
+    classify_name, hns_root_label,
 };
 use hns_sync::{
     HeaderSyncCoordinator, HeaderSyncRunner, HeaderSyncRunnerConfig, ProofScheduler, SyncError,
@@ -45,13 +46,14 @@ pub use hns_transport::DEFAULT_MAX_REQUEST_BODY_BYTES;
 use hns_transport::{
     OriginProtocol, OriginRequest, OriginResponse, OriginResponseHead, OriginTransport, ReadWrite,
     TcpHttpTransport, TlsCertificateInspection, TlsValidation, TlsaRecordSource, TransportError,
+    TransportLimits,
 };
 use hns_urkel::UrkelProofVerifier;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, RwLockReadGuard, TryLockError, Weak};
@@ -62,6 +64,49 @@ use thiserror::Error;
 pub const DEFAULT_RESOURCE_CACHE_LIMIT_BYTES: usize = 50 * 1024 * 1024;
 pub const MAX_GATEWAY_HEADER_TEXT_BYTES: usize = 64 * 1024;
 pub const MAX_BROWSER_PROXY_RESOLUTION_TRACE_JSON_BYTES: usize = 64 * 1024;
+
+/// Shared browser-facing classification; native shells must not duplicate
+/// the resolver's generated ICANN and special-use namespace policy.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserNameClass {
+    Hns = 0,
+    Icann = 1,
+    Search = 2,
+}
+
+pub fn classify_browser_name(input: &str) -> BrowserNameClass {
+    match classify_name(input) {
+        NameClass::Hns => BrowserNameClass::Hns,
+        NameClass::Icann => BrowserNameClass::Icann,
+        NameClass::Search => BrowserNameClass::Search,
+    }
+}
+
+/// Canonicalizes a DNS host or strict IP literal for proxy status identity.
+/// Exact bracketed IPv6 literals are accepted and returned without brackets.
+pub fn canonical_browser_host(input: &str) -> Option<String> {
+    if let Ok(address) = input.parse::<IpAddr>() {
+        return Some(address.to_string());
+    }
+    if let Some(address) = input
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+        .and_then(|inner| inner.parse::<Ipv6Addr>().ok())
+    {
+        return Some(address.to_string());
+    }
+    NormalizedHost::parse(input)
+        .ok()
+        .map(|host| host.to_string())
+}
+
+/// Returns the canonical HNS root label only for an HNS-classified input.
+pub fn browser_hns_root_label(input: &str) -> Option<String> {
+    (classify_name(input) == NameClass::Hns)
+        .then(|| hns_root_label(input).ok())
+        .flatten()
+}
 const DNS_CLASS_IN: u16 = 1;
 const DNS_OPT_RECORD_TYPE: u16 = 41;
 const DNS_RCODE_NOERROR: u8 = 0;
@@ -93,6 +138,24 @@ const HNS_DOH_HOST: &str = "zorro.hnsdoh.com";
 const HNS_DOH_PATH: &str = "/dns-query";
 const ICANN_DOH_HOST: &str = "cloudflare-dns.com";
 const ICANN_DOH_PATH: &str = "/dns-query";
+// Cloudflare's documented 1.1.1.1 resolver endpoints. Connecting to these
+// explicit addresses prevents the bounded resolver from recursively invoking
+// the operating-system name resolver; SNI/WebPKI still use ICANN_DOH_HOST.
+const ICANN_DOH_BOOTSTRAP_ADDRESSES: &[IpAddr] = &[
+    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+    IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111)),
+    IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+    IpAddr::V6(Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1001)),
+];
+const WHOLE_BROWSER_DOH_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const WHOLE_BROWSER_DOH_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WHOLE_BROWSER_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(6);
+const WHOLE_BROWSER_DOH_IO_POLL: Duration = Duration::from_millis(25);
+const WHOLE_BROWSER_TCP_READ_POLL: Duration = Duration::from_millis(25);
+const WHOLE_BROWSER_DOH_MAX_REQUEST_BODY_BYTES: usize = DEFAULT_DNS_UDP_PAYLOAD;
+const WHOLE_BROWSER_DOH_MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
+const WHOLE_BROWSER_DOH_MAX_RESPONSE_BODY_BYTES: usize = u16::MAX as usize;
+const MAX_WHOLE_BROWSER_CNAME_CHAIN: usize = 8;
 const HNS_GATEWAY_STRICT_MODE_HEADER: &str = "X-HNS-Browser-Strict-Mode";
 const HNS_GATEWAY_DOH_RESOLVER_HEADER: &str = "X-HNS-Browser-DoH-Resolver";
 const HNS_GATEWAY_STATELESS_DANE_HEADER: &str = "X-HNS-Browser-Stateless-DANE";
@@ -508,6 +571,11 @@ impl BrowserProxy {
         self.session_id() == session_id && self.generation() == generation
     }
 
+    pub fn matches_authentication_challenge(&self, host: &str, port: u16, realm: &str) -> bool {
+        self.running
+            .matches_authentication_challenge(host, port, realm)
+    }
+
     /// Validates challenge DER against the exact host identity retained by
     /// this live generation. Stopped, unknown, malformed, and stale matches
     /// fail closed inside `hns-loopback-proxy`.
@@ -528,6 +596,10 @@ impl BrowserProxy {
 
     pub fn is_stopped(&self) -> bool {
         self.running.is_stopped()
+    }
+
+    pub fn is_stop_requested(&self) -> bool {
+        self.running.is_stop_requested()
     }
 }
 
@@ -553,6 +625,269 @@ pub struct BrowserRuntime {
 #[derive(Clone)]
 pub struct RuntimeProxyBackend {
     runtime: BrowserRuntime,
+}
+
+/// Bounded ICANN DoH resolver and explicit-address TCP dialer used by the
+/// whole-browser proxy. It deliberately has no hostname-based TCP path.
+#[derive(Clone, Copy, Debug, Default)]
+struct WholeBrowserIcannNetwork;
+
+impl IcannNetwork for WholeBrowserIcannNetwork {
+    fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+        cancellation: &ProxyCancellationToken,
+    ) -> Result<Vec<SocketAddr>, IcannNetworkError> {
+        if cancellation.is_cancelled() {
+            return Err(IcannNetworkError::Cancelled);
+        }
+        if classify_name(host) != NameClass::Icann {
+            return Err(IcannNetworkError::ResolutionFailed);
+        }
+        let qname = DnsName::from_ascii(host).map_err(|_| IcannNetworkError::ResolutionFailed)?;
+        let now = Instant::now();
+        let deadline = now
+            .checked_add(WHOLE_BROWSER_RESOLUTION_TIMEOUT)
+            .unwrap_or(now);
+        let mut addresses = Vec::new();
+        let mut successful_query = false;
+        for record_type in [RecordType::A, RecordType::Aaaa] {
+            match resolve_whole_browser_icann_family(&qname, record_type, cancellation, deadline) {
+                Ok(resolved) => {
+                    successful_query = true;
+                    for address in resolved {
+                        let socket = SocketAddr::new(address, port);
+                        if !addresses.contains(&socket) {
+                            addresses.push(socket);
+                        }
+                    }
+                }
+                Err(IcannNetworkError::Cancelled) => return Err(IcannNetworkError::Cancelled),
+                Err(IcannNetworkError::ResolutionFailed | IcannNetworkError::ConnectionFailed) => {}
+            }
+        }
+        if cancellation.is_cancelled() {
+            return Err(IcannNetworkError::Cancelled);
+        }
+        if !successful_query || addresses.is_empty() {
+            return Err(IcannNetworkError::ResolutionFailed);
+        }
+        Ok(addresses)
+    }
+
+    fn connect(
+        &self,
+        address: SocketAddr,
+        timeout: Duration,
+        cancellation: &ProxyCancellationToken,
+    ) -> Result<Box<dyn ProxyTunnelIo>, IcannNetworkError> {
+        if cancellation.is_cancelled() {
+            return Err(IcannNetworkError::Cancelled);
+        }
+        let timeout = timeout.min(WHOLE_BROWSER_DOH_READ_TIMEOUT);
+        if timeout.is_zero() {
+            return Err(IcannNetworkError::ConnectionFailed);
+        }
+        let stream = TcpStream::connect_timeout(&address, timeout)
+            .map_err(|_error| IcannNetworkError::ConnectionFailed)?;
+        if cancellation.is_cancelled() {
+            return Err(IcannNetworkError::Cancelled);
+        }
+        stream
+            .set_nodelay(true)
+            .and_then(|()| stream.set_read_timeout(Some(WHOLE_BROWSER_TCP_READ_POLL)))
+            .and_then(|()| stream.set_write_timeout(Some(timeout)))
+            .map_err(|_error| IcannNetworkError::ConnectionFailed)?;
+        Ok(Box::new(stream))
+    }
+}
+
+fn resolve_whole_browser_icann_family(
+    qname: &DnsName,
+    record_type: RecordType,
+    cancellation: &ProxyCancellationToken,
+    deadline: Instant,
+) -> Result<Vec<IpAddr>, IcannNetworkError> {
+    let is_cancelled = || cancellation.is_cancelled();
+    resolve_whole_browser_icann_family_with_fetch(
+        qname,
+        record_type,
+        ICANN_DOH_BOOTSTRAP_ADDRESSES,
+        &is_cancelled,
+        deadline,
+        |bootstrap, query| {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| {
+                    TransportError::Io("whole-browser DNS deadline exceeded".to_owned())
+                })?;
+            let transport = TcpHttpTransport::new(
+                WHOLE_BROWSER_DOH_CONNECT_TIMEOUT.min(remaining),
+                WHOLE_BROWSER_DOH_READ_TIMEOUT.min(remaining),
+                whole_browser_doh_transport_limits(),
+            );
+            fetch_doh_message_at_with_control(
+                &transport,
+                &default_icann_doh_endpoint(),
+                bootstrap,
+                query,
+                deadline,
+                is_cancelled,
+            )
+        },
+    )
+}
+
+fn resolve_whole_browser_icann_family_with_fetch<C, F>(
+    qname: &DnsName,
+    record_type: RecordType,
+    bootstrap_addresses: &[IpAddr],
+    is_cancelled: &C,
+    deadline: Instant,
+    mut fetch: F,
+) -> Result<Vec<IpAddr>, IcannNetworkError>
+where
+    C: Fn() -> bool + Sync,
+    F: FnMut(IpAddr, Vec<u8>) -> Result<OriginResponse, TransportError>,
+{
+    let query = build_doh_query(DOH_DNS_ID, qname, record_type)
+        .map_err(|_error| IcannNetworkError::ResolutionFailed)?;
+    for bootstrap in bootstrap_addresses {
+        check_whole_browser_resolution_control(is_cancelled, deadline)?;
+        let response = fetch(*bootstrap, query.clone());
+        let Ok(response) = response else {
+            check_whole_browser_resolution_control(is_cancelled, deadline)?;
+            continue;
+        };
+        check_whole_browser_resolution_control(is_cancelled, deadline)?;
+        if !doh_http_status_success(response.status)
+            || !doh_response_has_dns_message_content_type(&response)
+        {
+            continue;
+        }
+        let Ok(answer) = whole_browser_doh_answer_from_body(qname, record_type, &response.body)
+        else {
+            continue;
+        };
+        return addresses_for_dns_owner(&answer.records, qname, &record_type)
+            .map_err(|()| IcannNetworkError::ResolutionFailed);
+    }
+    Err(IcannNetworkError::ResolutionFailed)
+}
+
+fn check_whole_browser_resolution_control<C>(
+    is_cancelled: &C,
+    deadline: Instant,
+) -> Result<(), IcannNetworkError>
+where
+    C: Fn() -> bool + Sync,
+{
+    if is_cancelled() {
+        return Err(IcannNetworkError::Cancelled);
+    }
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .map(|_remaining| ())
+        .ok_or(IcannNetworkError::ResolutionFailed)
+}
+
+const fn whole_browser_doh_transport_limits() -> TransportLimits {
+    TransportLimits {
+        max_request_body_bytes: WHOLE_BROWSER_DOH_MAX_REQUEST_BODY_BYTES,
+        max_response_header_bytes: WHOLE_BROWSER_DOH_MAX_RESPONSE_HEADER_BYTES,
+        max_response_body_bytes: WHOLE_BROWSER_DOH_MAX_RESPONSE_BODY_BYTES,
+    }
+}
+
+fn whole_browser_doh_answer_from_body(
+    qname: &DnsName,
+    record_type: RecordType,
+    body: &[u8],
+) -> Result<ResolutionAnswer, ResolverError> {
+    let message = DnsMessage::parse(body).map_err(|_| ResolverError::InvalidDnsResponse)?;
+    if message.header.flags.truncated() || message.header.flags.rcode() != DNS_RCODE_NOERROR {
+        return Err(ResolverError::InvalidDnsResponse);
+    }
+    doh_answer_from_body(DOH_DNS_ID, qname, record_type, body)
+}
+
+fn addresses_for_dns_owner(
+    records: &[ResourceRecord],
+    queried_owner: &DnsName,
+    expected: &RecordType,
+) -> Result<Vec<IpAddr>, ()> {
+    let mut owner = queried_owner.clone();
+    let mut visited = vec![owner.clone()];
+    for depth in 0..=MAX_WHOLE_BROWSER_CNAME_CHAIN {
+        if records.iter().any(|record| {
+            record.name == owner
+                && record.record_type == RecordType::Cname
+                && record.class != DNS_CLASS_IN
+        }) || records.iter().any(|record| {
+            record.name == owner && &record.record_type == expected && record.class != DNS_CLASS_IN
+        }) {
+            return Err(());
+        }
+        let cname_records: Vec<_> = records
+            .iter()
+            .filter(|record| {
+                record.name == owner
+                    && record.record_type == RecordType::Cname
+                    && record.class == DNS_CLASS_IN
+            })
+            .collect();
+        let address_records: Vec<_> = records
+            .iter()
+            .filter(|record| {
+                record.name == owner
+                    && &record.record_type == expected
+                    && record.class == DNS_CLASS_IN
+            })
+            .collect();
+        if !address_records.is_empty() {
+            if !cname_records.is_empty() {
+                return Err(());
+            }
+            let mut addresses = Vec::new();
+            for record in address_records {
+                let address = match expected {
+                    RecordType::A => <[u8; 4]>::try_from(record.rdata.as_slice())
+                        .map(Ipv4Addr::from)
+                        .map(IpAddr::V4)
+                        .map_err(|_error| ())?,
+                    RecordType::Aaaa => <[u8; 16]>::try_from(record.rdata.as_slice())
+                        .map(Ipv6Addr::from)
+                        .map(IpAddr::V6)
+                        .map_err(|_error| ())?,
+                    _ => return Err(()),
+                };
+                if !addresses.contains(&address) {
+                    addresses.push(address);
+                }
+            }
+            return Ok(addresses);
+        }
+        let [record] = cname_records.as_slice() else {
+            return if cname_records.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Err(())
+            };
+        };
+        if depth == MAX_WHOLE_BROWSER_CNAME_CHAIN {
+            return Err(());
+        }
+        let (target, end) = DnsName::parse_wire(&record.rdata, 0).map_err(|_error| ())?;
+        if end != record.rdata.len() || visited.contains(&target) {
+            return Err(());
+        }
+        visited.push(target.clone());
+        owner = target;
+    }
+    Err(())
 }
 
 impl std::fmt::Debug for RuntimeProxyBackend {
@@ -745,10 +1080,59 @@ impl BrowserRuntime {
         let instance = ProxyInstanceId::new(session, generation);
         let metadata_observer = RuntimeProxyStatusMetadataObserver { observer };
         let running = RunningProxy::start_with_metadata_observer(
-            hns_loopback_proxy::ProxyConfig::new(instance, scope),
+            ProxyConfig::new(instance, scope),
             Arc::new(self.proxy_backend()),
             Arc::new(NoopProxyObserver),
             Arc::new(metadata_observer),
+        )?;
+        Ok(BrowserProxy { running })
+    }
+
+    /// Starts a whole-browser proxy for engines whose proxy match rules cannot
+    /// safely express the HNS namespace. `None` explicitly denies all HNS
+    /// targets while still routing ICANN traffic; `Some` admits exactly that
+    /// immutable HNS root and its subdomains.
+    pub fn start_whole_browser_proxy(
+        &self,
+        hns_scope_root: Option<&str>,
+    ) -> Result<BrowserProxy, BrowserProxyError> {
+        self.start_whole_browser_proxy_with_observer(
+            hns_scope_root,
+            Arc::new(NoopBrowserProxyStatusObserver),
+        )
+    }
+
+    /// Starts a whole-browser generation with typed HNS status observation.
+    /// ICANN HTTPS remains an opaque CONNECT tunnel and therefore retains the
+    /// browser engine's WebPKI verification.
+    pub fn start_whole_browser_proxy_with_observer(
+        &self,
+        hns_scope_root: Option<&str>,
+        observer: Arc<dyn BrowserProxyStatusObserver>,
+    ) -> Result<BrowserProxy, BrowserProxyError> {
+        let hns_scope = hns_scope_root.map(HostScope::new).transpose()?;
+        let generation = self
+            .inner
+            .proxy_generation
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| BrowserProxyError::GenerationExhausted)?
+            + 1;
+        let session = if let Some(session) = self.inner.proxy_session.get() {
+            session.clone()
+        } else {
+            let generated = ProxySessionId::generate()?;
+            self.inner.proxy_session.get_or_init(|| generated).clone()
+        };
+        let instance = ProxyInstanceId::new(session, generation);
+        let metadata_observer = RuntimeProxyStatusMetadataObserver { observer };
+        let running = RunningProxy::start_with_metadata_observer_and_icann_network(
+            ProxyConfig::whole_browser(instance, hns_scope),
+            Arc::new(self.proxy_backend()),
+            Arc::new(NoopProxyObserver),
+            Arc::new(metadata_observer),
+            Arc::new(WholeBrowserIcannNetwork),
         )?;
         Ok(BrowserProxy { running })
     }
@@ -2660,11 +3044,38 @@ fn fetch_doh_message(
     endpoint: &HnsDohEndpoint,
     body: Vec<u8>,
 ) -> Result<OriginResponse, TransportError> {
-    http.fetch(&OriginRequest {
+    http.fetch(&doh_origin_request(endpoint, None, body))
+}
+
+fn fetch_doh_message_at_with_control<F>(
+    http: &TcpHttpTransport,
+    endpoint: &HnsDohEndpoint,
+    connect_address: IpAddr,
+    body: Vec<u8>,
+    deadline: Instant,
+    is_cancelled: F,
+) -> Result<OriginResponse, TransportError>
+where
+    F: Fn() -> bool + Sync,
+{
+    http.fetch_http11_with_control(
+        &doh_origin_request(endpoint, Some(connect_address.to_string()), body),
+        deadline,
+        WHOLE_BROWSER_DOH_IO_POLL,
+        is_cancelled,
+    )
+}
+
+fn doh_origin_request(
+    endpoint: &HnsDohEndpoint,
+    connect_host: Option<String>,
+    body: Vec<u8>,
+) -> OriginRequest {
+    OriginRequest {
         method: "POST".to_owned(),
         scheme: "https".to_owned(),
         host: endpoint.host.clone(),
-        connect_host: None,
+        connect_host,
         port: endpoint.port,
         path_and_query: endpoint.path_and_query.clone(),
         protocol: OriginProtocol::Http11,
@@ -2677,7 +3088,7 @@ fn fetch_doh_message(
             ),
         ],
         body,
-    })
+    }
 }
 
 fn fetch_authoritative_doh_message(
@@ -6296,6 +6707,274 @@ mod tests {
     }
 
     #[test]
+    fn browser_name_policy_wraps_shared_classification_and_hns_root() {
+        assert_eq!(classify_browser_name("welcome"), BrowserNameClass::Hns);
+        assert_eq!(classify_browser_name("sub.welcome"), BrowserNameClass::Hns);
+        assert_eq!(
+            classify_browser_name("example.com"),
+            BrowserNameClass::Icann
+        );
+        assert_eq!(classify_browser_name("  "), BrowserNameClass::Search);
+        assert_eq!(
+            browser_hns_root_label("sub.welcome"),
+            Some("welcome".to_owned())
+        );
+        assert_eq!(browser_hns_root_label("example.com"), None);
+    }
+
+    #[test]
+    fn canonical_browser_host_uses_proxy_trust_boundary_normalization() {
+        assert_eq!(
+            canonical_browser_host("BÜCHER.Example."),
+            Some("xn--bcher-kva.example".to_owned())
+        );
+        assert_eq!(
+            canonical_browser_host("127.0.0.1"),
+            Some("127.0.0.1".to_owned())
+        );
+        assert_eq!(
+            canonical_browser_host("[2001:0db8::1]"),
+            Some("2001:db8::1".to_owned())
+        );
+        assert_eq!(canonical_browser_host("127.1"), None);
+        assert_eq!(canonical_browser_host("2130706433"), None);
+        assert_eq!(canonical_browser_host("[fe80::1%en0]"), None);
+        assert_eq!(canonical_browser_host("example.com:443"), None);
+    }
+
+    #[test]
+    fn whole_browser_doh_bootstrap_separates_webpki_identity_from_connect_address() {
+        let endpoint = default_icann_doh_endpoint();
+        let request = doh_origin_request(&endpoint, Some("1.1.1.1".to_owned()), vec![1, 2, 3]);
+        assert_eq!(request.host, ICANN_DOH_HOST);
+        assert_eq!(request.connect_host.as_deref(), Some("1.1.1.1"));
+        assert_eq!(request.tls.mode, hns_dane::DomainTrustMode::IcannWebPki);
+        assert_eq!(request.scheme, "https");
+        assert_eq!(request.path_and_query, ICANN_DOH_PATH);
+    }
+
+    #[test]
+    fn whole_browser_address_extraction_rejects_unrelated_and_invalid_cname_chains() {
+        fn record(owner: &str, record_type: RecordType, rdata: Vec<u8>) -> ResourceRecord {
+            ResourceRecord {
+                name: DnsName::from_ascii(owner).unwrap(),
+                record_type,
+                class: DNS_CLASS_IN,
+                ttl: 30,
+                rdata,
+            }
+        }
+        fn cname(owner: &str, target: &str) -> ResourceRecord {
+            let mut rdata = Vec::new();
+            DnsName::from_ascii(target)
+                .unwrap()
+                .encode_wire(&mut rdata)
+                .unwrap();
+            record(owner, RecordType::Cname, rdata)
+        }
+
+        let query = DnsName::from_ascii("www.example.com").unwrap();
+        let unrelated = vec![record("attacker.example", RecordType::A, vec![1, 1, 1, 1])];
+        assert_eq!(
+            addresses_for_dns_owner(&unrelated, &query, &RecordType::A),
+            Ok(Vec::new())
+        );
+
+        let valid = vec![
+            cname("www.example.com", "edge.example.net"),
+            record("edge.example.net", RecordType::A, vec![1, 1, 1, 1]),
+            record("unrelated.example", RecordType::A, vec![8, 8, 8, 8]),
+        ];
+        assert_eq!(
+            addresses_for_dns_owner(&valid, &query, &RecordType::A),
+            Ok(vec!["1.1.1.1".parse().unwrap()])
+        );
+
+        let duplicate = vec![
+            cname("www.example.com", "a.example"),
+            cname("www.example.com", "b.example"),
+        ];
+        assert_eq!(
+            addresses_for_dns_owner(&duplicate, &query, &RecordType::A),
+            Err(())
+        );
+        let looped = vec![
+            cname("www.example.com", "a.example"),
+            cname("a.example", "www.example.com"),
+        ];
+        assert_eq!(
+            addresses_for_dns_owner(&looped, &query, &RecordType::A),
+            Err(())
+        );
+
+        let mut overlong = Vec::new();
+        let mut owner = "www.example.com".to_owned();
+        for index in 0..=MAX_WHOLE_BROWSER_CNAME_CHAIN {
+            let target = format!("c{index}.example");
+            overlong.push(cname(&owner, &target));
+            owner = target;
+        }
+        overlong.push(record(&owner, RecordType::A, vec![1, 1, 1, 1]));
+        assert_eq!(
+            addresses_for_dns_owner(&overlong, &query, &RecordType::A),
+            Err(())
+        );
+        assert_eq!(
+            addresses_for_dns_owner(&[], &query, &RecordType::A),
+            Ok(Vec::new())
+        );
+        let mut wrong_class = record("www.example.com", RecordType::A, vec![1, 1, 1, 1]);
+        wrong_class.class = 3;
+        assert_eq!(
+            addresses_for_dns_owner(&[wrong_class], &query, &RecordType::A),
+            Err(())
+        );
+    }
+
+    #[test]
+    fn whole_browser_doh_rejects_nxdomain_truncated_and_contradictory_addresses() {
+        fn encoded_response(flags: u16) -> Vec<u8> {
+            let qname = DnsName::from_ascii("example.com").unwrap();
+            DnsMessage {
+                header: DnsHeader {
+                    id: DOH_DNS_ID,
+                    flags: DnsFlags::new(flags),
+                    question_count: 1,
+                    answer_count: 1,
+                    authority_count: 0,
+                    additional_count: 0,
+                },
+                questions: vec![DnsQuestion {
+                    name: qname.clone(),
+                    record_type: RecordType::A,
+                    class: DNS_CLASS_IN,
+                }],
+                answers: vec![ResourceRecord {
+                    name: qname,
+                    record_type: RecordType::A,
+                    class: DNS_CLASS_IN,
+                    ttl: 30,
+                    rdata: vec![1, 1, 1, 1],
+                }],
+                authorities: Vec::new(),
+                additionals: Vec::new(),
+            }
+            .encode(&DnsEncodeConfig {
+                max_message_len: DEFAULT_DNS_UDP_PAYLOAD,
+            })
+            .unwrap()
+        }
+
+        let qname = DnsName::from_ascii("example.com").unwrap();
+        let valid = encoded_response(0x8180);
+        assert!(whole_browser_doh_answer_from_body(&qname, RecordType::A, &valid).is_ok());
+        let nxdomain_with_address = encoded_response(0x8183);
+        assert_eq!(
+            whole_browser_doh_answer_from_body(&qname, RecordType::A, &nxdomain_with_address),
+            Err(ResolverError::InvalidDnsResponse)
+        );
+        let truncated_with_address = encoded_response(0x8380);
+        assert_eq!(
+            whole_browser_doh_answer_from_body(&qname, RecordType::A, &truncated_with_address),
+            Err(ResolverError::InvalidDnsResponse)
+        );
+    }
+
+    #[test]
+    fn whole_browser_doh_follows_compressed_cname_target() {
+        let qname = DnsName::from_ascii("example.com").unwrap();
+        let body = b"\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01\xc0\x0c\x00\x05\x00\x01\x00\x00\x00\x3c\x00\x07\x04edge\xc0\x0c\xc0\x29\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04\x01\x01\x01\x01";
+
+        let answer = whole_browser_doh_answer_from_body(&qname, RecordType::A, body).unwrap();
+
+        assert_eq!(
+            addresses_for_dns_owner(&answer.records, &qname, &RecordType::A),
+            Ok(vec!["1.1.1.1".parse().unwrap()])
+        );
+    }
+
+    #[test]
+    fn whole_browser_resolution_deadline_fails_before_network_work() {
+        let qname = DnsName::from_ascii("example.com").unwrap();
+        assert_eq!(
+            resolve_whole_browser_icann_family(
+                &qname,
+                RecordType::A,
+                &ProxyCancellationToken::new(),
+                Instant::now(),
+            ),
+            Err(IcannNetworkError::ResolutionFailed)
+        );
+    }
+
+    #[test]
+    fn whole_browser_resolution_rechecks_the_absolute_deadline_after_fetch() {
+        let qname = DnsName::from_ascii("example.com").unwrap();
+        let attempts = AtomicU64::new(0);
+        let deadline = Instant::now() + Duration::from_millis(20);
+
+        let result = resolve_whole_browser_icann_family_with_fetch(
+            &qname,
+            RecordType::A,
+            &[
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            ],
+            &|| false,
+            deadline,
+            |_bootstrap, _query| {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                thread::sleep(Duration::from_millis(50));
+                Ok(OriginResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: Vec::new(),
+                    dane_decision: DaneDecision::NoTlsa,
+                    tls_inspection: None,
+                })
+            },
+        );
+
+        assert_eq!(result, Err(IcannNetworkError::ResolutionFailed));
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn whole_browser_resolution_observes_cancellation_after_fetch() {
+        let qname = DnsName::from_ascii("example.com").unwrap();
+        let cancelled = AtomicBool::new(false);
+        let is_cancelled = || cancelled.load(Ordering::Acquire);
+
+        let result = resolve_whole_browser_icann_family_with_fetch(
+            &qname,
+            RecordType::A,
+            &[IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            &is_cancelled,
+            Instant::now() + Duration::from_secs(1),
+            |_bootstrap, _query| {
+                cancelled.store(true, Ordering::Release);
+                Err(TransportError::Io("cancelled test fetch".to_owned()))
+            },
+        );
+
+        assert_eq!(result, Err(IcannNetworkError::Cancelled));
+    }
+
+    #[test]
+    fn whole_browser_doh_uses_dns_specific_transport_limits() {
+        let limits = whole_browser_doh_transport_limits();
+
+        assert_eq!(limits.max_request_body_bytes, DEFAULT_DNS_UDP_PAYLOAD);
+        assert_eq!(limits.max_response_header_bytes, 16 * 1024);
+        assert_eq!(limits.max_response_body_bytes, u16::MAX as usize);
+        assert!(limits.max_request_body_bytes >= 1232);
+        assert!(limits.max_response_body_bytes < 64 * 1024);
+        assert!(
+            limits.max_response_body_bytes < TransportLimits::default().max_response_body_bytes
+        );
+    }
+
+    #[test]
     fn browser_runtime_is_send_and_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<BrowserRuntime>();
@@ -6495,6 +7174,38 @@ mod tests {
 
         assert!(matches!(
             runtime.start_proxy("example.com"),
+            Err(BrowserProxyError::Scope(HostScopeError::NotHns))
+        ));
+        cleanup_dir(&data_dir);
+    }
+
+    #[test]
+    fn browser_runtime_starts_explicit_whole_browser_scope_and_deny_all_generations() {
+        let data_dir = temp_dir_path("browser-runtime-whole-browser");
+        let runtime =
+            BrowserRuntime::open(RuntimeConfiguration::new(&data_dir, NetworkKind::Regtest))
+                .unwrap();
+        let icann_only = runtime.start_whole_browser_proxy(None).unwrap();
+        let scoped = runtime.start_whole_browser_proxy(Some("welcome")).unwrap();
+        assert_eq!(icann_only.generation(), 1);
+        assert_eq!(scoped.generation(), 2);
+        assert_eq!(icann_only.session_id(), scoped.session_id());
+        assert!(icann_only.matches_authentication_challenge(
+            "127.0.0.1",
+            icann_only.port(),
+            icann_only.authorization_realm(),
+        ));
+        icann_only.request_stop();
+        assert!(icann_only.is_stop_requested());
+        assert!(!icann_only.matches_authentication_challenge(
+            "127.0.0.1",
+            icann_only.port(),
+            icann_only.authorization_realm(),
+        ));
+        icann_only.stop();
+        scoped.stop();
+        assert!(matches!(
+            runtime.start_whole_browser_proxy(Some("example.com")),
             Err(BrowserProxyError::Scope(HostScopeError::NotHns))
         ));
         cleanup_dir(&data_dir);

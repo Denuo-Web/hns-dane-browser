@@ -5,10 +5,12 @@
 //! cannot cross this interface accidentally.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::time::Duration;
 use thiserror::Error;
 
-/// A validated, canonical ASCII DNS host suitable for diagnostics.
+/// A validated, canonical ASCII DNS host or public IP literal suitable for
+/// diagnostics.
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ObservedHost(String);
 
@@ -18,6 +20,12 @@ impl ObservedHost {
             return Err(ObservedHostError::Empty);
         }
         if host.len() > 253 || !host.is_ascii() {
+            return Err(ObservedHostError::InvalidDnsName);
+        }
+        if let Ok(address) = host.parse::<IpAddr>() {
+            if address.to_string() == host.to_ascii_lowercase() {
+                return Ok(Self(host.to_ascii_lowercase()));
+            }
             return Err(ObservedHostError::InvalidDnsName);
         }
         for label in host.split('.') {
