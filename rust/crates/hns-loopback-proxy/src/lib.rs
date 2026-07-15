@@ -1,0 +1,53 @@
+//! Authenticated, host-scoped loopback proxy shared by native browser shells.
+
+#![cfg_attr(
+    not(test),
+    deny(clippy::expect_used, clippy::panic, clippy::unwrap_used)
+)]
+
+pub mod auth;
+pub mod backend;
+pub mod config;
+pub mod endpoint;
+pub mod event;
+pub mod host;
+pub mod http1;
+pub mod rate_limit;
+pub mod response;
+pub mod server;
+
+mod listener;
+
+pub use auth::{
+    AuthorizationGenerationError, PROXY_AUTHENTICATE_HEADER, PROXY_AUTHORIZATION_HEADER,
+    ProxyAuthorization,
+};
+pub use backend::{
+    BackendError, CancellationToken, ProxyBackend, ProxyHeader, ProxyRequest, ProxyRequestBody,
+    ProxyResponse, ProxyResponseBody, ProxyResponseHead,
+};
+pub use config::{
+    LoopbackBind, ProxyConfig, ProxyInstanceId, ProxyLimits, ProxyLimitsError, ProxySessionId,
+    ProxyTimeouts, ProxyTimeoutsError, SessionIdGenerationError,
+};
+pub use endpoint::ProxyEndpoint;
+pub use event::{
+    BackendFailureKind, ClientRejectionReason, LifecycleEvent, NoopProxyObserver, ObservedHost,
+    ObservedHostError, ObservedMethod, ProxyEvent, ProxyObserver, RequestPhase,
+    RequestRejectionReason, StopReason,
+};
+pub use host::{HostNormalizationError, HostScope, HostScopeError, NormalizedHost};
+pub use http1::{
+    AbsoluteTarget, Authority, BodyFraming, Header, Http1Error, HttpVersion, OriginTarget,
+    RequestHead, RequestTarget, Scheme, determine_body_framing, parse_request_head,
+    read_chunked_body, read_request_body, read_request_head, sanitize_forward_headers,
+};
+pub use rate_limit::{
+    ActiveClientLimiter, ActiveClientPermit, RateLimitConfig, RateLimitConfigError,
+    RateLimitDecision, RateLimitScope, RequestRateLimiter,
+};
+pub use response::{
+    EncodedResponseHead, InternalResponseMetadata, ResponseError, SanitizedResponseHeaders,
+    encode_response_head, sanitize_response_headers,
+};
+pub use server::{ProxyError, RunningProxy};

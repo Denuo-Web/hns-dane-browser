@@ -589,7 +589,7 @@ impl BrowserRuntime {
                     "gateway request contains an invalid header".to_owned(),
                 ));
             }
-            if is_gateway_control_header(name) {
+            if is_reserved_hns_header(name) {
                 continue;
             }
             header_text.push_str(name);
@@ -619,7 +619,7 @@ impl BrowserRuntime {
     }
 }
 
-fn is_gateway_control_header(name: &str) -> bool {
+fn is_reserved_hns_header(name: &str) -> bool {
     name.get(..6)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("X-HNS-"))
 }
@@ -2946,12 +2946,7 @@ fn suppressed_origin_response_header(name: &str) -> bool {
         || name.eq_ignore_ascii_case("content-length")
         || name.eq_ignore_ascii_case("transfer-encoding")
         || name.eq_ignore_ascii_case("trailer")
-        || name.eq_ignore_ascii_case("x-hns-tls-policy")
-        || name.eq_ignore_ascii_case("x-hns-resolver-policy")
-        || name.eq_ignore_ascii_case(HNS_SECURITY_PATH_HEADER)
-        || name.eq_ignore_ascii_case(HNS_RESOLUTION_TRACE_HEADER)
-        || name.eq_ignore_ascii_case(HNS_RESOLVER_MODE_HEADER)
-        || name.eq_ignore_ascii_case(HNS_DOH_FALLBACK_HEADER)
+        || is_reserved_hns_header(name)
 }
 
 #[derive(Clone, Copy, Default)]
@@ -6289,6 +6284,27 @@ mod tests {
 
         assert!(!text.contains("X-HNS-TLS-Policy: origin\r\n"));
         assert!(text.contains("X-HNS-TLS-Policy: webpki-fallback\r\n"));
+    }
+
+    #[test]
+    fn origin_response_suppresses_the_entire_reserved_hns_header_namespace() {
+        let response = origin_response(OriginResponse {
+            status: 200,
+            headers: vec![(
+                "x-hns-future-security-metadata".to_owned(),
+                "origin-controlled".to_owned(),
+            )],
+            body: b"ok".to_vec(),
+            dane_decision: DaneDecision::WebPkiFallback,
+            tls_inspection: None,
+        });
+        let text = String::from_utf8(response).unwrap();
+
+        assert!(
+            !text
+                .to_ascii_lowercase()
+                .contains("x-hns-future-security-metadata")
+        );
     }
 
     #[test]

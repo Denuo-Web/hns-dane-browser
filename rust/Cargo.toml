@@ -10,6 +10,7 @@ members = [
     "crates/hns-dane",
     "crates/hns-dnssec",
     "crates/hns-gateway",
+    "crates/hns-loopback-proxy",
     "crates/hns-p2p",
     "crates/hns-resolver",
     "crates/hns-sync",
@@ -24,6 +25,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 rust-version = "1.92"
 
 [workspace.dependencies]
+base64 = "0.22"
 blake2 = "0.10"
 bytes = "1"
 hex = "0.4"
@@ -34,6 +36,7 @@ hns-core = { path = "crates/hns-core" }
 hns-dane = { path = "crates/hns-dane" }
 hns-dnssec = { path = "crates/hns-dnssec" }
 hns-gateway = { path = "crates/hns-gateway" }
+hns-loopback-proxy = { path = "crates/hns-loopback-proxy" }
 h2 = "0.4"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
@@ -43,6 +46,8 @@ hns-sync = { path = "crates/hns-sync" }
 hns-transport = { path = "crates/hns-transport" }
 hns-urkel = { path = "crates/hns-urkel" }
 http = "1"
+httparse = "1.10"
+idna = "1.1"
 jni = "0.21"
 num-bigint = "0.4"
 num-traits = "0.2"
