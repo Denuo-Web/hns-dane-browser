@@ -41,4 +41,52 @@ if matches="$(grep -RInE \
   exit 1
 fi
 
-echo "Shared runtime and proxy boundary checks passed"
+ios_ffi_dir="$ROOT_DIR/rust/crates/ios-ffi"
+if [[ ! -s "$ios_ffi_dir/include/hns_browser.h" ]] || \
+  [[ ! -s "$ios_ffi_dir/include/module.modulemap" ]]; then
+  echo "ERROR: ios-ffi must expose a committed C header and Clang module map." >&2
+  exit 1
+fi
+
+if matches="$(grep -RInE \
+  --include='Cargo.toml' \
+  --include='*.rs' \
+  '(^|[^[:alnum:]_])(jni::|JNIEnv|Java_[[:alnum:]_]+|hns_(resolver|loopback_proxy|gateway|transport)::)([^[:alnum:]_]|$)|hns-(resolver|loopback-proxy|gateway|transport)[[:space:]]*=' \
+  "$ios_ffi_dir" || true)" && [[ -n "$matches" ]]; then
+  echo "ERROR: ios-ffi must depend only on the shared browser-runtime boundary." >&2
+  printf '%s\n' "$matches" >&2
+  exit 1
+fi
+
+ios_dir="$ROOT_DIR/ios"
+if matches="$(grep -RInE \
+  --include='*.swift' \
+  'URLSession[[:space:]]*\(|URLSession\.(shared|configuration)|NW(Connection|Listener|Browser)|CF(Stream|Socket)|CFSocket|DNSService|SecTrustEvaluate|SecTrustSetAnchorCertificates|SecPolicyCreate' \
+  "$ios_dir" || true)" && [[ -n "$matches" ]]; then
+  echo "ERROR: the iOS shell contains a direct network or independent trust implementation." >&2
+  printf '%s\n' "$matches" >&2
+  exit 1
+fi
+
+if matches="$(grep -RInE \
+  --include='*.swift' \
+  'proxyConfigurations[[:space:]]*=[[:space:]]*\[\]|allowFailover[[:space:]]*=[[:space:]]*true' \
+  "$ios_dir" || true)" && [[ -n "$matches" ]]; then
+  echo "ERROR: the iOS WebKit proxy must never be cleared to a direct route or allow failover." >&2
+  printf '%s\n' "$matches" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'panic = "unwind"' "$ROOT_DIR/rust/Cargo.toml"; then
+  echo "ERROR: Apple FFI artifacts require the panic-contained ios-release profile." >&2
+  exit 1
+fi
+
+for script in build-rust-ios.sh build-ios.sh check-ios-abi.sh; do
+  if [[ ! -x "$ROOT_DIR/scripts/$script" ]]; then
+    echo "ERROR: Apple validation helper is missing or not executable: scripts/$script" >&2
+    exit 1
+  fi
+done
+
+echo "Shared runtime, proxy, and platform-adapter boundary checks passed"

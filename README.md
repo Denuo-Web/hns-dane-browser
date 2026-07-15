@@ -1,12 +1,13 @@
 # HNS DANE Browser
 
-Handshake-first Android browser with local HNS proofs, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics.
+Cross-platform Handshake-first browser core with local HNS proofs, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics. Android is the validated shipping baseline; the repository also contains the native iOS shell and Apple ABI/build integration, with signed-device WebKit validation still required before an iOS release claim.
 
 ## Layout
 
-- `rust/`: Cargo workspace for consensus primitives, header chain, Urkel proof interfaces, resolver, DNSSEC, DANE, transport, gateway, cache, the shared browser runtime, the platform-neutral loopback proxy, and Android FFI.
+- `rust/`: Cargo workspace for consensus primitives, header chain, Urkel proof interfaces, resolver, DNSSEC, DANE, transport, gateway, cache, the shared browser runtime, the platform-neutral loopback proxy, Android JNI, and the stable Apple C ABI.
 - `rust/fuzz/`: `cargo-fuzz` parser harnesses for DNS, HNS resource values, P2P frames, Urkel proofs, TLSA records, and X.509 SPKI extraction.
 - `android/`: Kotlin Android browser shell with WebView, URL classification, scoped proxy admission, lifecycle integration, and a thin JNI bridge.
+- `ios/`: Swift/UIKit WKWebView shell with whole-data-store proxy admission, lifecycle/certificate integration, and a generated Xcode project definition.
 - `fixtures/`: Header, Urkel, and DNS fixture slots for HSD/HNSD comparison data.
 - `docs/`: Architecture, security model, version audit, and milestone notes.
 - `docs/sync-audit.md`: first-run sync path, progress UI, and remaining sync-speed bottlenecks.
@@ -36,10 +37,13 @@ Handshake-first Android browser with local HNS proofs, RFC 8484 DoH transport, D
 - Gates every HNS main-frame navigation through `BrowserProxyCoordinator`. The latest load waits until the process-global AndroidX proxy override is owned and an immutable exact root/subdomain-scoped endpoint is started and applied; scope transitions, suspension, or ownership loss immediately withdraw routing, authentication, certificate trust, and typed status publication. Active in-scope WebView and Service Worker requests use the same proxy/compatibility/block routing snapshot; because Android WebView does not expose a Service Worker TLS challenge to the page client, admitted worker requests execute through the shared Rust runtime gateway instead of the local CONNECT certificate path.
 - Selects the platform-neutral Rust proxy exclusively. It exposes a fresh authenticated loopback HTTP/CONNECT endpoint, routes HNS requests through the shared persistent runtime, terminates CONNECT with Rust-owned per-host local TLS identities, forwards validated native WebSocket/HTTP Upgrade streams, and supplies bounded typed main-frame security status. Android proceeds past the expected local TLS error only when the full certificate DER matches the exact host and live proxy generation.
 - Falls back only to the exact-scope compatibility interceptor if the Rust proxy cannot start. A document-start policy leaves allowed WebSockets on Chromium's native implementation while rejecting cross-scope HNS targets; all HTTP parsing, CONNECT termination, certificate generation, and Upgrade tunneling remain in Rust.
+- Provides a second, fail-closed whole-browser proxy mode for WebKit data stores that cannot express Android's reverse-bypass scope. The Rust proxy routes the admitted HNS root through the shared HNS/DNSSEC/DANE backend, forwards ICANN HTTP and opaque CONNECT only to explicit public addresses obtained through bounded WebPKI-authenticated DoH, blocks reserved/private destinations and unsafe ports before dialing, and never uses the system resolver for a browser target.
+- Exposes the shared runtime through a versioned `ios-ffi` C ABI with opaque monotonic handles, Rust-owned result buffers, bounded status mailboxes, one active proxy per runtime, immediate lifecycle revocation, and live generation/host/certificate matching. Apple device and simulator slices are packaged as `HnsBrowserRuntime.xcframework`.
+- Adds an iOS 17 UIKit/WKWebView shell using one persistent website-data-store profile and an authenticated, no-failover whole-browser proxy configuration. Swift owns navigation admission, WebView reconstruction, downloads, UI, and server-trust challenge integration; HNS classification, sync, resolution, DNSSEC, DANE, HTTP parsing, proxying, and TLS termination remain in Rust.
 
 ## Platform Migration Status
 
-Android has completed its Rust-only proxy cutover: `MainActivity` uses the shared Rust runtime and proxy, while Kotlin owns only platform UI, WebView admission, lifecycle, and JNI conversion. iOS remains planned; this repository does not yet include an Apple C ABI/XCFramework or WKWebView shell.
+Android has completed its Rust-only proxy cutover: `MainActivity` uses the shared Rust runtime and proxy, while Kotlin owns only platform UI, WebView admission, lifecycle, and JNI conversion. The Apple C ABI, XCFramework build, and native iOS shell are implemented against the same runtime and proxy. Linux validates the Rust, ABI, header, and architecture boundaries; macOS compilation and the signed physical-device matrix in `docs/ios-device-validation.md` remain mandatory before iOS is described as release-ready.
 
 ## Validate
 
@@ -64,6 +68,15 @@ GRADLE="$APK_WORKBENCH/scripts/dev/apkw-gradle.sh"
 ```
 
 The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+On macOS with Xcode and the configured Apple Rust targets:
+
+```sh
+./scripts/build-rust-ios.sh
+./scripts/build-ios.sh
+```
+
+The first command creates `build/apple/HnsBrowserRuntime.xcframework`; the second builds the checked-in iOS project and its test target. CI selects an available iPhone simulator and executes that test target with `HNS_IOS_ACTION=test`. See `docs/ios-device-validation.md` for the release-blocking signed-device matrix.
 
 Debug/demo builds are unsigned beyond the default Android debug key and are intended for testing only. The diagnostics screen identifies Denuo Web, LLC as publisher, shows the build channel and license, and states that donations are optional and unlock no app features.
 

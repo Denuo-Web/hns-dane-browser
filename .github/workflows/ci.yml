@@ -72,3 +72,39 @@ jobs:
           ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/28.2.13676358
           HNS_ANDROID_NDK_VERSION: 28.2.13676358
         run: ./gradlew assembleDebug testDebugUnitTest lintDebug verifyReleaseBundleStructure --no-daemon --stacktrace
+
+  ios:
+    name: Apple ABI, XCFramework, and iOS shell
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain and Apple targets
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal --component rustfmt clippy
+          rustup default 1.92.0
+          rustup target add --toolchain 1.92.0 \
+            aarch64-apple-ios \
+            aarch64-apple-ios-sim \
+            x86_64-apple-ios
+
+      - name: Verify Apple adapter boundaries and host ABI
+        run: |
+          ./scripts/check-version-consistency.sh
+          ./scripts/check-runtime-boundaries.sh
+          ./scripts/check-ios-abi.sh
+
+      - name: Build XCFramework and run iOS tests
+        run: |
+          simulator_id="$(
+            xcrun simctl list devices available -j |
+              python3 -c 'import json, sys; devices = json.load(sys.stdin)["devices"]; print(next(device["udid"] for runtime in sorted(devices, reverse=True) for device in devices[runtime] if device.get("isAvailable") and device["name"].startswith("iPhone")))'
+          )"
+          test -n "$simulator_id"
+          HNS_IOS_ACTION=test \
+            HNS_IOS_DESTINATION="platform=iOS Simulator,id=$simulator_id" \
+            ./scripts/build-ios.sh

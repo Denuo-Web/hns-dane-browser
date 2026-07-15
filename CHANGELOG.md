@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Added a stable versioned Apple C ABI, deterministic device/simulator Rust builds, XCFramework packaging, C/C++ header/export checks, and macOS CI integration.
+- Added an iOS 17 UIKit/WKWebView shell using the same Rust runtime, resolver, HNS/DNSSEC/DANE policy, proxy parser, TLS terminator, and persistent state as Android.
+- Added a fail-closed whole-browser Rust proxy mode for WebKit, with authenticated admission, optional immutable HNS scope, bounded explicit-bootstrap WebPKI DoH for ICANN addresses, public-address and unsafe-port enforcement, opaque CONNECT, streamed HTTP forwarding, and WebSocket Upgrade tunneling without system target DNS.
+
+### Changed
+
+- Centralized browser special-use hostname policy in `hns-core` and shared it across classification, HNS resolution, and proxy admission.
+- Kept Android on its exact HNS-scoped proxy mode while exposing platform-neutral classifier, root extraction, live challenge matching, and typed status APIs to both native shells.
+
+### Security
+
+- Added monotonic opaque Apple handles, bounded Rust-owned buffers and mailboxes, panic-contained C exports, one active proxy per runtime, policy/start race protection, immediate stop revocation, and joined runtime-owned teardown.
+- Added a signed physical-device validation matrix as a release-blocking gate for WebKit proxy isolation, server-trust challenges, Service Workers, WebSockets, lifecycle changes, and renderer/network-process restarts; iOS release readiness is not claimed until it passes.
+
 ## 0.3.16 - 2026-07-14
 
 ### Added

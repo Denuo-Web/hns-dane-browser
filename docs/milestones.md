@@ -79,3 +79,13 @@
 - Fuzzing expansion.
 - Battery and network optimization.
 - Security review.
+
+## Milestone 7: Shared Runtime and Apple Shell
+
+- Moved persistent runtime ownership, policy, synchronization, cache, diagnostics, gateway, proxy, HTTP parsing, CONNECT termination, certificate generation, and Upgrade tunneling behind JNI-free Rust APIs.
+- Replaced the Android Kotlin proxy/TLS/WebSocket stack with the shared Rust proxy while preserving the Android behavior and release-validation baseline.
+- Added scoped-HNS and whole-browser proxy modes. Whole-browser ICANN forwarding uses authenticated admission, explicit public addresses, bounded WebPKI DoH, opaque CONNECT, streamed HTTP/1.1, Upgrade tunneling, and fail-closed special-address/unsafe-port policy without system target resolution.
+- Added the stable versioned `ios-ffi` C ABI, C/C++ header checks, Apple Rust slices, and XCFramework build scripts.
+- Added the iOS 17 UIKit/WKWebView shell with persistent profile data, authenticated no-failover whole-data-store proxying, generation-safe scope rotation, exact Rust-authorized HNS certificate handling, lifecycle revocation, downloads, and shared snapshot bootstrap.
+- Added macOS CI for ABI, XCFramework, application, and test-target compilation.
+- Remaining release gate: run and document the signed physical-device WebKit matrix for main frames, subresources, Service Workers, WebSockets, downloads, background/resume, and renderer/network-process restart. This gate cannot be replaced by Linux checks or simulator success.
