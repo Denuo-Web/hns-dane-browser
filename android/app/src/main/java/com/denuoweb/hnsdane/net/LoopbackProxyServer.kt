@@ -67,6 +67,7 @@ class LoopbackProxyServer(
     private var serverSocket: ServerSocket? = null
     private var acceptLoop: Future<*>? = null
     private val activeClients = ConcurrentHashMap.newKeySet<Socket>()
+    private val clientAdmissionLock = Any()
 
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) {
@@ -89,12 +90,19 @@ class LoopbackProxyServer(
                         rejectClient(client, 429, "Too Many Requests")
                         continue
                     }
-                    if (!running.get()) {
+                    val admitted = synchronized(clientAdmissionLock) {
+                        if (running.get()) {
+                            activeClients += client
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    if (!admitted) {
                         rateLimiter.releaseClient()
                         runCatching { client.close() }
                         continue
                     }
-                    activeClients += client
                     try {
                         executor.submit {
                             try {
@@ -121,8 +129,12 @@ class LoopbackProxyServer(
     override fun close() {
         running.set(false)
         runCatching { serverSocket?.close() }
-        activeClients.toList().forEach { client -> runCatching { client.close() } }
-        activeClients.clear()
+        val clients = synchronized(clientAdmissionLock) {
+            activeClients.toArray().map { client -> client as Socket }.also {
+                activeClients.clear()
+            }
+        }
+        clients.forEach { client -> runCatching { client.close() } }
         acceptLoop?.cancel(true)
         executor.shutdownNow()
         (hnsConnectTerminator as? Closeable)?.close()
