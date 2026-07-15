@@ -1,7 +1,7 @@
 //! Platform-neutral request boundary used by the loopback HTTP server.
 
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -224,6 +224,32 @@ pub struct ProxyResponse {
     pub body: ProxyResponseBody,
 }
 
+/// One typed HTTP Upgrade response and its live origin connection. The proxy
+/// validates and sanitizes the response head before exposing it to a client.
+///
+/// Production streams must bound every read and write wait. In particular,
+/// an otherwise idle `read` must periodically return `TimedOut` or
+/// `WouldBlock` so the proxy can observe generation cancellation without
+/// detaching tunnel workers.
+pub struct ProxyTunnel {
+    pub head: ProxyResponseHead,
+    pub stream: Box<dyn ProxyTunnelIo>,
+}
+
+impl fmt::Debug for ProxyTunnel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProxyTunnel")
+            .field("head", &self.head)
+            .field("stream", &"<redacted duplex stream>")
+            .finish()
+    }
+}
+
+pub trait ProxyTunnelIo: Read + Write + Send {}
+
+impl<T: Read + Write + Send> ProxyTunnelIo for T {}
+
 impl fmt::Debug for ProxyResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -252,6 +278,8 @@ pub enum BackendError {
     InvalidResponse,
     #[error("upstream response exceeds the configured limit")]
     ResponseTooLarge,
+    #[error("backend does not support HTTP Upgrade tunnelling")]
+    UnsupportedUpgrade,
     #[error("internal backend failure")]
     Internal,
 }
@@ -266,6 +294,19 @@ pub trait ProxyBackend: Send + Sync + 'static {
         request: ProxyRequest,
         cancellation: &CancellationToken,
     ) -> Result<ProxyResponse, BackendError>;
+
+    /// Opens one admitted HTTP Upgrade tunnel. Implementations must apply the
+    /// same resolution, address, TLS, and DANE policy as [`Self::execute`],
+    /// observe `cancellation`, and satisfy the bounded-I/O contract documented
+    /// on [`ProxyTunnel`]. The default fails closed for compatibility with
+    /// backends that only implement request/response traffic.
+    fn open_tunnel(
+        &self,
+        _request: ProxyRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<ProxyTunnel, BackendError> {
+        Err(BackendError::UnsupportedUpgrade)
+    }
 }
 
 #[cfg(test)]

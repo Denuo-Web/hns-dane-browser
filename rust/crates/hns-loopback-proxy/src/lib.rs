@@ -26,7 +26,7 @@ pub use auth::{
 };
 pub use backend::{
     BackendError, CancellationToken, ProxyBackend, ProxyHeader, ProxyRequest, ProxyRequestBody,
-    ProxyResponse, ProxyResponseBody, ProxyResponseHead,
+    ProxyResponse, ProxyResponseBody, ProxyResponseHead, ProxyTunnel, ProxyTunnelIo,
 };
 pub use certificate::{CertificateSha256, LocalCertificatePin};
 pub use config::{
@@ -44,6 +44,7 @@ pub use http1::{
     AbsoluteTarget, Authority, BodyFraming, Header, Http1Error, HttpVersion, OriginTarget,
     RequestHead, RequestTarget, Scheme, determine_body_framing, parse_request_head,
     read_chunked_body, read_request_body, read_request_head, sanitize_forward_headers,
+    sanitize_upgrade_forward_headers,
 };
 pub use rate_limit::{
     ActiveClientLimiter, ActiveClientPermit, RateLimitConfig, RateLimitConfigError,
@@ -51,6 +52,6 @@ pub use rate_limit::{
 };
 pub use response::{
     EncodedResponseHead, InternalResponseMetadata, ResponseError, SanitizedResponseHeaders,
-    encode_response_head, sanitize_response_headers,
+    encode_response_head, encode_upgrade_response_head, sanitize_response_headers,
 };
 pub use server::{ProxyError, RunningProxy};

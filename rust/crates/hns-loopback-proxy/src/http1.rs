@@ -599,18 +599,7 @@ pub fn read_chunked_body(
 /// Removes proxy credentials, all `Proxy-*` and `X-HNS-*` fields, standard
 /// hop-by-hop fields, and fields nominated by `Connection`/`Proxy-Connection`.
 pub fn sanitize_forward_headers(headers: &[Header]) -> Result<Vec<Header>, Http1Error> {
-    let mut nominated = HashSet::new();
-    for header in headers.iter().filter(|header| {
-        header.name.eq_ignore_ascii_case("connection")
-            || header.name.eq_ignore_ascii_case("proxy-connection")
-    }) {
-        for token in header.value.split(',').map(str::trim) {
-            if token.is_empty() || !is_http_token(token.as_bytes()) {
-                return Err(Http1Error::InvalidHeader);
-            }
-            nominated.insert(token.to_ascii_lowercase());
-        }
-    }
+    let nominated = connection_nominated_fields(headers)?;
 
     Ok(headers
         .iter()
@@ -623,6 +612,69 @@ pub fn sanitize_forward_headers(headers: &[Header]) -> Result<Vec<Header>, Http1
         })
         .cloned()
         .collect())
+}
+
+/// Removes all proxy/internal/framing fields from a WebSocket handshake while
+/// preserving end-to-end WebSocket fields and reconstructing the two required
+/// hop-by-hop fields canonically.
+pub fn sanitize_upgrade_forward_headers(headers: &[Header]) -> Result<Vec<Header>, Http1Error> {
+    let nominated = connection_nominated_fields(headers)?;
+    let connection_upgrade = headers.iter().any(|header| {
+        header.name.eq_ignore_ascii_case("connection")
+            && header
+                .value
+                .split(',')
+                .map(str::trim)
+                .any(|token| token.eq_ignore_ascii_case("upgrade"))
+    });
+    let upgrade_values: Vec<_> = headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("upgrade"))
+        .map(|header| header.value.as_str())
+        .collect();
+    if !connection_upgrade
+        || upgrade_values.len() != 1
+        || !upgrade_values[0].eq_ignore_ascii_case("websocket")
+    {
+        return Err(Http1Error::InvalidHeader);
+    }
+
+    let mut sanitized: Vec<_> = headers
+        .iter()
+        .filter(|header| {
+            let lower = header.name.to_ascii_lowercase();
+            !is_hop_by_hop(&lower)
+                && !lower.starts_with("proxy-")
+                && !lower.starts_with("x-hns-")
+                && !nominated.contains(&lower)
+        })
+        .cloned()
+        .collect();
+    sanitized.push(Header {
+        name: "Connection".to_owned(),
+        value: "Upgrade".to_owned(),
+    });
+    sanitized.push(Header {
+        name: "Upgrade".to_owned(),
+        value: "websocket".to_owned(),
+    });
+    Ok(sanitized)
+}
+
+fn connection_nominated_fields(headers: &[Header]) -> Result<HashSet<String>, Http1Error> {
+    let mut nominated = HashSet::new();
+    for header in headers.iter().filter(|header| {
+        header.name.eq_ignore_ascii_case("connection")
+            || header.name.eq_ignore_ascii_case("proxy-connection")
+    }) {
+        for token in header.value.split(',').map(str::trim) {
+            if token.is_empty() || !is_http_token(token.as_bytes()) {
+                return Err(Http1Error::InvalidHeader);
+            }
+            nominated.insert(token.to_ascii_lowercase());
+        }
+    }
+    Ok(nominated)
 }
 
 fn parse_request_line(bytes: &[u8]) -> Result<(String, String, HttpVersion), Http1Error> {
@@ -1341,6 +1393,53 @@ mod tests {
         assert_eq!(sanitized[1].name(), "X-Keep");
         assert!(!format!("{head:?}").contains("secret"));
         assert!(!format!("{:?}", head.headers()).contains("secret"));
+    }
+
+    #[test]
+    fn upgrade_sanitizer_reconstructs_websocket_hop_fields() {
+        let head = parse(
+            "GET ws://welcome/socket HTTP/1.1\r\nHost: welcome\r\nConnection: keep-alive, Upgrade, X-Hop\r\nUpgrade: websocket\r\nX-Hop: secret\r\nSec-WebSocket-Key: key\r\nProxy-Authorization: secret\r\nX-HNS-Trace: secret\r\n\r\n",
+        );
+
+        let sanitized = sanitize_upgrade_forward_headers(head.headers()).unwrap();
+        let pairs: Vec<_> = sanitized
+            .iter()
+            .map(|header| (header.name(), header.value()))
+            .collect();
+
+        assert!(pairs.contains(&("Host", "welcome")));
+        assert!(pairs.contains(&("Sec-WebSocket-Key", "key")));
+        assert!(pairs.contains(&("Connection", "Upgrade")));
+        assert!(pairs.contains(&("Upgrade", "websocket")));
+        assert!(
+            !pairs
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("X-Hop"))
+        );
+        assert!(
+            !pairs
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("Proxy-Authorization"))
+        );
+        assert!(
+            !pairs
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("X-HNS-Trace"))
+        );
+    }
+
+    #[test]
+    fn upgrade_sanitizer_requires_a_complete_websocket_signal() {
+        for request in [
+            "GET / HTTP/1.1\r\nHost: welcome\r\nUpgrade: websocket\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: welcome\r\nConnection: Upgrade\r\n\r\n",
+            "GET / HTTP/1.1\r\nHost: welcome\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n",
+        ] {
+            assert!(matches!(
+                sanitize_upgrade_forward_headers(parse(request).headers()),
+                Err(Http1Error::InvalidHeader)
+            ));
+        }
     }
 
     #[test]

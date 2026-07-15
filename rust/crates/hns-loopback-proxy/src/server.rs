@@ -3,7 +3,7 @@
 use crate::auth::ProxyAuthorization;
 use crate::backend::{
     BackendError, CancellationToken, ProxyBackend, ProxyHeader, ProxyRequest, ProxyRequestBody,
-    ProxyResponse, ProxyResponseBody,
+    ProxyResponse, ProxyResponseBody, ProxyTunnel,
 };
 use crate::certificate::LocalTlsIdentityStore;
 use crate::config::{ProxyConfig, ProxyLimits, ProxyTimeouts};
@@ -16,6 +16,7 @@ use crate::host::HostScopeError;
 use crate::http1::{
     AbsoluteTarget, Authority, BodyFraming, Http1Error, RequestHead, RequestTarget, Scheme,
     determine_body_framing, read_request_body, read_request_head, sanitize_forward_headers,
+    sanitize_upgrade_forward_headers,
 };
 use crate::listener::{
     ClientHandler, ListenerExitHandler, ListenerExitPhase, ListenerExitReason, OwnedListener,
@@ -24,7 +25,9 @@ use crate::listener::{
 use crate::rate_limit::{
     RateLimitConfig, RateLimitConfigError, RateLimitDecision, RateLimitScope, RequestRateLimiter,
 };
-use crate::response::{encode_response_head, sanitize_response_headers};
+use crate::response::{
+    encode_response_head, encode_upgrade_response_head, sanitize_response_headers,
+};
 use crate::tls::{TlsStream, accept_local_tls};
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -37,6 +40,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const RESPONSE_COPY_BUFFER_BYTES: usize = 16 * 1024;
+const TUNNEL_COPY_BUFFER_BYTES: usize = 16 * 1024;
+const TUNNEL_CLIENT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const CONNECT_ESTABLISHED_RESPONSE: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 
 /// Failure to start a proxy generation. No listener or credential is retained
@@ -533,19 +538,6 @@ fn handle_direct_http(
     cancellation: &CancellationToken,
     context: &ServerContext,
 ) {
-    if matches!(absolute.scheme(), Scheme::Ws | Scheme::Wss) || requests_upgrade(head) {
-        reject_scoped_request(
-            stream,
-            context,
-            canonical_host,
-            method,
-            501,
-            "HNS Protocol Upgrade Unsupported",
-            RequestRejectionReason::InvalidRequest,
-        );
-        return;
-    }
-
     if !admit_rate(stream, context, canonical_host, method) {
         return;
     }
@@ -555,15 +547,27 @@ fn handle_direct_http(
         authority: absolute.authority(),
         path_and_query: absolute.path_and_query(),
     };
-    handle_admitted_http(
-        stream,
-        head,
-        route,
-        canonical_host,
-        method,
-        cancellation,
-        context,
-    );
+    if matches!(absolute.scheme(), Scheme::Ws | Scheme::Wss) || requests_upgrade(head) {
+        handle_admitted_upgrade(
+            stream,
+            head,
+            route,
+            canonical_host,
+            method,
+            cancellation,
+            context,
+        );
+    } else {
+        handle_admitted_http(
+            stream,
+            head,
+            route,
+            canonical_host,
+            method,
+            cancellation,
+            context,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -734,46 +738,64 @@ fn handle_connected_http(
     };
     observe_request(context, &canonical_host, method, RequestPhase::Accepted);
 
-    if requests_upgrade(&head) {
-        reject_scoped_request(
-            stream,
-            context,
-            &canonical_host,
-            method,
-            501,
-            "HNS Protocol Upgrade Unsupported",
-            RequestRejectionReason::InvalidRequest,
-        );
-        return;
-    }
     match target {
-        RequestTarget::Origin(origin) => handle_admitted_http(
-            stream,
-            &head,
-            HttpRoute {
+        RequestTarget::Origin(origin) => {
+            let route = HttpRoute {
                 scheme: Scheme::Https,
                 authority: origin.authority(),
                 path_and_query: origin.path_and_query(),
-            },
-            &canonical_host,
-            method,
-            cancellation,
-            context,
-        ),
-        RequestTarget::Absolute(absolute) if absolute.scheme() == Scheme::Https => {
-            handle_admitted_http(
-                stream,
-                &head,
-                HttpRoute {
-                    scheme: Scheme::Https,
-                    authority: absolute.authority(),
-                    path_and_query: absolute.path_and_query(),
-                },
-                &canonical_host,
-                method,
-                cancellation,
-                context,
-            );
+            };
+            if requests_upgrade(&head) {
+                handle_admitted_upgrade(
+                    stream,
+                    &head,
+                    route,
+                    &canonical_host,
+                    method,
+                    cancellation,
+                    context,
+                );
+            } else {
+                handle_admitted_http(
+                    stream,
+                    &head,
+                    route,
+                    &canonical_host,
+                    method,
+                    cancellation,
+                    context,
+                );
+            }
+        }
+        RequestTarget::Absolute(absolute)
+            if matches!(absolute.scheme(), Scheme::Https | Scheme::Wss) =>
+        {
+            let route = HttpRoute {
+                scheme: absolute.scheme(),
+                authority: absolute.authority(),
+                path_and_query: absolute.path_and_query(),
+            };
+            if absolute.scheme() == Scheme::Wss || requests_upgrade(&head) {
+                handle_admitted_upgrade(
+                    stream,
+                    &head,
+                    route,
+                    &canonical_host,
+                    method,
+                    cancellation,
+                    context,
+                );
+            } else {
+                handle_admitted_http(
+                    stream,
+                    &head,
+                    route,
+                    &canonical_host,
+                    method,
+                    cancellation,
+                    context,
+                );
+            }
         }
         RequestTarget::Absolute(_) | RequestTarget::Connect(_) => reject_scoped_request(
             stream,
@@ -785,6 +807,95 @@ fn handle_connected_http(
             RequestRejectionReason::InvalidRequest,
         ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_admitted_upgrade<S: ClientIo + ?Sized>(
+    stream: &mut S,
+    head: &RequestHead,
+    route: HttpRoute<'_>,
+    canonical_host: &crate::NormalizedHost,
+    method: ObservedMethod,
+    cancellation: &CancellationToken,
+    context: &ServerContext,
+) {
+    let framing = match determine_body_framing(head.headers()) {
+        Ok(framing) => framing,
+        Err(error) => {
+            reject_http_request(stream, context, canonical_host, method, &error);
+            return;
+        }
+    };
+    if !matches!(framing, BodyFraming::None | BodyFraming::ContentLength(0)) {
+        reject_scoped_request(
+            stream,
+            context,
+            canonical_host,
+            method,
+            400,
+            "HNS Protocol Upgrade Body Unsupported",
+            RequestRejectionReason::InvalidRequest,
+        );
+        return;
+    }
+    if head.header_values("expect").next().is_some() {
+        reject_scoped_request(
+            stream,
+            context,
+            canonical_host,
+            method,
+            417,
+            "Expectation Failed",
+            RequestRejectionReason::InvalidRequest,
+        );
+        return;
+    }
+    let headers = match build_upgrade_forward_headers(head, route, canonical_host) {
+        Ok(headers) => headers,
+        Err(error) => {
+            reject_http_request(stream, context, canonical_host, method, &error);
+            return;
+        }
+    };
+    if stream.clear_client_read_deadline().is_err() {
+        observe_request(
+            context,
+            canonical_host,
+            method,
+            RequestPhase::Rejected {
+                reason: RequestRejectionReason::InvalidRequest,
+            },
+        );
+        return;
+    }
+    if cancellation.is_cancelled() {
+        observe_request(
+            context,
+            canonical_host,
+            method,
+            RequestPhase::Rejected {
+                reason: RequestRejectionReason::Cancelled,
+            },
+        );
+        return;
+    }
+
+    execute_backend_tunnel(
+        stream,
+        context,
+        canonical_host,
+        method,
+        ProxyRequest {
+            method: head.method().to_owned(),
+            scheme: route.scheme.as_str().to_owned(),
+            host: canonical_host.as_str().to_owned(),
+            port: route.authority.port(),
+            path_and_query: route.path_and_query.to_owned(),
+            headers,
+            body: ProxyRequestBody::Empty,
+        },
+        cancellation,
+    );
 }
 
 fn admit_rate<W: Write + ?Sized>(
@@ -997,6 +1108,160 @@ fn execute_backend<W: Write + ?Sized>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn execute_backend_tunnel<S: ClientIo + ?Sized>(
+    client: &mut S,
+    context: &ServerContext,
+    host: &crate::NormalizedHost,
+    method: ObservedMethod,
+    request: ProxyRequest,
+    cancellation: &CancellationToken,
+) {
+    let started = Instant::now();
+    let tunnel = catch_unwind(AssertUnwindSafe(|| {
+        context.backend.open_tunnel(request, cancellation)
+    }))
+    .unwrap_or(Err(BackendError::Internal));
+    let ProxyTunnel {
+        head,
+        stream: mut origin,
+    } = match tunnel {
+        Ok(tunnel) => tunnel,
+        Err(error) => {
+            observe_request(
+                context,
+                host,
+                method,
+                RequestPhase::BackendFailed {
+                    kind: backend_failure_kind(error),
+                    elapsed: started.elapsed(),
+                },
+            );
+            if !cancellation.is_cancelled() {
+                let (status, reason) = backend_error_status(error);
+                let _result = write_error_response(client, status, reason, &[]);
+            }
+            return;
+        }
+    };
+    if cancellation.is_cancelled() {
+        return;
+    }
+    let header_pairs: Vec<_> = head
+        .headers
+        .into_iter()
+        .map(|header| (header.name, header.value))
+        .collect();
+    let encoded =
+        match encode_upgrade_response_head(head.status_code, &head.reason_phrase, &header_pairs) {
+            Ok(encoded) => encoded,
+            Err(_error) => {
+                observe_invalid_response(context, host, method, started.elapsed());
+                if !cancellation.is_cancelled() {
+                    let _result =
+                        write_error_response(client, 502, "Invalid Upstream Response", &[]);
+                }
+                return;
+            }
+        };
+    if client.write_all(encoded.as_bytes()).is_err() || client.flush().is_err() {
+        return;
+    }
+
+    match pump_tunnel(client, origin.as_mut(), cancellation) {
+        TunnelPumpOutcome::Completed => observe_request(
+            context,
+            host,
+            method,
+            RequestPhase::Completed {
+                status_code: 101,
+                elapsed: started.elapsed(),
+            },
+        ),
+        TunnelPumpOutcome::OriginIo => observe_request(
+            context,
+            host,
+            method,
+            RequestPhase::BackendFailed {
+                kind: BackendFailureKind::Upstream,
+                elapsed: started.elapsed(),
+            },
+        ),
+        TunnelPumpOutcome::ClientIo | TunnelPumpOutcome::Cancelled => {}
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TunnelPumpOutcome {
+    Completed,
+    ClientIo,
+    OriginIo,
+    Cancelled,
+}
+
+fn pump_tunnel<S: ClientIo + ?Sized>(
+    client: &mut S,
+    origin: &mut dyn crate::ProxyTunnelIo,
+    cancellation: &CancellationToken,
+) -> TunnelPumpOutcome {
+    let mut client_buffer = [0_u8; TUNNEL_COPY_BUFFER_BYTES];
+    let mut origin_buffer = [0_u8; TUNNEL_COPY_BUFFER_BYTES];
+    loop {
+        if cancellation.is_cancelled() {
+            return TunnelPumpOutcome::Cancelled;
+        }
+
+        let now = Instant::now();
+        let deadline = now.checked_add(TUNNEL_CLIENT_POLL_INTERVAL).unwrap_or(now);
+        if client.set_client_read_deadline(deadline).is_err() {
+            return TunnelPumpOutcome::ClientIo;
+        }
+        let client_read = client.read(&mut client_buffer);
+        if client.clear_client_read_deadline().is_err() {
+            return TunnelPumpOutcome::ClientIo;
+        }
+        match client_read {
+            Ok(0) => return TunnelPumpOutcome::Completed,
+            Ok(count) if count > client_buffer.len() => return TunnelPumpOutcome::ClientIo,
+            Ok(count) => {
+                let write = catch_unwind(AssertUnwindSafe(|| {
+                    origin.write_all(&client_buffer[..count])?;
+                    origin.flush()
+                }));
+                match write {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) | Err(_) => return TunnelPumpOutcome::OriginIo,
+                }
+            }
+            Err(error) if retryable_tunnel_read(&error) => {}
+            Err(_error) => return TunnelPumpOutcome::ClientIo,
+        }
+
+        if cancellation.is_cancelled() {
+            return TunnelPumpOutcome::Cancelled;
+        }
+        let origin_read = catch_unwind(AssertUnwindSafe(|| origin.read(&mut origin_buffer)));
+        match origin_read {
+            Ok(Ok(0)) => return TunnelPumpOutcome::Completed,
+            Ok(Ok(count)) if count > origin_buffer.len() => return TunnelPumpOutcome::OriginIo,
+            Ok(Ok(count)) => {
+                if client.write_all(&origin_buffer[..count]).is_err() || client.flush().is_err() {
+                    return TunnelPumpOutcome::ClientIo;
+                }
+            }
+            Ok(Err(error)) if retryable_tunnel_read(&error) => {}
+            Ok(Err(_)) | Err(_) => return TunnelPumpOutcome::OriginIo,
+        }
+    }
+}
+
+fn retryable_tunnel_read(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
+}
+
 fn observe_invalid_response(
     context: &ServerContext,
     host: &crate::NormalizedHost,
@@ -1128,6 +1393,30 @@ fn build_forward_headers(
     Ok(headers)
 }
 
+fn build_upgrade_forward_headers(
+    head: &RequestHead,
+    route: HttpRoute<'_>,
+    host: &crate::NormalizedHost,
+) -> Result<Vec<ProxyHeader>, Http1Error> {
+    let mut headers: Vec<_> = sanitize_upgrade_forward_headers(head.headers())?
+        .into_iter()
+        .filter(|header| {
+            !header.name().eq_ignore_ascii_case("host")
+                && !header.name().eq_ignore_ascii_case("content-length")
+                && !header.name().eq_ignore_ascii_case("expect")
+        })
+        .map(|header| ProxyHeader::new(header.name(), header.value()))
+        .collect();
+    let default_port = route.scheme.default_port();
+    let host_value = if route.authority.port() == default_port {
+        host.as_str().to_owned()
+    } else {
+        format!("{}:{}", host.as_str(), route.authority.port())
+    };
+    headers.push(ProxyHeader::new("Host", host_value));
+    Ok(headers)
+}
+
 fn expects_continue(head: &RequestHead) -> Result<bool, ()> {
     let mut values = head.header_values("expect");
     let Some(first) = values.next() else {
@@ -1227,6 +1516,7 @@ fn backend_error_status(error: BackendError) -> (u16, &'static str) {
         BackendError::UpstreamUnavailable => (502, "HNS Upstream Unavailable"),
         BackendError::InvalidResponse => (502, "Invalid Upstream Response"),
         BackendError::ResponseTooLarge => (502, "Upstream Response Too Large"),
+        BackendError::UnsupportedUpgrade => (501, "HNS Protocol Upgrade Unsupported"),
         BackendError::Internal => (500, "Proxy Internal Error"),
     }
 }
@@ -1241,6 +1531,7 @@ fn backend_failure_kind(error: BackendError) -> BackendFailureKind {
         BackendError::UpstreamUnavailable => BackendFailureKind::Upstream,
         BackendError::InvalidResponse => BackendFailureKind::InvalidResponse,
         BackendError::ResponseTooLarge => BackendFailureKind::ResponseTooLarge,
+        BackendError::UnsupportedUpgrade => BackendFailureKind::InvalidRequest,
         BackendError::Internal => BackendFailureKind::Internal,
     }
 }
@@ -1296,6 +1587,10 @@ impl ClientIo for TcpStream {
             .filter(|remaining| !remaining.is_zero())
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request deadline elapsed"))?;
         TcpStream::set_read_timeout(self, Some(remaining))
+    }
+
+    fn clear_client_read_deadline(&mut self) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, None)
     }
 }
 
@@ -1373,13 +1668,16 @@ fn observe(observer: &dyn ProxyObserver, event: ProxyEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NoopProxyObserver, ProxyInstanceId, ProxyResponseHead, ProxySessionId};
+    use crate::{
+        NoopProxyObserver, ProxyInstanceId, ProxyResponseHead, ProxySessionId, ProxyTunnel,
+    };
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use rustls::{
         ClientConfig, ClientConnection, DigitallySignedStruct, Error as RustlsError,
         SignatureScheme, StreamOwned,
     };
+    use std::collections::VecDeque;
     use std::io::Cursor;
     use std::sync::{Mutex, mpsc};
     use std::thread;
@@ -1493,6 +1791,105 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(request);
             Ok(self.response.response())
+        }
+    }
+
+    struct EchoTunnelBackend {
+        requests: Mutex<Vec<ProxyRequest>>,
+        head: ProxyResponseHead,
+        initial_origin_bytes: Vec<u8>,
+    }
+
+    impl EchoTunnelBackend {
+        fn websocket(initial_origin_bytes: impl Into<Vec<u8>>) -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                head: ProxyResponseHead {
+                    status_code: 101,
+                    reason_phrase: "Switching Protocols".to_owned(),
+                    headers: vec![
+                        ProxyHeader::new("Connection", "keep-alive, Upgrade, X-Origin-Hop"),
+                        ProxyHeader::new("Upgrade", "websocket"),
+                        ProxyHeader::new("Sec-WebSocket-Accept", "accepted"),
+                        ProxyHeader::new("X-Origin-Hop", "secret"),
+                        ProxyHeader::new("X-HNS-Security-Path", "secret"),
+                    ],
+                },
+                initial_origin_bytes: initial_origin_bytes.into(),
+            }
+        }
+
+        fn with_head(head: ProxyResponseHead) -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                head,
+                initial_origin_bytes: Vec::new(),
+            }
+        }
+
+        fn take_requests(&self) -> Vec<ProxyRequest> {
+            std::mem::take(
+                &mut *self
+                    .requests
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            )
+        }
+    }
+
+    impl ProxyBackend for EchoTunnelBackend {
+        fn execute(
+            &self,
+            _request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyResponse, BackendError> {
+            Err(BackendError::Internal)
+        }
+
+        fn open_tunnel(
+            &self,
+            request: ProxyRequest,
+            _cancellation: &CancellationToken,
+        ) -> Result<ProxyTunnel, BackendError> {
+            self.requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request);
+            Ok(ProxyTunnel {
+                head: self.head.clone(),
+                stream: Box::new(EchoTunnelStream {
+                    pending: self.initial_origin_bytes.iter().copied().collect(),
+                }),
+            })
+        }
+    }
+
+    struct EchoTunnelStream {
+        pending: VecDeque<u8>,
+    }
+
+    impl Read for EchoTunnelStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.pending.is_empty() {
+                thread::sleep(Duration::from_millis(5));
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "idle test tunnel"));
+            }
+            let count = buffer.len().min(self.pending.len());
+            for output in &mut buffer[..count] {
+                *output = self.pending.pop_front().unwrap();
+            }
+            Ok(count)
+        }
+    }
+
+    impl Write for EchoTunnelStream {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.pending.extend(buffer.iter().copied());
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -2508,7 +2905,7 @@ mod tests {
                 "welcome:443",
                 "welcome",
                 b"GET wss://welcome/socket HTTP/1.1\r\nHost: welcome\r\n\r\n",
-                501,
+                400,
             ),
         ];
 
@@ -2649,6 +3046,157 @@ mod tests {
     }
 
     #[test]
+    fn direct_websocket_upgrade_is_sanitized_and_copied_bidirectionally() {
+        let backend = Arc::new(EchoTunnelBackend::websocket(b"origin"));
+        let proxy =
+            RunningProxy::start(test_config(), backend.clone(), Arc::new(NoopProxyObserver))
+                .unwrap();
+        let mut client = TcpStream::connect(proxy.endpoint().address()).unwrap();
+        client.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+        client.set_write_timeout(Some(TEST_TIMEOUT)).unwrap();
+        let request = format!(
+            "GET ws://welcome/socket?q=1 HTTP/1.1\r\nHost: welcome\r\n{}Connection: keep-alive, Upgrade, X-Secret\r\nUpgrade: websocket\r\nSec-WebSocket-Key: key\r\nSec-WebSocket-Version: 13\r\nX-Secret: remove\r\nX-HNS-Client: remove\r\n\r\n",
+            auth_header(&proxy)
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.flush().unwrap();
+
+        let response = read_response_head(&mut client).unwrap();
+        let response_text = std::str::from_utf8(&response).unwrap();
+        assert_eq!(response_status(&response), 101);
+        assert!(response_text.contains("Connection: Upgrade\r\n"));
+        assert!(response_text.contains("Upgrade: websocket\r\n"));
+        assert!(response_text.contains("Sec-WebSocket-Accept: accepted\r\n"));
+        assert!(!response_text.contains("keep-alive"));
+        assert!(!response_text.contains("X-Origin-Hop"));
+        assert!(!response_text.contains("X-HNS-"));
+        let mut from_origin = [0_u8; 6];
+        client.read_exact(&mut from_origin).unwrap();
+        assert_eq!(&from_origin, b"origin");
+        client.write_all(b"client").unwrap();
+        client.flush().unwrap();
+        let mut echoed = [0_u8; 6];
+        client.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"client");
+        drop(client);
+
+        let requests = backend.take_requests();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.scheme, "ws");
+        assert_eq!(request.host, "welcome");
+        assert_eq!(request.port, 80);
+        assert_eq!(request.path_and_query, "/socket?q=1");
+        assert!(request.body.is_empty());
+        assert!(request.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("connection") && header.value == "Upgrade"
+        }));
+        assert!(request.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("upgrade") && header.value == "websocket"
+        }));
+        assert!(request.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("sec-websocket-key") && header.value == "key"
+        }));
+        assert!(!request.headers.iter().any(|header| {
+            header.name.eq_ignore_ascii_case("proxy-authorization")
+                || header.name.eq_ignore_ascii_case("x-secret")
+                || header.name.to_ascii_lowercase().starts_with("x-hns-")
+        }));
+        proxy.stop();
+    }
+
+    #[test]
+    fn post_connect_wss_upgrade_uses_the_same_rust_tunnel_path() {
+        let backend = Arc::new(EchoTunnelBackend::websocket(Vec::new()));
+        let proxy =
+            RunningProxy::start(test_config(), backend.clone(), Arc::new(NoopProxyObserver))
+                .unwrap();
+        let stream = begin_authenticated_connect(&proxy, "welcome:443");
+        let (mut tls, _certificate) =
+            complete_tls_handshake(stream, "welcome", true, &[b"http/1.1"]).unwrap();
+        tls.write_all(
+            b"GET wss://welcome/socket HTTP/1.1\r\nHost: welcome\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: key\r\nSec-WebSocket-Version: 13\r\n\r\nping",
+        )
+        .unwrap();
+        tls.flush().unwrap();
+
+        let response = read_response_head(&mut tls).unwrap();
+        assert_eq!(response_status(&response), 101);
+        assert!(
+            !std::str::from_utf8(&response)
+                .unwrap()
+                .contains("X-HNS-Security-Path")
+        );
+        let mut echoed = [0_u8; 4];
+        tls.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"ping");
+        drop(tls);
+
+        let requests = backend.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].scheme, "wss");
+        assert_eq!(requests[0].host, "welcome");
+        assert_eq!(requests[0].port, 443);
+        assert_eq!(requests[0].path_and_query, "/socket");
+        proxy.stop();
+    }
+
+    #[test]
+    fn invalid_upgrade_response_fails_before_switching_protocols() {
+        let backend = Arc::new(EchoTunnelBackend::with_head(ProxyResponseHead {
+            status_code: 200,
+            reason_phrase: "OK".to_owned(),
+            headers: vec![
+                ProxyHeader::new("Connection", "Upgrade"),
+                ProxyHeader::new("Upgrade", "websocket"),
+            ],
+        }));
+        let proxy =
+            RunningProxy::start(test_config(), backend.clone(), Arc::new(NoopProxyObserver))
+                .unwrap();
+        let request = format!(
+            "GET ws://welcome/socket HTTP/1.1\r\nHost: welcome\r\n{}Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+            auth_header(&proxy)
+        );
+
+        let response = send_raw(&proxy, request.as_bytes());
+        assert_eq!(response_status(&response), 502);
+        assert!(!String::from_utf8_lossy(&response).contains("101 Switching Protocols"));
+        assert_eq!(backend.take_requests().len(), 1);
+        proxy.stop();
+    }
+
+    #[test]
+    fn stop_joins_an_idle_upgrade_without_detached_copy_workers() {
+        let backend = Arc::new(EchoTunnelBackend::websocket(Vec::new()));
+        let proxy =
+            RunningProxy::start(test_config(), backend.clone(), Arc::new(NoopProxyObserver))
+                .unwrap();
+        let mut client = TcpStream::connect(proxy.endpoint().address()).unwrap();
+        client.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+        let request = format!(
+            "GET ws://welcome/socket HTTP/1.1\r\nHost: welcome\r\n{}Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+            auth_header(&proxy)
+        );
+        client.write_all(request.as_bytes()).unwrap();
+        client.flush().unwrap();
+        assert_eq!(
+            response_status(&read_response_head(&mut client).unwrap()),
+            101
+        );
+        wait_for_active_clients(&proxy, 1);
+
+        let started = Instant::now();
+        proxy.stop();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(proxy.is_stopped());
+        assert_eq!(proxy.active_clients(), 0);
+        assert_eq!(backend.take_requests().len(), 1);
+        assert_connection_closed(client);
+    }
+
+    #[test]
     fn upgrades_and_out_of_scope_targets_never_reach_the_backend() {
         let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain(b"unused")));
         let proxy = start_recording_proxy(Arc::clone(&backend));
@@ -2666,7 +3214,7 @@ mod tests {
             ),
             (
                 format!("GET ws://welcome/socket HTTP/1.1\r\nHost: welcome\r\n{auth}\r\n"),
-                501,
+                400,
             ),
             (
                 format!("GET http://other/ HTTP/1.1\r\nHost: other\r\n{auth}\r\n"),

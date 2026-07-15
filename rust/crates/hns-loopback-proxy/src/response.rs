@@ -96,32 +96,7 @@ pub enum ResponseError {
 pub fn sanitize_response_headers(
     headers: &[(String, String)],
 ) -> Result<SanitizedResponseHeaders, ResponseError> {
-    if headers.len() > MAX_RESPONSE_HEADERS {
-        return Err(ResponseError::HeadersTooLarge);
-    }
-    let mut head_bytes = 0usize;
-    let mut connection_fields = HashSet::new();
-    for (name, value) in headers {
-        if !is_http_token(name) || !is_http_field_value(value) {
-            return Err(ResponseError::InvalidHeader);
-        }
-        head_bytes = head_bytes
-            .checked_add(name.len())
-            .and_then(|total| total.checked_add(value.len()))
-            .and_then(|total| total.checked_add(4))
-            .ok_or(ResponseError::HeadersTooLarge)?;
-        if name.eq_ignore_ascii_case("connection") {
-            for token in value.split(',').map(str::trim) {
-                if !is_http_token(token) {
-                    return Err(ResponseError::InvalidHeader);
-                }
-                connection_fields.insert(token.to_ascii_lowercase());
-            }
-        }
-    }
-    if head_bytes > MAX_RESPONSE_HEAD_BYTES {
-        return Err(ResponseError::HeadersTooLarge);
-    }
+    let connection_fields = validate_response_headers(headers)?;
 
     let mut forwarded = Vec::with_capacity(headers.len());
     let mut metadata = Vec::new();
@@ -161,13 +136,7 @@ pub fn encode_response_head(
     if !(200..=599).contains(&status) {
         return Err(ResponseError::InvalidStatus);
     }
-    if reason.is_empty()
-        || reason
-            .bytes()
-            .any(|byte| byte < b' ' || byte == 0x7f || byte >= 0x80)
-    {
-        return Err(ResponseError::InvalidReason);
-    }
+    validate_reason(reason)?;
     let status_forbids_body = matches!(status, 204 | 205 | 304);
     if status_forbids_body && body_len != 0 {
         return Err(ResponseError::BodyNotAllowed);
@@ -194,6 +163,111 @@ pub fn encode_response_head(
         bytes: encoded,
         body_allowed,
     })
+}
+
+/// Validates and reconstructs a WebSocket Upgrade response. Origin-controlled
+/// framing, proxy, internal, and connection-nominated fields are never copied;
+/// the two mandatory hop-by-hop fields are emitted canonically by the proxy.
+pub fn encode_upgrade_response_head(
+    status: u16,
+    reason: &str,
+    headers: &[(String, String)],
+) -> Result<EncodedResponseHead, ResponseError> {
+    if status != 101 {
+        return Err(ResponseError::InvalidStatus);
+    }
+    validate_reason(reason)?;
+    let connection_fields = validate_response_headers(headers)?;
+    let connection_upgrade = headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("connection") && has_header_token(value, "upgrade")
+    });
+    let upgrade_values: Vec<_> = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("upgrade"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    if !connection_upgrade
+        || upgrade_values.len() != 1
+        || !upgrade_values[0].eq_ignore_ascii_case("websocket")
+    {
+        return Err(ResponseError::InvalidHeader);
+    }
+
+    let mut encoded = format!("HTTP/1.1 {status} {reason}\r\n").into_bytes();
+    for (name, value) in headers {
+        let lower = name.to_ascii_lowercase();
+        if connection_fields.contains(&lower)
+            || is_internal_header(name)
+            || is_proxy_managed_response_header(&lower)
+        {
+            continue;
+        }
+        encoded.extend_from_slice(name.as_bytes());
+        encoded.extend_from_slice(b": ");
+        encoded.extend_from_slice(value.as_bytes());
+        encoded.extend_from_slice(b"\r\n");
+    }
+    encoded.extend_from_slice(b"Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    if encoded.len() > MAX_RESPONSE_HEAD_BYTES {
+        return Err(ResponseError::HeadersTooLarge);
+    }
+    Ok(EncodedResponseHead {
+        bytes: encoded,
+        body_allowed: false,
+    })
+}
+
+fn validate_response_headers(
+    headers: &[(String, String)],
+) -> Result<HashSet<String>, ResponseError> {
+    if headers.len() > MAX_RESPONSE_HEADERS {
+        return Err(ResponseError::HeadersTooLarge);
+    }
+    let mut head_bytes = 0usize;
+    let mut connection_fields = HashSet::new();
+    for (name, value) in headers {
+        if !is_http_token(name) || !is_http_field_value(value) {
+            return Err(ResponseError::InvalidHeader);
+        }
+        head_bytes = head_bytes
+            .checked_add(name.len())
+            .and_then(|total| total.checked_add(value.len()))
+            .and_then(|total| total.checked_add(4))
+            .ok_or(ResponseError::HeadersTooLarge)?;
+        if name.eq_ignore_ascii_case("connection") {
+            for token in value.split(',').map(str::trim) {
+                if !is_http_token(token) {
+                    return Err(ResponseError::InvalidHeader);
+                }
+                connection_fields.insert(token.to_ascii_lowercase());
+            }
+        }
+    }
+    if head_bytes > MAX_RESPONSE_HEAD_BYTES {
+        return Err(ResponseError::HeadersTooLarge);
+    }
+    Ok(connection_fields)
+}
+
+fn validate_reason(reason: &str) -> Result<(), ResponseError> {
+    if reason.len() > MAX_RESPONSE_HEAD_BYTES {
+        return Err(ResponseError::HeadersTooLarge);
+    }
+    if reason.is_empty()
+        || reason
+            .bytes()
+            .any(|byte| byte < b' ' || byte == 0x7f || byte >= 0x80)
+    {
+        return Err(ResponseError::InvalidReason);
+    }
+    Ok(())
+}
+
+fn has_header_token(value: &str, expected: &str) -> bool {
+    value
+        .split(',')
+        .map(str::trim)
+        .any(|token| token.eq_ignore_ascii_case(expected))
 }
 
 fn is_internal_header(name: &str) -> bool {
@@ -338,6 +412,16 @@ mod tests {
                 .unwrap()
                 .contains("Content-Length: 12\r\n")
         );
+        assert_eq!(
+            encode_response_head(
+                "GET",
+                200,
+                &"x".repeat(MAX_RESPONSE_HEAD_BYTES + 1),
+                &headers,
+                0,
+            ),
+            Err(ResponseError::HeadersTooLarge)
+        );
     }
 
     #[test]
@@ -357,5 +441,64 @@ mod tests {
         ];
         let sanitized = sanitize_response_headers(&nominated).unwrap();
         assert!(sanitized.metadata().is_empty());
+    }
+
+    #[test]
+    fn upgrade_head_is_canonical_and_strips_internal_and_nominated_fields() {
+        let headers = vec![
+            (
+                "Connection".to_owned(),
+                "keep-alive, Upgrade, X-Hop".to_owned(),
+            ),
+            ("Upgrade".to_owned(), "websocket".to_owned()),
+            ("Sec-WebSocket-Accept".to_owned(), "accepted".to_owned()),
+            ("X-Hop".to_owned(), "secret".to_owned()),
+            ("X-HNS-Security-Path".to_owned(), "dane".to_owned()),
+            ("Alt-Svc".to_owned(), "h3=\":443\"".to_owned()),
+            ("Content-Length".to_owned(), "999".to_owned()),
+        ];
+
+        let encoded = encode_upgrade_response_head(101, "Switching Protocols", &headers).unwrap();
+        let text = String::from_utf8(encoded.into_bytes()).unwrap();
+
+        assert!(text.starts_with("HTTP/1.1 101 Switching Protocols\r\n"));
+        assert!(text.contains("Sec-WebSocket-Accept: accepted\r\n"));
+        assert!(text.ends_with("Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n"));
+        assert!(!text.contains("keep-alive"));
+        assert!(!text.contains("X-Hop"));
+        assert!(!text.contains("X-HNS-"));
+        assert!(!text.contains("Alt-Svc"));
+        assert!(!text.contains("Content-Length"));
+    }
+
+    #[test]
+    fn upgrade_head_requires_exact_websocket_switching_protocols() {
+        let valid = vec![
+            ("Connection".to_owned(), "Upgrade".to_owned()),
+            ("Upgrade".to_owned(), "websocket".to_owned()),
+        ];
+        assert_eq!(
+            encode_upgrade_response_head(200, "OK", &valid),
+            Err(ResponseError::InvalidStatus)
+        );
+        assert_eq!(
+            encode_upgrade_response_head(
+                101,
+                "Switching Protocols",
+                &[("Upgrade".to_owned(), "websocket".to_owned())],
+            ),
+            Err(ResponseError::InvalidHeader)
+        );
+        assert_eq!(
+            encode_upgrade_response_head(
+                101,
+                "Switching Protocols",
+                &[
+                    ("Connection".to_owned(), "Upgrade".to_owned()),
+                    ("Upgrade".to_owned(), "h2c".to_owned()),
+                ],
+            ),
+            Err(ResponseError::InvalidHeader)
+        );
     }
 }
