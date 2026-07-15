@@ -26,7 +26,7 @@ internal interface LocalBrowserProxy {
     /** Revokes admission and local-certificate trust without waiting for native workers to join. */
     fun requestStop()
 
-    /** Completes the blocking native worker join. This must not run on the Android main thread. */
+    /** Completes the idempotent blocking worker join. This must not run on the Android main thread. */
     fun joinAndDestroy()
 }
 

@@ -1563,15 +1563,11 @@ fn is_likely_main_frame_navigation(head: &RequestHead, path_and_query: &str) -> 
         return false;
     }
 
+    // Sec-Fetch-Dest is authoritative when the browser supplies it. In
+    // particular, nested navigations (`iframe`) and subresources must not be
+    // promoted by the compatibility fallbacks below.
     if let Some(fetch_destination) = head.header_values("sec-fetch-dest").next() {
-        if fetch_destination.eq_ignore_ascii_case("document")
-            || fetch_destination.eq_ignore_ascii_case("iframe")
-        {
-            return true;
-        }
-        if is_subresource_fetch_destination(fetch_destination) {
-            return false;
-        }
+        return fetch_destination.eq_ignore_ascii_case("document");
     }
     if head
         .header_values("sec-fetch-mode")
@@ -1591,29 +1587,6 @@ fn is_likely_main_frame_navigation(head: &RequestHead, path_and_query: &str) -> 
         return true;
     }
     path_and_query == "/"
-}
-
-fn is_subresource_fetch_destination(destination: &str) -> bool {
-    matches!(
-        destination.to_ascii_lowercase().as_str(),
-        "audio"
-            | "audioworklet"
-            | "embed"
-            | "font"
-            | "image"
-            | "manifest"
-            | "object"
-            | "paintworklet"
-            | "report"
-            | "script"
-            | "serviceworker"
-            | "sharedworker"
-            | "style"
-            | "track"
-            | "video"
-            | "worker"
-            | "xslt"
-    )
 }
 
 fn requests_upgrade(head: &RequestHead) -> bool {
@@ -2518,7 +2491,7 @@ mod tests {
     }
 
     #[test]
-    fn likely_main_frame_classification_matches_android_shell_rules() {
+    fn likely_main_frame_classification_treats_fetch_destination_as_authoritative() {
         let classify = |method, path, headers: &[(&str, &str)]| {
             is_likely_main_frame_navigation(&parsed_test_head(method, headers), path)
         };
@@ -2528,10 +2501,14 @@ mod tests {
             "/asset.js",
             &[("Sec-Fetch-Dest", "document")]
         ));
-        assert!(classify(
+        assert!(!classify(
             "HEAD",
             "/asset.js",
-            &[("Sec-Fetch-Dest", "IFRAME")]
+            &[
+                ("Sec-Fetch-Dest", "IFRAME"),
+                ("Sec-Fetch-Mode", "navigate"),
+                ("Accept", "text/html"),
+            ]
         ));
         assert!(!classify(
             "GET",
@@ -2539,6 +2516,16 @@ mod tests {
             &[
                 ("Sec-Fetch-Dest", "script"),
                 ("Sec-Fetch-Mode", "navigate"),
+                ("Accept", "text/html"),
+            ],
+        ));
+        assert!(!classify(
+            "GET",
+            "/",
+            &[
+                ("Sec-Fetch-Dest", "future-subresource"),
+                ("Sec-Fetch-Mode", "navigate"),
+                ("Upgrade-Insecure-Requests", "1"),
                 ("Accept", "text/html"),
             ],
         ));
@@ -3097,6 +3084,33 @@ mod tests {
                 "leaked {secret}: {diagnostic}"
             );
         }
+        drop(observations);
+        proxy.stop();
+    }
+
+    #[test]
+    fn iframe_response_status_is_not_marked_as_main_frame() {
+        let backend = Arc::new(RecordingBackend::new(ResponsePlan::plain(b"iframe")));
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observations);
+        let observer = Arc::new(move |observation: &ProxyResponseMetadataObservation| {
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(observation.clone());
+        });
+        let proxy = start_recording_proxy_with_metadata(backend, observer);
+        let request = format!(
+            "GET http://welcome/ HTTP/1.1\r\nHost: welcome\r\n{}Sec-Fetch-Dest: iframe\r\nSec-Fetch-Mode: navigate\r\nAccept: text/html\r\n\r\n",
+            auth_header(&proxy)
+        );
+
+        assert_eq!(response_status(&send_raw(&proxy, request.as_bytes())), 200);
+        let observations = observations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].status_code(), 200);
+        assert!(!observations[0].is_likely_main_frame());
         drop(observations);
         proxy.stop();
     }

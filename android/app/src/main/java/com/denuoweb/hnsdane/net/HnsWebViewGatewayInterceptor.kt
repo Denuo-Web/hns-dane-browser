@@ -23,6 +23,7 @@ class HnsWebViewGatewayInterceptor(
     private val handshakeNetwork: () -> String = { DEFAULT_NETWORK },
     private val reportAllHnsStatuses: Boolean = false,
     private val onMainFrameHnsStatus: (Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, HnsPageSecurityPath?, String?) -> Unit = { _, _, _, _, _ -> },
+    private val onMainFrameHnsStatusForUrl: (String, Int, HnsPageTlsPolicy?, HnsPageResolverPolicy?, HnsPageSecurityPath?, String?) -> Unit = { _, _, _, _, _, _ -> },
 ) {
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         return intercept(
@@ -40,9 +41,9 @@ class HnsWebViewGatewayInterceptor(
             url = request.url.toString(),
             requestHeaders = request.requestHeaders.orEmpty(),
             isForMainFrame = false,
-            // Chromium cannot surface proxy-auth challenges for service-worker requests
-            // because they have no WebContents. Body-bearing HNS service-worker requests
-            // therefore fail closed instead of falling through to the authenticated proxy.
+            // Chromium cannot surface proxy-auth or local-TLS challenges for service-worker
+            // requests because they have no WebContents. Body-bearing HNS service-worker
+            // requests therefore fail closed instead of falling through to the proxy.
             allowBodyRequestProxyFallback = false,
         )?.toWebResourceResponse()
 
@@ -64,6 +65,14 @@ class HnsWebViewGatewayInterceptor(
         val response = interceptInternal(method, url, requestHeaders, MAX_HNS_REDIRECTS, allowBodyRequestProxyFallback)
         if (response != null && (isForMainFrame || reportAllHnsStatuses)) {
             onMainFrameHnsStatus(
+                response.statusCode,
+                response.hnsTlsPolicy(),
+                response.hnsResolverPolicy(),
+                response.hnsSecurityPath(),
+                response.hnsResolutionTrace(),
+            )
+            onMainFrameHnsStatusForUrl(
+                url,
                 response.statusCode,
                 response.hnsTlsPolicy(),
                 response.hnsResolverPolicy(),
@@ -157,10 +166,6 @@ class HnsWebViewGatewayInterceptor(
         val headers = requestHeaders
             .filterKeys { name -> !isHopByHopOrSyntheticHeader(name) }
             .map { (name, value) -> name to value }
-            .filterNot { it.first.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) }
             .toMutableList()
         headers += "Accept-Encoding" to "identity"
         if (strictHnsMode()) {
@@ -285,7 +290,7 @@ internal data class HnsInterceptedResponse(
     }
 
     internal fun webResponseHeaders(): Map<String, String> =
-        headers.filterKeys { name -> !name.equals(HNS_SECURITY_PATH_HEADER, ignoreCase = true) }
+        headers.filterKeys { name -> !name.startsWith(HNS_INTERNAL_HEADER_PREFIX, ignoreCase = true) }
 
     internal fun openBodyStream(): InputStream =
         bodyFile?.let(GatewayResponseBodyStore::openReleasing) ?: ByteArrayInputStream(body)
@@ -513,10 +518,7 @@ private fun isHopByHopOrSyntheticHeader(name: String): Boolean {
         name.equals("Accept-Encoding", ignoreCase = true) ||
         name.equals("Content-Length", ignoreCase = true) ||
         name.equals("Host", ignoreCase = true) ||
-        name.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) ||
-        name.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) ||
-        name.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) ||
-        name.equals(HNS_SECURITY_PATH_HEADER, ignoreCase = true)
+        name.startsWith(HNS_INTERNAL_HEADER_PREFIX, ignoreCase = true)
 }
 
 private const val DEFAULT_NETWORK = "mainnet"

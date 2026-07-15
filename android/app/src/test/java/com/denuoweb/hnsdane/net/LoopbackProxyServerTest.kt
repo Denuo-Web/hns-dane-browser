@@ -242,6 +242,22 @@ class LoopbackProxyServerTest {
     }
 
     @Test
+    fun explicitIframeDestinationCannotFallThroughMainFrameFallbacks() {
+        val request = ProxyRequest(
+            line = ProxyRequestLine.parse("GET https://shakeshift/ HTTP/1.1"),
+            headers = listOf(
+                "Host" to "shakeshift",
+                "Sec-Fetch-Dest" to "iframe",
+                "Sec-Fetch-Mode" to "navigate",
+                "Upgrade-Insecure-Requests" to "1",
+                "Accept" to "text/html",
+            ),
+        )
+
+        assertFalse(request.isLikelyMainFrameNavigation())
+    }
+
+    @Test
     fun hnsSingleLabelRequiresLocalResolution() {
         assertTrue(requiresHnsResolution("welcome"))
         assertTrue(requiresHnsResolution("name."))
@@ -364,7 +380,8 @@ class LoopbackProxyServerTest {
                     "X-HNS-TLS-Policy: dane\r\n" +
                     "X-HNS-Resolver-Policy: hns-doh-compat\r\n" +
                     "$HNS_SECURITY_PATH_HEADER: dane-third-party-doh\r\n" +
-                    "$HNS_RESOLUTION_TRACE_HEADER: {\"fallback\":{\"used\":true}}\r\n\r\nok"
+                    "$HNS_RESOLUTION_TRACE_HEADER: {\"fallback\":{\"used\":true}}\r\n" +
+                    "x-hns-future-metadata: private\r\n\r\nok"
                 ).toByteArray(StandardCharsets.ISO_8859_1),
         )
         val reported = ArrayBlockingQueue<ReportedHnsStatus>(1)
@@ -393,7 +410,7 @@ class LoopbackProxyServerTest {
 
                 val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
                 assertTrue(response.startsWith("HTTP/1.1 200 OK\r\n"))
-                assertFalse(response.contains(HNS_SECURITY_PATH_HEADER, ignoreCase = true))
+                assertFalse(response.contains("X-HNS-", ignoreCase = true))
             }
         }
 
@@ -497,7 +514,15 @@ class LoopbackProxyServerTest {
     @Test
     fun hnsHttpRequestStreamsNativeGatewayBodyFile() {
         val bridge = FileGatewayBridge(
-            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n$HNS_SECURITY_PATH_HEADER: hns-authoritative-dns53\r\n\r\n"
+            (
+                "HTTP/1.1 200 OK\r\n" +
+                    "Content-Length: 4\r\n" +
+                    "Connection: close\r\n" +
+                    "$HNS_SECURITY_PATH_HEADER: hns-authoritative-dns53\r\n" +
+                    "X-HNS-TLS-Policy: dane\r\n" +
+                    "$HNS_RESOLUTION_TRACE_HEADER: private-trace\r\n" +
+                    "x-hns-future-metadata: private\r\n\r\n"
+                )
                 .toByteArray(StandardCharsets.ISO_8859_1),
             "test".toByteArray(StandardCharsets.ISO_8859_1),
         )
@@ -762,9 +787,11 @@ class LoopbackProxyServerTest {
             Socket(InetAddress.getByName("127.0.0.1"), port).use { socket ->
                 socket.getOutputStream().write(
                     (
-                        "GET http://welcome/path HTTP/1.1\r\n" +
+                            "GET http://welcome/path HTTP/1.1\r\n" +
                             "Host: welcome\r\n" +
-                            "$HNS_GATEWAY_STRICT_MODE_HEADER: 0\r\n\r\n"
+                            "$HNS_GATEWAY_STRICT_MODE_HEADER: 0\r\n" +
+                            "X-HNS-TLS-Policy: dane\r\n" +
+                            "x-hns-future-control: spoofed\r\n\r\n"
                         ).toByteArray(StandardCharsets.ISO_8859_1),
                 )
                 socket.getOutputStream().flush()
@@ -1022,7 +1049,10 @@ class LoopbackProxyServerTest {
                 "HTTP/1.1 101 Switching Protocols\r\n" +
                     "Upgrade: websocket\r\n" +
                     "Connection: Upgrade\r\n" +
-                    "$HNS_SECURITY_PATH_HEADER: dane-authoritative-doh\r\n\r\n"
+                    "$HNS_SECURITY_PATH_HEADER: dane-authoritative-doh\r\n" +
+                    "X-HNS-TLS-Policy: dane\r\n" +
+                    "$HNS_RESOLUTION_TRACE_HEADER: private-trace\r\n" +
+                    "x-hns-future-metadata: private\r\n\r\n"
                 )
                 .toByteArray(StandardCharsets.ISO_8859_1),
         )
@@ -1048,7 +1078,7 @@ class LoopbackProxyServerTest {
                 val response = socket.getInputStream().readBytes().toString(StandardCharsets.ISO_8859_1)
                 assertTrue(response.startsWith("HTTP/1.1 200 Connection Established\r\n"))
                 assertTrue(response.contains("HTTP/1.1 101 Switching Protocols\r\n"))
-                assertFalse(response.contains(HNS_SECURITY_PATH_HEADER, ignoreCase = true))
+                assertFalse(response.contains("X-HNS-", ignoreCase = true))
                 assertTrue(response.endsWith("ping"))
             }
         }

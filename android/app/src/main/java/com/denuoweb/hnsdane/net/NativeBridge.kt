@@ -3,6 +3,7 @@ package com.denuoweb.hnsdane.net
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.Locale
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 interface HnsGatewayBridge {
@@ -175,19 +176,31 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         pathAndQuery: String,
         headers: List<Pair<String, String>>,
         body: ByteArray,
-    ): ByteArray? = if (isLoaded) {
-        nativeGatewayHttpResponse(
-            dataDir,
-            method,
-            scheme,
-            host,
-            port,
-            pathAndQuery,
-            serializeHeaders(headers),
-            body,
-        )
-    } else {
-        null
+    ): ByteArray? {
+        if (!isLoaded) return null
+        val headerText = serializeHeaders(headers)
+        val controls = gatewayRuntimeControls(headers)
+        return withRuntime(
+            dataDir = dataDir,
+            network = controls.network,
+            unavailable = null,
+            createFailure = { null },
+        ) { handle ->
+            nativeRuntimeGatewayHttpResponse(
+                handle,
+                controls.network,
+                controls.strictHnsMode,
+                controls.dohResolverUrl,
+                controls.statelessDaneCertificates,
+                method,
+                scheme,
+                host,
+                port,
+                pathAndQuery,
+                headerText,
+                body,
+            )
+        }
     }
 
     override fun httpResponseBodyFile(
@@ -203,19 +216,32 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         if (!isLoaded) {
             return null
         }
+        val headerText = serializeHeaders(headers)
+        val controls = gatewayRuntimeControls(headers)
         val bodyFile = GatewayResponseBodyStore.create(dataDir) ?: return null
         val head = runCatching {
-            nativeGatewayHttpResponseBodyToFile(
-                dataDir,
-                method,
-                scheme,
-                host,
-                port,
-                pathAndQuery,
-                serializeHeaders(headers),
-                body,
-                bodyFile.absolutePath,
-            )
+            withRuntime(
+                dataDir = dataDir,
+                network = controls.network,
+                unavailable = null,
+                createFailure = { null },
+            ) { handle ->
+                nativeRuntimeGatewayHttpResponseBodyToFile(
+                    handle,
+                    controls.network,
+                    controls.strictHnsMode,
+                    controls.dohResolverUrl,
+                    controls.statelessDaneCertificates,
+                    method,
+                    scheme,
+                    host,
+                    port,
+                    pathAndQuery,
+                    headerText,
+                    body,
+                    bodyFile.absolutePath,
+                )
+            }
         }.getOrNull()
         if (head == null || !GatewayResponseBodyStore.retainCompleted(bodyFile)) {
             GatewayResponseBodyStore.release(bodyFile)
@@ -252,20 +278,17 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         unavailable = null,
         createFailure = { null },
     ) { runtimeHandle ->
-        val policyRevision = nativeRuntimeSetPolicy(
+        val bundle = nativeRuntimeStartProxy(
             runtimeHandle,
+            config.network,
             config.strictHnsMode,
             config.dohResolverUrl,
             config.statelessDaneCertificates,
-        )
-        if (policyRevision <= 0L) {
+            config.scopeHost,
+        ) ?: return@withRuntime null
+        parseRustProxyEndpointBundle(bundle) ?: run {
+            rustProxyHandleFromBundle(bundle)?.let(::nativeProxyDestroy)
             null
-        } else {
-            val bundle = nativeRuntimeStartProxy(runtimeHandle, config.scopeHost) ?: return@withRuntime null
-            parseRustProxyEndpointBundle(bundle) ?: run {
-                rustProxyHandleFromBundle(bundle)?.let(::nativeProxyDestroy)
-                null
-            }
         }
     }
 
@@ -339,7 +362,8 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         block: (Long) -> T,
     ): T {
         if (!isLoaded) return unavailable
-        val key = RuntimeKey(dataDir, network)
+        val canonicalNetwork = canonicalRuntimeNetwork(network)
+        val key = RuntimeKey(dataDir, canonicalNetwork)
         val readLock = runtimeLifecycleLock.readLock()
         readLock.lock()
         try {
@@ -353,7 +377,7 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
         try {
             val existing = runtimeHandles[key]
             if (existing != null) return block(existing)
-            val created = nativeRuntimeCreate(dataDir, network)
+            val created = nativeRuntimeCreate(dataDir, canonicalNetwork)
             if (created == INVALID_RUNTIME_HANDLE) return createFailure()
             runtimeHandles[key] = created
             return block(created)
@@ -382,14 +406,45 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
 
     private external fun nativeRuntimeHnsProofDetails(handle: Long, host: String): String
 
-    private external fun nativeRuntimeSetPolicy(
+    private external fun nativeRuntimeStartProxy(
         handle: Long,
+        network: String,
         strictHnsMode: Boolean,
         dohResolverUrl: String,
         statelessDaneCertificates: Boolean,
-    ): Long
+        scopeRoot: String,
+    ): ByteArray?
 
-    private external fun nativeRuntimeStartProxy(handle: Long, scopeRoot: String): ByteArray?
+    private external fun nativeRuntimeGatewayHttpResponse(
+        handle: Long,
+        network: String,
+        strictHnsMode: Boolean,
+        dohResolverUrl: String,
+        statelessDaneCertificates: Boolean,
+        method: String,
+        scheme: String,
+        host: String,
+        port: Int,
+        pathAndQuery: String,
+        headerText: String,
+        body: ByteArray,
+    ): ByteArray?
+
+    private external fun nativeRuntimeGatewayHttpResponseBodyToFile(
+        handle: Long,
+        network: String,
+        strictHnsMode: Boolean,
+        dohResolverUrl: String,
+        statelessDaneCertificates: Boolean,
+        method: String,
+        scheme: String,
+        host: String,
+        port: Int,
+        pathAndQuery: String,
+        headerText: String,
+        body: ByteArray,
+        bodyPath: String,
+    ): ByteArray?
 
     private external fun nativeProxyRequestStop(
         handle: Long,
@@ -441,29 +496,6 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
 
     private external fun nativeLocalTlsCertificate(host: String): ByteArray?
 
-    private external fun nativeGatewayHttpResponse(
-        dataDir: String,
-        method: String,
-        scheme: String,
-        host: String,
-        port: Int,
-        pathAndQuery: String,
-        headerText: String,
-        body: ByteArray,
-    ): ByteArray?
-
-    private external fun nativeGatewayHttpResponseBodyToFile(
-        dataDir: String,
-        method: String,
-        scheme: String,
-        host: String,
-        port: Int,
-        pathAndQuery: String,
-        headerText: String,
-        body: ByteArray,
-        bodyPath: String,
-    ): ByteArray?
-
     private external fun nativeGatewayHttpUpgradeTunnel(
         dataDir: String,
         method: String,
@@ -484,6 +516,46 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
             append("\r\n")
         }
     }
+
+    private fun gatewayRuntimeControls(headers: List<Pair<String, String>>): GatewayRuntimeControls {
+        var strictHnsMode = false
+        var dohResolverUrl = ""
+        var statelessDaneCertificates = false
+        var network = DEFAULT_NETWORK
+        headers.forEach { (name, rawValue) ->
+            val value = rawValue.trim()
+            when {
+                name.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) -> {
+                    strictHnsMode = strictHnsMode ||
+                        value == "1" || value.equals("true", ignoreCase = true)
+                }
+                name.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) -> {
+                    dohResolverUrl = value
+                }
+                name.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) -> {
+                    statelessDaneCertificates = statelessDaneCertificates ||
+                        value == "1" || value.equals("true", ignoreCase = true)
+                }
+                name.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) -> {
+                    network = value
+                }
+            }
+        }
+        return GatewayRuntimeControls(
+            network = canonicalRuntimeNetwork(network),
+            strictHnsMode = strictHnsMode,
+            dohResolverUrl = dohResolverUrl,
+            statelessDaneCertificates = statelessDaneCertificates,
+        )
+    }
+
+    private fun canonicalRuntimeNetwork(network: String): String =
+        when (network.trim().lowercase(Locale.US)) {
+            "main", "mainnet" -> "mainnet"
+            "test", "testnet" -> "testnet"
+            "reg", "regtest" -> "regtest"
+            else -> network.trim()
+        }
 
     private fun parseLocalTlsCertificateBundle(bundle: ByteArray): LocalTlsCertificate? {
         var offset = 0
@@ -535,6 +607,13 @@ object NativeBridge : HnsGatewayBridge, HnsSyncBridge, LocalTlsCertificateProvid
     private const val DEFAULT_NETWORK = "mainnet"
 
     private data class RuntimeKey(val dataDir: String, val network: String)
+
+    private data class GatewayRuntimeControls(
+        val network: String,
+        val strictHnsMode: Boolean,
+        val dohResolverUrl: String,
+        val statelessDaneCertificates: Boolean,
+    )
 
     private val runtimeLifecycleLock = ReentrantReadWriteLock()
     private val runtimeHandles = mutableMapOf<RuntimeKey, Long>()

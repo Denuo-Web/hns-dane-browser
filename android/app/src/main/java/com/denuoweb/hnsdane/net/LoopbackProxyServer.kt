@@ -27,26 +27,6 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
-private val SUBRESOURCE_FETCH_DESTINATIONS = setOf(
-    "audio",
-    "audioworklet",
-    "embed",
-    "font",
-    "image",
-    "manifest",
-    "object",
-    "paintworklet",
-    "report",
-    "script",
-    "serviceworker",
-    "sharedworker",
-    "style",
-    "track",
-    "video",
-    "worker",
-    "xslt",
-)
-
 class LoopbackProxyServer(
     private val port: Int,
     private val dataDir: File = File("."),
@@ -275,7 +255,7 @@ class LoopbackProxyServer(
                 body = body,
             ) ?: throw ProxyHttpException(503, "HNS Resolution Unavailable")
             recordGatewayStatus(target.host, response, "native_response", request)
-            client.getOutputStream().write(response.withoutInternalSecurityPathHeader())
+            client.getOutputStream().write(response.withoutInternalHnsHeaders())
             client.getOutputStream().flush()
         } catch (error: ProxyHttpException) {
             GatewayEventLog.record("proxy_reject", target.host, error.status, error.reason)
@@ -383,7 +363,7 @@ class LoopbackProxyServer(
 
     private fun writeGatewayFileResponse(output: OutputStream, response: HnsGatewayFileResponse) {
         try {
-            output.write(response.head.withoutInternalSecurityPathHeader())
+            output.write(response.head.withoutInternalHnsHeaders())
             response.openBodyStream().use { body ->
                 copy(body, output)
             }
@@ -393,7 +373,7 @@ class LoopbackProxyServer(
         }
     }
 
-    private fun ByteArray.withoutInternalSecurityPathHeader(): ByteArray {
+    private fun ByteArray.withoutInternalHnsHeaders(): ByteArray {
         val headerEnd = headerEndIndex(this)
         if (headerEnd < 0) {
             return this
@@ -401,7 +381,8 @@ class LoopbackProxyServer(
         val headerText = copyOfRange(0, headerEnd).toString(StandardCharsets.ISO_8859_1)
         val lines = headerText.split("\r\n")
         val retained = lines.filterIndexed { index, line ->
-            index == 0 || !line.substringBefore(':').trim().equals(HNS_SECURITY_PATH_HEADER, ignoreCase = true)
+            index == 0 ||
+                !line.substringBefore(':').trim().startsWith(HNS_INTERNAL_HEADER_PREFIX, ignoreCase = true)
         }
         if (retained.size == lines.size) {
             return this
@@ -623,7 +604,7 @@ class LoopbackProxyServer(
                 return
             }
 
-            delegate.write(buffered.withoutInternalSecurityPathHeader())
+            delegate.write(buffered.withoutInternalHnsHeaders())
             pendingHead.reset()
             headForwarded = true
         }
@@ -904,11 +885,7 @@ internal data class ProxyRequest(
             .filterNot { it.first.equals("Transfer-Encoding", ignoreCase = true) }
             .filterNot { it.first.equals("Trailer", ignoreCase = true) }
             .filterNot { hasTransferEncoding() && it.first.equals("Content-Length", ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_STRICT_MODE_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_DOH_RESOLVER_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_STATELESS_DANE_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_GATEWAY_NETWORK_HEADER, ignoreCase = true) }
-            .filterNot { it.first.equals(HNS_SECURITY_PATH_HEADER, ignoreCase = true) }
+            .filterNot { it.first.startsWith(HNS_INTERNAL_HEADER_PREFIX, ignoreCase = true) }
             .toMutableList()
         if (strictHnsMode) {
             sanitized += HNS_GATEWAY_STRICT_MODE_HEADER to "1"
@@ -983,11 +960,8 @@ internal data class ProxyRequest(
             return false
         }
         val fetchDest = headerValue("Sec-Fetch-Dest")?.lowercase(Locale.US)
-        if (fetchDest == "document" || fetchDest == "iframe") {
-            return true
-        }
-        if (fetchDest in SUBRESOURCE_FETCH_DESTINATIONS) {
-            return false
+        if (fetchDest != null) {
+            return fetchDest == "document"
         }
         val fetchMode = headerValue("Sec-Fetch-Mode")?.lowercase(Locale.US)
         if (fetchMode == "navigate") {
