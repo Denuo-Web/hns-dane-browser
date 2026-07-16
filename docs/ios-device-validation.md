@@ -10,11 +10,10 @@ Run with the repository-pinned Rust toolchain, Xcode 26.5 or 26.6, and the iOS 2
 
 ```sh
 ./scripts/check.sh
-./scripts/build-rust-ios.sh
-./scripts/build-ios.sh
+./scripts/run-ios-gate.sh
 ```
 
-The gate must produce device arm64 and universal arm64/x86_64 simulator slices, create `HnsBrowserRuntime.xcframework`, compile the C header smoke test, link the iOS application and test target without undefined FFI symbols, and execute the unit tests on an iPhone simulator. Completion establishes build, linkage, and simulator behavior only; it is not evidence that the signed physical-device matrix passed.
+The first command is the portable repository check. The second is the same complete macOS gate used by CI: it verifies Xcode and the exact SDK, installs the pinned Rust toolchain and Apple targets, produces device arm64 and universal arm64/x86_64 simulator slices, creates `HnsBrowserRuntime.xcframework`, compiles the C header smoke test, links the iOS application and test target without undefined FFI symbols, executes the unit tests on an iPhone simulator, and performs an unsigned Release link against the device slice. Completion establishes build, linkage, and simulator behavior only; it is not evidence that the signed physical-device matrix passed.
 
 ## Signed Physical Device Gate — Pending
 

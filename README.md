@@ -72,11 +72,10 @@ The debug APK is written to `android/app/build/outputs/apk/debug/app-debug.apk`.
 On macOS with Xcode 26.5 or 26.6, the stable iOS 26.5 SDK, and the configured Apple Rust targets:
 
 ```sh
-./scripts/build-rust-ios.sh
-./scripts/build-ios.sh
+./scripts/run-ios-gate.sh
 ```
 
-The first command creates `build/apple/HnsBrowserRuntime.xcframework`; the second builds the checked-in iOS 17.0-or-later project and its test target. The simulator gate selects an iPhone simulator and executes that test target with `HNS_IOS_ACTION=test` against the iOS 26.5 SDK. This validates the Apple build, linkage, and simulator tests only; see `docs/ios-device-validation.md` for the optional signed physical-device matrix.
+The gate verifies the selected Xcode and exact SDK, installs the pinned Rust toolchain and Apple targets, checks the ABI and platform boundaries, creates `build/apple/HnsBrowserRuntime.xcframework`, selects an iOS 26.5 iPhone simulator, executes the test target, and links an unsigned Release build against the arm64 device slice. This validates the Apple build, linkage, and simulator tests only; see `docs/ios-device-validation.md` for the optional signed physical-device matrix.
 
 Debug/demo builds are unsigned beyond the default Android debug key and are intended for testing only. The diagnostics screen identifies Denuo Web, LLC as publisher, shows the build channel and license, and states that donations are optional and unlock no app features.
 

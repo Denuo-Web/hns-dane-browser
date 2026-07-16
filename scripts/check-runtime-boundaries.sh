@@ -102,7 +102,7 @@ if ! grep -Fq 'panic = "unwind"' "$ROOT_DIR/rust/Cargo.toml"; then
   exit 1
 fi
 
-for script in build-rust-ios.sh build-ios.sh check-ios-abi.sh; do
+for script in build-rust-ios.sh build-ios.sh check-ios-abi.sh run-ios-gate.sh; do
   if [[ ! -x "$ROOT_DIR/scripts/$script" ]]; then
     echo "ERROR: Apple validation helper is missing or not executable: scripts/$script" >&2
     exit 1
