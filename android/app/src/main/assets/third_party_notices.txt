@@ -17,7 +17,7 @@ artifacts. Inclusion here does not imply endorsement by the component authors.
 
 Generator schema: 1
 Generated input SHA-256:
-  scripts/generate-third-party-notices.py = a6fc09cfc0e98246f5592881cf8ef7edb0289c2d89ea36869e49c6a3a8ff5246
+  scripts/generate-third-party-notices.py = ded9126310be915cea33920fba85f226ff354616e0284aa358d98b0b9eb6c7ef
   rust/Cargo.toml = 7d8e0e0c400ffc0a14abef7baab5935ae1809fd85dc0aab988b68f8a4806afea
   rust/Cargo.lock = ce75c957e3e6512288e45c45737e7ab327febd32a1d1e7d12cf919f1dcf7d216
   android/gradle/libs.versions.toml = e38501dbbb112b0fa54e67c21f5ecb7d31cd3dfd20e67082cb5be43114c37143
@@ -37,7 +37,6 @@ Generated input SHA-256:
   rust/crates/hns-sync/Cargo.toml = e573dd5bb30b3a6f89a00cb01929b268849e5d54b7c4b9cebad6dc937d8fa2e3
   rust/crates/hns-transport/Cargo.toml = 6e0c5572ca4f792df332844e6a74577e558dae64eea88afa862fb3409f021f97
   rust/crates/hns-urkel/Cargo.toml = 83ddd253d6a3699205df6647d894fcb2f081857c96fa272627b18aad1f34eb88
-  rust/crates/ios-ffi/Cargo.toml = f12d3a7b96ae1195116a11ae9aee6a3e4da3d5585e5a70fc794d9c735f90e778
 
 ANDROID RUNTIME COMPONENTS (40)
   androidx.activity:activity-ktx:1.13.0 | Apache-2.0

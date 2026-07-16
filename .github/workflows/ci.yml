@@ -14,8 +14,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    name: Change scope and repository policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      rust: ${{ steps.targets.outputs.rust }}
+      android: ${{ steps.targets.outputs.android }}
+      ios: ${{ steps.targets.outputs.ios }}
+    steps:
+      - name: Check out repository and comparison history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select affected CI targets
+        id: targets
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_BEFORE_SHA: ${{ github.event.before }}
+          CI_CURRENT_SHA: ${{ github.sha }}
+          CI_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/ci-changed-targets.sh
+
+      - name: Install pinned Rust toolchain for metadata policy
+        run: rustup toolchain install 1.92.0 --profile minimal
+
+      - name: Verify repository policy and release metadata
+        run: |
+          python3 -m unittest -v tests/test_ci_changed_targets.py
+          ./scripts/verify-supply-chain.sh
+          python3 ./scripts/generate-third-party-notices.py --check
+          ./scripts/check-version-consistency.sh
+
   rust:
     name: Rust and supply chain
+    needs: scope
+    if: ${{ needs.scope.outputs.rust == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -37,6 +74,8 @@ jobs:
 
   android:
     name: Android build and unit tests
+    needs: scope
+    if: ${{ needs.scope.outputs.android == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -68,6 +107,9 @@ jobs:
       - name: Verify pinned build inputs
         run: ./scripts/verify-supply-chain.sh
 
+      - name: Verify shared runtime boundaries
+        run: ./scripts/check-runtime-boundaries.sh
+
       - name: Build and test Android variants
         working-directory: android
         env:
@@ -78,6 +120,8 @@ jobs:
 
   ios:
     name: Apple ABI, XCFramework, and iOS shell
+    needs: scope
+    if: ${{ needs.scope.outputs.ios == 'true' }}
     runs-on: macos-26
     # Three release-mode Rust slices plus simulator XCTest and a device-slice
     # Release link routinely exceed the old one-hour budget on the standard
@@ -91,3 +135,46 @@ jobs:
 
       - name: Run the complete iOS gate
         run: ./scripts/run-ios-gate.sh
+
+  required:
+    name: Required CI
+    needs: [scope, rust, android, ios]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify every selected target passed
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          RUST_REQUIRED: ${{ needs.scope.outputs.rust }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          ANDROID_REQUIRED: ${{ needs.scope.outputs.android }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          IOS_REQUIRED: ${{ needs.scope.outputs.ios }}
+          IOS_RESULT: ${{ needs.ios.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+
+          if [[ "$SCOPE_RESULT" != "success" ]]; then
+            echo "::error::Change scope and repository policy finished with $SCOPE_RESULT."
+            failed=1
+          fi
+
+          check_target() {
+            local name="$1"
+            local required="$2"
+            local result="$3"
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "::error::$name finished with $result."
+              failed=1
+            elif [[ "$required" == "true" && "$result" != "success" ]]; then
+              echo "::error::$name was required but finished with $result."
+              failed=1
+            fi
+          }
+
+          check_target "Rust" "$RUST_REQUIRED" "$RUST_RESULT"
+          check_target "Android" "$ANDROID_REQUIRED" "$ANDROID_RESULT"
+          check_target "iOS" "$IOS_REQUIRED" "$IOS_RESULT"
+          exit "$failed"

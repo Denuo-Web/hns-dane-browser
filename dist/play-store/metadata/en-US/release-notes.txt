@@ -1,1 +1,1 @@
-0.4.0 moves Android's security-sensitive HNS, DNSSEC, DANE, proxy, and TLS logic into a shared Rust runtime, preserves Android behavior, and adds the native iOS foundation using the same engine.
+0.4.1 updates the in-app source code link to the renamed cross-platform GitHub repository. Browser behavior and networking are unchanged.

@@ -2,13 +2,13 @@
 
 Last audited: 2026-07-15
 
-This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the audit serves version `0.3.1` (`versionCode 22`), while the repository release candidate declares `0.4.0` (`versionCode 38`).
+This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the audit serves version `0.3.1` (`versionCode 22`), while the repository release candidate declares Android `0.4.1` (`versionCode 39`) with the unchanged shared Rust engine at `0.4.0`.
 
 ## Release Candidate Findings
 
 | Area | Status | Finding |
 | --- | --- | --- |
-| Android release build | Ready locally | The final `0.4.0` / code 38 build produced a non-debuggable, minified, resource-shrunk, upload-signed APK and AAB; signer, structure, native hardening, symbols, and 16 KiB alignment checks passed. |
+| Android release build | Ready locally | The final `0.4.1` / code 39 build produced a non-debuggable, minified, resource-shrunk, upload-signed APK and AAB; signer, structure, native hardening, symbols, and 16 KiB alignment checks passed. |
 | Public Play listing | Reconciliation required | Google Play already has a production listing at `0.3.1` (`versionCode 22`). Before the next update, reconcile the live privacy-policy field, Data safety answers, listing text, screenshots, and release notes with current behavior and the eventual release version. |
 | Privacy policy | Ready | The canonical URL `https://denuoweb.com/work/hns-dane-browser/privacy` renders the HNS DANE Browser Privacy Policy after the site application loads. The supplied hosted policy covers local data, browser/HNS network requests, sharing, security, retention/deletion, children, and a privacy contact mechanism; it is accepted unchanged for this release audit. |
 | Manifest exposure | Ready | The only app-defined exported entry point is `LauncherActivity`. Browser, settings, diagnostics, HNS inspector, history, download, and other app activities are non-exported, and the app declares no service. Merged dependency components remain subject to their own signature/permission guards. |
@@ -16,9 +16,9 @@ This audit treats the repository as a candidate update to an existing public Goo
 | Cleartext policy | Ready | Cleartext is disabled globally with a loopback-only exception for the local gateway. User-selected HTTP and direct DNS/HNS traffic are accurately disclosed, but ordinary open-web and user-initiated transfers are outside Google Play's Data safety collection/sharing scope. |
 | WebView hardening | Ready | Mixed content is blocked, Safe Browsing is enabled, file/content access is disabled, native JavaScript bridges are removed, WebView debugging follows `BuildConfig.DEBUG`, and loopback proxying is limited to active HNS host/subdomain scope. |
 | Privacy controls | Improved | Settings can clear cookies plus WebView origin storage, and the diagnostics UI can clear the bounded gateway event log. The repository and in-app disclosures now describe WebView-provider Safe Browsing and these local retention controls. |
-| Build supply chain | Local and hosted gates pass; not continuously enforced | Local Rust, dependency, Android unit, lint, and signed-bundle checks passed. The exact merged tree also passed the hosted Rust, cold-cache Android, and Xcode 26.5 Apple jobs in [GitHub Actions run 29470594464](https://github.com/Denuo-Web/hns-dane-browser-android/actions/runs/29470594464). Actions was restored to the repository's prior disabled state afterward, and `main` still has no protection or ruleset. |
+| Build supply chain | Local and hosted gates pass; not continuously enforced | Local Rust, dependency, Android unit, lint, and signed-bundle checks passed. The exact merged tree also passed the hosted Rust, cold-cache Android, and Xcode 26.5 Apple jobs in [GitHub Actions run 29470594464](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29470594464). Actions was restored to the repository's prior disabled state afterward, and `main` still has no protection or ruleset. |
 | 16 KiB / native symbols | Local gate passed | The clean bundle uses `PAGE_ALIGNMENT_16K`; both stripped JNI libraries have 16 KiB PT_LOAD alignment, RELRO, non-executable stacks, immediate binding, no text relocations, and matching unstripped FULL debug metadata with SHA-1 Build IDs. |
-| Release-device acceptance | Automated parity passed; final manual matrix pending | The shared-runtime tree passed 5/5 connected Pixel instrumentation checks and live `https://denuoweb/` / `https://aboutlife/` DNSSEC/DANE acceptance. The exact signed `0.4.0` APK then upgraded the Pixel 9 from `0.3.16` / code 37 and cold-launched `MainActivity` as `0.4.0` / code 38. A broader final-version manual regression matrix remains a separate gate. |
+| Release-device acceptance | Signed update smoke passed; final manual matrix pending | The shared-runtime tree passed 5/5 connected Pixel instrumentation checks and live `https://denuoweb/` / `https://aboutlife/` DNSSEC/DANE acceptance. The exact signed `0.4.1` APK upgraded the Pixel 9 from `0.4.0` / code 38 and cold-launched `MainActivity` as `0.4.1` / code 39. A broader final-version manual regression matrix remains a separate gate. |
 | Data collection posture | Ready for live-form reconciliation | No ads, analytics SDKs, developer accounts, sensitive permissions, advertising ID access, or developer telemetry endpoint was found. Google's current guidance excludes open-web WebView navigation, on-device processing, and reasonably expected user-initiated transfers; retain the live `No collected / No shared` posture unless the current WebView Safe Browsing provider guidance requires a declaration. |
 
 ## Applied Cleanup
@@ -46,11 +46,11 @@ This audit treats the repository as a candidate update to an existing public Goo
 
 ## Local Verification Evidence
 
-- `./scripts/check.sh`: passed on 2026-07-15 for `0.4.0`, including supply-chain/version checks, formatting, warning-denied Clippy, all three cargo-deny scopes, the complete Rust test matrix, fuzz-target compilation, and the snapshot exporter.
-- Final signed Android build: passed with Gradle 9.6.1 / AGP 9.2.1, compile/target SDK 37, NDK `28.2.13676358`, and build-tools AAPT2 36.1.0; the clean gate completed 97 actionable tasks in 12m 12s after compiling both native ABIs.
-- Android tests and lint: 186 unit tests passed; debug and release lint completed with no errors.
+- `./scripts/check.sh`: passed on 2026-07-15 for the Android `0.4.1` candidate with shared Rust engine `0.4.0`, including supply-chain/version checks, formatting, warning-denied Clippy, all three cargo-deny scopes, the complete Rust test matrix, fuzz-target compilation, and the snapshot exporter.
+- Final signed Android build: passed with Gradle 9.6.1 / AGP 9.2.1, compile/target SDK 37, NDK `28.2.13676358`, and build-tools AAPT2 36.1.0; the clean gate completed 97 actionable tasks in 11m 13s after compiling both native ABIs.
+- Android tests and lint: 187 unit tests passed; debug and release lint completed with no errors.
 - Candidate artifact inspection: both packaged libraries report NDK r28c, Android API 34, stripped status, 16 KiB PT_LOAD alignment, GNU_RELRO, non-executable GNU_STACK, BIND_NOW/NOW, and matching unstripped debug-symbol Build IDs. The signed release APK also passes `zipalign -c -P 16 4`.
-- Final signed `0.4.0` / code 38 AAB: SHA-256 `800ea0bae2a55e766f1bd6a3523ae7eefe3708e3b7a7c628ba780caf15df7fdb`. The signed GitHub APK is SHA-256 `d210b115b4c5a6ea49a54b51e80d6895770ecdbfa5c12050ae60c83f475c2d34`, matches the established release signer, and passes APK Signature Scheme v2 plus 16 KiB ZIP-alignment verification.
+- Final signed `0.4.1` / code 39 AAB: SHA-256 `4b2cc8b1da7700675eedb1ed2319ccafd9541acc7114abff9bd60eb6399b4267`. The signed GitHub APK is SHA-256 `a5a9d50d5b19302af488f7f5e6c68281364070edc7edcb14e16dbb1e1a5d61a2`, matches the established release signer, and passes APK Signature Scheme v2 plus 16 KiB ZIP-alignment verification.
 
 ## Watch Items
 

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-15
+
+### Changed
+
+- Updated the repository and in-app source-code links to the renamed cross-platform GitHub repository.
+- Bumped the Android app and Play release package to 0.4.1 (build 39) while retaining the unchanged Rust engine and Apple shell at 0.4.0.
+- Made CI select Rust, Android, and Apple gates from the changed paths, with shared Rust changes still validating both platform packages.
+
 ## 0.4.0 - 2026-07-15
 
 ### Added
