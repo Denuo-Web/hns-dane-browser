@@ -38,6 +38,9 @@ LOCKED_INPUT_PATHS = (
 RUST_MANIFEST_INPUTS = tuple(
     path.relative_to(ROOT).as_posix()
     for path in sorted((ROOT / "rust/crates").glob("*/Cargo.toml"))
+    # The notice ships only in Android; an iOS-adapter-only manifest change
+    # must not force a new Android asset or Android build.
+    if path.parent.name != "ios-ffi"
 )
 INPUT_PATHS = LOCKED_INPUT_PATHS + RUST_MANIFEST_INPUTS
 LICENSE_FILE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")

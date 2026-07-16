@@ -91,4 +91,4 @@ Donations are optional and do not unlock any app features.
 
 This repository is source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use, study, modification, and redistribution are allowed under the license. Commercial use requires separate written permission from Denuo Web, LLC.
 
-Source code: https://github.com/Denuo-Web/hns-dane-browser-android
+Source code: https://github.com/Denuo-Web/hns-dane-browser

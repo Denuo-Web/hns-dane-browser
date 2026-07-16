@@ -9,7 +9,7 @@ class DiagnosticReportTest {
     fun markdownIncludesOperationalFieldsAndEscapesCodeFences() {
         val report = DiagnosticReport.markdown(
             labels = ENGLISH_LABELS,
-            buildLabel = "debug 0.4.0 (38)",
+            buildLabel = "debug 0.4.1 (39)",
             rustCore = "hns-dane-browser-rust-core/0.4.0",
             rustDiagnostics = """{"securityDefault":"fail-closed","note":"```"}""",
             proxyOverrideSupported = true,
@@ -19,7 +19,7 @@ class DiagnosticReportTest {
 
         assertTrue(report.contains("# HNS DANE Browser Diagnostic Bundle"))
         assertTrue(report.contains("Generated: 1970-01-01T00:00:00Z"))
-        assertTrue(report.contains("Build: debug 0.4.0 (38)"))
+        assertTrue(report.contains("Build: debug 0.4.1 (39)"))
         assertTrue(report.contains("Rust core: hns-dane-browser-rust-core/0.4.0"))
         assertTrue(report.contains("Proxy override supported: true"))
         assertFalse(report.contains("## Sync Status"))

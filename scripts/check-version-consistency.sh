@@ -9,112 +9,129 @@ rust_manifest="rust/Cargo.toml"
 ios_project_definition="ios/project.yml"
 ios_info_plist="ios/HnsDaneBrowser/Support/Info.plist"
 ios_xcode_project="ios/HnsDaneBrowser.xcodeproj/project.pbxproj"
+diagnostic_test="android/app/src/test/java/com/denuoweb/hnsdane/ui/DiagnosticReportTest.kt"
 
-version_name="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' "$android_gradle")"
-version_code="$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\).*/\1/p' "$android_gradle")"
+android_version="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' "$android_gradle")"
+android_build="$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\).*/\1/p' "$android_gradle")"
 rust_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$rust_manifest" | head -n 1)"
+ios_version="$(sed -n 's/^[[:space:]]*MARKETING_VERSION: \([^[:space:]]*\).*/\1/p' "$ios_project_definition")"
+ios_build="$(sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION: \([0-9][0-9]*\).*/\1/p' "$ios_project_definition")"
 
-if [[ -z "$version_name" || -z "$version_code" || -z "$rust_version" ]]; then
-  echo "Could not read Android or Rust version values." >&2
+if [[ -z "$android_version" || -z "$android_build" || -z "$rust_version" ||
+  -z "$ios_version" || -z "$ios_build" ]]; then
+  echo "Could not read the Android, Rust, or Apple version values." >&2
   exit 1
 fi
 
-if [[ "$rust_version" != "$version_name" ]]; then
-  echo "Rust workspace version ($rust_version) does not match Android versionName ($version_name)." >&2
-  exit 1
-fi
+# Platform app releases and the shared Rust engine have independent lifecycles.
+# Validate every component against its own release metadata instead of forcing an
+# Android-only maintenance release to masquerade as a Rust and Apple release.
+missing=0
 
-expected_files=(
+android_expected_files=(
   "$android_gradle"
-  "$rust_manifest"
-  "$ios_project_definition"
-  "$ios_info_plist"
-  "$ios_xcode_project"
   "CHANGELOG.md"
   "scripts/play-upload-closed-testing.sh"
   "dist/play-store/metadata/README.md"
   "dist/play-store/metadata/en-US/release-notes.txt"
   "docs/play-store-readiness.md"
   "docs/production-readiness-audit.md"
-  "android/app/src/test/java/com/denuoweb/hnsdane/ui/DiagnosticReportTest.kt"
+  "docs/supply-chain-audit.md"
+  "$diagnostic_test"
 )
 
-missing=0
-for file in "${expected_files[@]}"; do
-  if ! grep -q "$version_name" "$file"; then
-    echo "Missing versionName $version_name in $file" >&2
+for file in "${android_expected_files[@]}"; do
+  if ! grep -Fq "$android_version" "$file"; then
+    echo "Missing Android version $android_version in $file" >&2
     missing=1
   fi
 done
 
-artifact="hns-dane-browser-v${version_name}-play-upload-signed.aab"
-diagnostic_test="android/app/src/test/java/com/denuoweb/hnsdane/ui/DiagnosticReportTest.kt"
-
-exact_checks=(
-  "${android_gradle}:versionCode = ${version_code}"
-  "${android_gradle}:versionName = \"${version_name}\""
-  "${rust_manifest}:version = \"${version_name}\""
-  "${ios_project_definition}:MARKETING_VERSION: ${version_name}"
-  "${ios_project_definition}:CURRENT_PROJECT_VERSION: ${version_code}"
-  "${ios_info_plist}:<string>${version_name}</string>"
-  "${ios_info_plist}:<string>${version_code}</string>"
-  "${ios_xcode_project}:MARKETING_VERSION = ${version_name};"
-  "${ios_xcode_project}:CURRENT_PROJECT_VERSION = ${version_code};"
-  "CHANGELOG.md:## ${version_name} -"
-  "scripts/play-upload-closed-testing.sh:${artifact}"
-  "scripts/play-upload-closed-testing.sh:HNS DANE Browser ${version_name}"
-  "dist/play-store/metadata/README.md:${version_name} release notes"
-  "dist/play-store/metadata/README.md:${artifact}"
-  "dist/play-store/metadata/en-US/release-notes.txt:${version_name} "
-  "${diagnostic_test}:debug ${version_name} (${version_code})"
-  "${diagnostic_test}:hns-dane-browser-rust-core/${version_name}"
+android_artifact="hns-dane-browser-v${android_version}-play-upload-signed.aab"
+android_exact_checks=(
+  "${android_gradle}:versionCode = ${android_build}"
+  "${android_gradle}:versionName = \"${android_version}\""
+  "CHANGELOG.md:## ${android_version} -"
+  "scripts/play-upload-closed-testing.sh:${android_artifact}"
+  "scripts/play-upload-closed-testing.sh:HNS DANE Browser ${android_version}"
+  "dist/play-store/metadata/README.md:${android_version} release notes"
+  "dist/play-store/metadata/README.md:${android_artifact}"
+  "dist/play-store/metadata/en-US/release-notes.txt:${android_version} "
+  "${diagnostic_test}:debug ${android_version} (${android_build})"
 )
 
-for check in "${exact_checks[@]}"; do
+for check in "${android_exact_checks[@]}"; do
   file="${check%%:*}"
   pattern="${check#*:}"
   if ! grep -Fq "$pattern" "$file"; then
-    echo "Missing expected version pattern in $file: $pattern" >&2
+    echo "Missing expected Android version pattern in $file: $pattern" >&2
     missing=1
   fi
 done
 
-current_only_files=(
+android_current_only_files=(
   "scripts/play-upload-closed-testing.sh"
   "dist/play-store/metadata/README.md"
   "dist/play-store/metadata/en-US/release-notes.txt"
-  "$diagnostic_test"
-  "$ios_project_definition"
-  "$ios_info_plist"
-  "$ios_xcode_project"
 )
 
-# Audit documents intentionally compare the candidate with an older live Play
-# release. They must mention the current candidate (checked above), but unlike
-# executable upload metadata they may also contain historical version numbers.
-
-for file in "${current_only_files[@]}"; do
+for file in "${android_current_only_files[@]}"; do
   while IFS= read -r found_version; do
-    if [[ "$found_version" != "$version_name" ]]; then
-      echo "Unexpected app release version $found_version in $file; expected $version_name." >&2
+    if [[ "$found_version" != "$android_version" ]]; then
+      echo "Unexpected Android release version $found_version in $file; expected $android_version." >&2
       missing=1
     fi
   done < <(grep -Eo '0\.[0-9]+\.[0-9]+' "$file" | sort -u)
 done
 
-if ! grep -Fq "version = \"${version_name}\"" rust/Cargo.lock; then
-  echo "Rust Cargo.lock does not contain workspace package version $version_name." >&2
-  missing=1
-fi
+rust_exact_checks=(
+  "${rust_manifest}:version = \"${rust_version}\""
+  "${diagnostic_test}:hns-dane-browser-rust-core/${rust_version}"
+  "rust/Cargo.lock:version = \"${rust_version}\""
+  "rust/fuzz/Cargo.lock:version = \"${rust_version}\""
+  "tools/hns-header-snapshot-exporter/Cargo.lock:version = \"${rust_version}\""
+)
 
-if ! grep -Fq "version = \"${version_name}\"" rust/fuzz/Cargo.lock; then
-  echo "Rust fuzz Cargo.lock does not contain workspace package version $version_name." >&2
-  missing=1
-fi
+for check in "${rust_exact_checks[@]}"; do
+  file="${check%%:*}"
+  pattern="${check#*:}"
+  if ! grep -Fq "$pattern" "$file"; then
+    echo "Missing expected Rust version pattern in $file: $pattern" >&2
+    missing=1
+  fi
+done
 
-if ! grep -Fq "version = \"${version_name}\"" tools/hns-header-snapshot-exporter/Cargo.lock; then
-  echo "Header snapshot exporter Cargo.lock does not contain workspace package version $version_name." >&2
-  missing=1
-fi
+ios_exact_checks=(
+  "${ios_project_definition}:MARKETING_VERSION: ${ios_version}"
+  "${ios_project_definition}:CURRENT_PROJECT_VERSION: ${ios_build}"
+  "${ios_info_plist}:<string>${ios_version}</string>"
+  "${ios_info_plist}:<string>${ios_build}</string>"
+  "${ios_xcode_project}:MARKETING_VERSION = ${ios_version};"
+  "${ios_xcode_project}:CURRENT_PROJECT_VERSION = ${ios_build};"
+)
+
+for check in "${ios_exact_checks[@]}"; do
+  file="${check%%:*}"
+  pattern="${check#*:}"
+  if ! grep -Fq "$pattern" "$file"; then
+    echo "Missing expected Apple version pattern in $file: $pattern" >&2
+    missing=1
+  fi
+done
+
+ios_current_only_files=(
+  "$ios_project_definition"
+  "$ios_info_plist"
+  "$ios_xcode_project"
+)
+
+for file in "${ios_current_only_files[@]}"; do
+  while IFS= read -r found_version; do
+    if [[ "$found_version" != "$ios_version" ]]; then
+      echo "Unexpected Apple release version $found_version in $file; expected $ios_version." >&2
+      missing=1
+    fi
+  done < <(grep -Eo '0\.[0-9]+\.[0-9]+' "$file" | sort -u)
+done
 
 exit "$missing"
