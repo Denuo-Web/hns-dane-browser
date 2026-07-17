@@ -1,7 +1,7 @@
 [versions]
 agp = "9.2.1"
 androidx-webkit = "1.16.0"
-androidx-core = "1.18.0"
+androidx-core = "1.19.0"
 androidx-activity = "1.13.0"
 junit = "4.13.2"
 json = "20240303"
