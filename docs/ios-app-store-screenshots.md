@@ -42,7 +42,7 @@ label.
 
 The capture fails instead of producing an artifact when:
 
-- the first launch does not report `Handshake headers current` within 10
+- the first launch does not report `Handshake headers current` within 20
   minutes (the HNS page is never captured against merely prepared or stale
   headers);
 - runtime preparation for the WebPKI launch does not finish within 120 seconds;

@@ -323,6 +323,36 @@ final class BrowserRuntimeControlTests: XCTestCase {
         )
     }
 
+    func testIOSRecognizesAndroidCurrentSyncStates() throws {
+        let policy = BrowserSyncSchedulingPolicy()
+        for status in ["up_to_date", "synced", "attempted"] {
+            let summary = try RustBrowserRuntime.syncSummary(from: [
+                "network": "mainnet",
+                "status": status,
+                "bestHeight": 339_308,
+                "bestPeerHeight": 339_308,
+                "estimatedTipHeight": 339_400,
+            ])
+
+            XCTAssertTrue(summary.isCaughtUp, status)
+            XCTAssertFalse(summary.isBehind, status)
+            XCTAssertEqual(summary.headline, "Handshake headers current", status)
+            XCTAssertEqual(policy.delay(after: summary, consecutiveFailures: 0), 300)
+        }
+
+        let behind = try RustBrowserRuntime.syncSummary(from: [
+            "network": "mainnet",
+            "status": "attempted",
+            "bestHeight": 339_000,
+            "bestPeerHeight": 339_308,
+            "estimatedTipHeight": 339_400,
+        ])
+        XCTAssertTrue(behind.isBehind)
+        XCTAssertFalse(behind.isCaughtUp)
+        XCTAssertEqual(behind.headline, "Syncing Handshake headers")
+        XCTAssertEqual(policy.delay(after: behind, consecutiveFailures: 0), 30)
+    }
+
     func testNativeSyncSummaryPreservesUsefulRuntimeResults() throws {
         let summary = try RustBrowserRuntime.syncSummary(from: [
             "network": "mainnet",

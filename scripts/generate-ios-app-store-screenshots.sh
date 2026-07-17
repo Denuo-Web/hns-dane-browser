@@ -7,6 +7,7 @@ EXPECTED_WIDTH=1284
 EXPECTED_HEIGHT=2778
 SCENE_KEY="HNS_APP_STORE_SCREENSHOT_SCENE"
 OUTPUT_REQUESTED="${1:-$ROOT_DIR/build/app-store-live-screenshots}"
+DIAGNOSTICS_DIR="$ROOT_DIR/build/ios-screenshot-diagnostics"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -33,6 +34,7 @@ case "$OUTPUT_DIR" in
 esac
 rm -rf -- "$OUTPUT_DIR"
 mkdir -p -- "$OUTPUT_DIR"
+rm -rf -- "$DIAGNOSTICS_DIR"
 
 if [[ -n "${HNS_XCODE_DEVELOPER_DIR:-}" ]]; then
   xcode_candidates=("$HNS_XCODE_DEVELOPER_DIR")
@@ -114,7 +116,7 @@ xcrun simctl status_bar "$SIMULATOR_ID" override \
 
 RESULT_BUNDLE="$WORK_DIR/Screenshots.xcresult"
 DERIVED_DATA="$WORK_DIR/DerivedData"
-xcodebuild \
+if ! xcodebuild \
   -project "$ROOT_DIR/ios/HnsDaneBrowser.xcodeproj" \
   -scheme HnsDaneBrowserScreenshots \
   -configuration Release \
@@ -125,7 +127,16 @@ xcodebuild \
   -maximum-parallel-testing-workers 1 \
   -only-testing:HnsDaneBrowserScreenshotTests/LiveAppStoreScreenshotTests/testLiveSubmissionScreenshots \
   CODE_SIGNING_ALLOWED=NO \
-  test
+  test; then
+  mkdir -p -- "$DIAGNOSTICS_DIR"
+  if [[ -d "$RESULT_BUNDLE" ]]; then
+    cp -R -- "$RESULT_BUNDLE" "$DIAGNOSTICS_DIR/Screenshots.xcresult"
+  else
+    printf 'xcodebuild failed before producing %s\n' "$RESULT_BUNDLE" \
+      >"$DIAGNOSTICS_DIR/xcodebuild-failure.txt"
+  fi
+  fail "live Release screenshot test failed; preserved the result bundle for review."
+fi
 
 ATTACHMENTS_DIR="$WORK_DIR/attachments"
 xcrun xcresulttool export attachments \

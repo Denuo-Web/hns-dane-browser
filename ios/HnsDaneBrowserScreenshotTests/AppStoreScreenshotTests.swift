@@ -75,15 +75,21 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
 
         let sync = app.staticTexts["app-store-screenshot.sync"]
         XCTAssertTrue(sync.waitForExistence(timeout: 20), "Runtime status did not appear")
-        let readinessTimeout: TimeInterval = requireCurrentHeaders ? 600 : 120
+        let readinessTimeout: TimeInterval = requireCurrentHeaders ? 1_200 : 120
+        var lastRuntimeStatus = ""
         XCTAssertTrue(
             waitUntil(
                 description: requireCurrentHeaders
                     ? "current Handshake headers"
                     : "shipping runtime readiness",
                 timeout: readinessTimeout,
+                timeoutEvidence: { " Last runtime status: \(lastRuntimeStatus)" },
                 condition: {
                     let label = sync.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if label != lastRuntimeStatus {
+                        lastRuntimeStatus = label
+                        print("Live screenshot runtime status: \(label)")
+                    }
                     if requireCurrentHeaders {
                         return label.hasPrefix("Handshake headers current")
                     }
@@ -229,6 +235,7 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
     private func waitUntil(
         description: String,
         timeout: TimeInterval,
+        timeoutEvidence: () -> String = { "" },
         condition: () -> Bool
     ) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -240,7 +247,7 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
             if condition() { return true }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
-        XCTFail("Timed out waiting for \(description)")
+        XCTFail("Timed out waiting for \(description).\(timeoutEvidence())")
         return false
     }
 

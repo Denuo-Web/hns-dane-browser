@@ -50,6 +50,7 @@ final class BrowserViewController: UIViewController {
     private var latestSyncSummary = BrowserSyncSummary.unavailable
     private var resolverCacheSummary = "Ready to clear cached resolver values."
     private weak var settingsViewController: BrowserSettingsViewController?
+    private var syncStatusPollTimer: Timer?
 
 #if DEBUG && targetEnvironment(simulator)
     private var appStoreScreenshotScene: AppStoreScreenshotScene?
@@ -89,6 +90,7 @@ final class BrowserViewController: UIViewController {
         if appStoreScreenshotScene != nil { return }
 #endif
         coordinator?.resume()
+        startSyncStatusPolling()
         process.resumeForegroundSync { [weak self] summary in
             self?.updateSyncSummary(summary)
         }
@@ -97,6 +99,7 @@ final class BrowserViewController: UIViewController {
     func suspendBrowsing() {
         guard !isDestroyed else { return }
         isForeground = false
+        stopSyncStatusPolling()
 #if DEBUG && targetEnvironment(simulator)
         if appStoreScreenshotScene != nil { return }
 #endif
@@ -109,6 +112,7 @@ final class BrowserViewController: UIViewController {
         guard !isDestroyed else { return }
         isDestroyed = true
         isForeground = false
+        stopSyncStatusPolling()
 #if DEBUG && targetEnvironment(simulator)
         if appStoreScreenshotScene != nil { return }
 #endif
@@ -461,6 +465,9 @@ final class BrowserViewController: UIViewController {
                 let coordinator = self.installCoordinator(environment: environment)
                 self.placeholderLabel.text = "Enter an address to begin"
                 self.updateSyncSummary(environment.runtime.syncSummary())
+                if self.isForeground {
+                    coordinator.refreshSyncStatus()
+                }
                 self.controlsButton.isEnabled = true
                 self.refreshSettingsIfPresented()
                 if let pending = self.pendingExternalAddress {
@@ -784,6 +791,23 @@ final class BrowserViewController: UIViewController {
         syncLabel.text = summary.headline
         syncLabel.accessibilityLabel = "\(summary.headline). \(summary.detail)"
         refreshSettingsIfPresented()
+    }
+
+    private func startSyncStatusPolling() {
+        stopSyncStatusPolling()
+        coordinator?.refreshSyncStatus()
+        let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) {
+            [weak self] _ in
+            guard let self, self.isForeground, !self.isDestroyed else { return }
+            self.coordinator?.refreshSyncStatus()
+        }
+        timer.tolerance = 0.25
+        syncStatusPollTimer = timer
+    }
+
+    private func stopSyncStatusPolling() {
+        syncStatusPollTimer?.invalidate()
+        syncStatusPollTimer = nil
     }
 
     private func showOperationError(
