@@ -14,7 +14,7 @@ fail() {
 }
 
 [[ "$(uname -s)" == "Darwin" ]] || fail "screenshot generation requires macOS and Xcode."
-for command in git python3 rg sips strings xcode-select xcodebuild xcrun; do
+for command in git grep python3 sips strings xcode-select xcodebuild xcrun; do
   command -v "$command" >/dev/null 2>&1 || fail "required command is unavailable: $command"
 done
 [[ -s "$ROOT_DIR/build/apple/HnsBrowserRuntime.xcframework/Info.plist" ]] ||
@@ -156,7 +156,7 @@ xcodebuild \
 RELEASE_BINARY="$RELEASE_DERIVED_DATA/Build/Products/Release-iphonesimulator/HnsDaneBrowser.app/HnsDaneBrowser"
 [[ -x "$RELEASE_BINARY" ]] || fail "Release simulator binary was not produced."
 strings "$RELEASE_BINARY" >"$WORK_DIR/release-strings.txt"
-if rg -Fq "$SCENE_KEY" "$WORK_DIR/release-strings.txt"; then
+if grep -Fq "$SCENE_KEY" "$WORK_DIR/release-strings.txt"; then
   fail "the screenshot fixture key is present in the Release binary."
 fi
 
