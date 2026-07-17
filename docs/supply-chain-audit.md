@@ -21,10 +21,15 @@ Last audited: 2026-07-16
 ### Current `0.5.0` Candidate
 
 - Android declares `0.5.0` / code 40 and the shared Rust workspace declares `0.5.0`. This is not a metadata-only release: it changes the shared resolver/P2P runtime and Android behavior.
-- The complete local `scripts/check.sh`, supply-chain, cargo-deny, Rust test/fuzz, Android unit/lint, and unsigned-bundle gates are pending for the final candidate tree.
+- The complete local `scripts/check.sh` gate passed on 2026-07-16, including supply-chain and version checks, warning-denied Clippy, all three cargo-deny scopes, the full Rust workspace tests, fuzz smoke, iOS C ABI tests, and the header-snapshot exporter. The final requester review and focused P2P suite also passed after closing query-profile, handshake-bound, forward-status, and peer-height issues.
+- Android passed 192 unit tests plus debug and release lint with no errors. A clean committed-tree build using Gradle 9.6.1, AGP 9.2.1, compile/target SDK 37, build-tools AAPT2 36.1.0, and NDK `28.2.13676358` passed R8/resource shrinking and the unsigned and upload-signed bundle gates.
+- The scripted isolated topology and bounded load tier passed, followed by the real four-`hsd` regtest tier at height 91 with a registered `relaytest` name, four matching chain/tree states, verified Urkel inclusion, local DNSSEC and DANE, HTTPS 200, bad-to-good relay failover, and no legacy DoH sentinel contact. The focused `hsd` responder suite passed 47 tests with ESLint clean.
 - Hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs are pending for the exact candidate commit.
-- A final upload-signed APK/AAB has not yet been verified. Candidate signer results, 16 KiB/ELF/symbol inspection, device acceptance, and artifact SHA-256 values are pending and must be recorded only from the final outputs.
-- Third-party notices and their committed fingerprint must be regenerated for the `0.5.0` Rust/dependency graph and pass the checked-in integrity gate before release.
+- The final upload-signed code 40 APK verifies with APK Signature Scheme v2 and the established single RSA-4096 certificate SHA-256 `D2:2F:F3:25:17:53:11:EB:E6:D6:E9:3D:A3:FD:F5:1D:84:89:22:A1:B8:1A:CB:B3:2F:22:39:CC:F9:4A:51:14`; it passes 16 KiB ZIP alignment. Its SHA-256 is `bff5ba468b0c5ad2d134603127f089ad6fdc9e9b5ceab921825e570cfefd60fb`.
+- The final upload-signed AAB passed content-signature, exact ABI inventory, 16 KiB ELF alignment, hardening, stripping, matching Build ID/debug-symbol, local-path, mapping, and notices gates. Its SHA-256 is `96c5926c559881ba74e380eea062dce3de6cefaf91d3753882e528cccc96e1d0`.
+- The separate debug test APK uses package `com.denuoweb.hnsdane.relaytest`, version `0.5.0-relay-test` / code 40, and SHA-256 `019aeb82b84de878716637fd053321a4590e0c384de3010e885af7e154803990`.
+- The exact signed release could not be installed because the previously attached Pixel 9 physically disconnected from USB before the install step. Device acceptance remains pending and is not inferred from build or host-side tests.
+- Third-party notices and their committed fingerprint were regenerated for the `0.5.0` Rust/dependency graph and passed the checked-in integrity gate.
 - Release signing and Play upload remain intentional secret-dependent gates. CI should build and structurally verify the release variant without signing credentials and must not publish.
 
 ### Historical `0.4.1` Evidence

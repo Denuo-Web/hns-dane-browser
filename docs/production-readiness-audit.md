@@ -2,13 +2,13 @@
 
 Last audited: 2026-07-16
 
-This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the prior audit served version `0.3.1` (`versionCode 22`), while the current repository release candidate declares Android `0.5.0` (`versionCode 40`) with shared Rust engine `0.5.0`. Local, hosted, signed-artifact, and release-device verification for this Rust-changing candidate is pending. Results and hashes retained for `0.4.1` are explicitly historical and do not establish readiness for `0.5.0`.
+This audit treats the repository as a candidate update to an existing public Google Play app, not as a first closed-testing launch. The live listing observed during the prior audit served version `0.3.1` (`versionCode 22`), while the current repository release candidate declares Android `0.5.0` (`versionCode 40`) with shared Rust engine `0.5.0`. Local and signed-artifact verification is complete; hosted CI and exact-build release-device verification remain pending. Results and hashes retained for `0.4.1` are explicitly historical and do not establish readiness for `0.5.0`.
 
 ## Release Candidate Findings
 
 | Area | Status | Finding |
 | --- | --- | --- |
-| Android release build | Pending `0.5.0` verification | Build a fresh non-debuggable, minified, resource-shrunk, upload-signed code 40 APK and AAB, then rerun signer, structure, native-hardening, symbol, and 16 KiB alignment gates. No `0.5.0` artifact hash or signed-build result is recorded yet. |
+| Android release build | Locally verified for `0.5.0` | The clean committed-tree code 40 APK and AAB are non-debuggable, minified, resource-shrunk, and upload-signed. The APK SHA-256 is `bff5ba468b0c5ad2d134603127f089ad6fdc9e9b5ceab921825e570cfefd60fb`; the AAB SHA-256 is `96c5926c559881ba74e380eea062dce3de6cefaf91d3753882e528cccc96e1d0`. |
 | Public Play listing | Reconciliation required | Google Play already has a production listing at `0.3.1` (`versionCode 22`). Before the next update, reconcile the live privacy-policy field, Data safety answers, listing text, screenshots, and release notes with current behavior and the eventual release version. |
 | Privacy policy | Repository updated; hosted update pending | The repository policy now discloses the default P2P DNS relay, relay-visible queried names/types and network address, manual peer endpoints, local DNSSEC/DANE validation, and the independent legacy DoH fallback. Publish this revision at the canonical `https://denuoweb.com/work/hns-dane-browser/privacy` URL before submitting `0.5.0`; the previously accepted hosted copy applies only to the historical audit. |
 | Manifest exposure | Ready | The only app-defined exported entry point is `LauncherActivity`. Browser, settings, diagnostics, HNS inspector, history, download, and other app activities are non-exported, and the app declares no service. Merged dependency components remain subject to their own signature/permission guards. |
@@ -16,8 +16,8 @@ This audit treats the repository as a candidate update to an existing public Goo
 | Cleartext policy | Ready | Cleartext is disabled globally with a loopback-only exception for the local gateway. User-selected HTTP and direct DNS/HNS traffic are accurately disclosed, but ordinary open-web and user-initiated transfers are outside Google Play's Data safety collection/sharing scope. |
 | WebView hardening | Ready | Mixed content is blocked, Safe Browsing is enabled, file/content access is disabled, native JavaScript bridges are removed, WebView debugging follows `BuildConfig.DEBUG`, and loopback proxying is limited to active HNS host/subdomain scope. |
 | Privacy controls | Improved | Settings can clear cookies plus WebView origin storage, and the diagnostics UI can clear the bounded gateway event log. The repository and in-app disclosures now describe WebView-provider Safe Browsing and these local retention controls. |
-| Build supply chain | `0.5.0` local and hosted gates pending | The current shared-Rust and Android changes require the complete local checks and hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs. Historical only: the `0.4.1` code and build-policy tree passed [GitHub Actions run 29477163745](https://github.com/Denuo-Web/hns-dane-browser/actions/runs/29477163745). Actions was then restored to the repository's prior disabled state, and `main` still has no protection or ruleset. |
-| 16 KiB / native symbols | Pending `0.5.0` artifact gate | Rebuild both changed JNI libraries and verify their PT_LOAD alignment, hardening, stripping, Build IDs, matching FULL debug metadata, and APK ZIP alignment. The equivalent `0.4.1` artifact inspection is historical evidence only. |
+| Build supply chain | Local gates pass; hosted gates pending | `scripts/check.sh`, 192 Android unit tests, debug/release lint, clean signed builds, and the relay fast/load/full acceptance tiers pass. Hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs remain pending for the exact candidate commits. |
+| 16 KiB / native symbols | Ready locally for `0.5.0` | Both rebuilt JNI libraries passed PT_LOAD alignment, hardening, stripping, Build ID, matching FULL debug metadata, and path-sanitization checks; the signed APK also passed `zipalign -c -P 16 4`. |
 | Release-device acceptance | Pending for `0.5.0` | Install the exact signed code 40 APK and exercise cold launch, upgrade, first-run relay-on behavior, verified manual-peer persistence, relay failure to legacy DoH fallback, and ordinary HNS/DNSSEC/DANE browsing. Historical only: the signed `0.4.1` APK upgraded and cold-launched successfully on the Pixel 9 after its shared-runtime device matrix passed. |
 | Data collection posture | Repository review updated; live-form reconciliation required | No ads, analytics SDKs, developer accounts, sensitive permissions, advertising ID access, or developer telemetry endpoint was found. The policy now records that a relay peer receives the DNS name/type and source network address needed for the request. Retain the live `No collected / No shared` posture only after reconciling the current Play definitions and WebView-provider Safe Browsing guidance. |
 
@@ -42,18 +42,17 @@ This audit treats the repository as a candidate update to an existing public Goo
 
 ## Remaining Release Gates
 
-1. Run the complete local Rust, supply-chain, Android unit/lint, and unsigned/signed artifact gates for `0.5.0`; record only the hashes produced by the final verified artifacts.
-2. Run the hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs on the exact candidate commit. If future merges should require CI, leave GitHub Actions enabled and add appropriate protection or a ruleset for `main`.
-3. Compare upload certificate SHA-256 `D2:2F:F3:25:17:53:11:EB:E6:D6:E9:3D:A3:FD:F5:1D:84:89:22:A1:B8:1A:CB:B3:2F:22:39:CC:F9:4A:51:14` with the upload certificate shown in Play Console.
-4. Run the critical first-run, sync-resume, default relay, verified manual-peer, legacy fallback, HNS browsing, download, website-data deletion, and gateway-log deletion flows on a physical supported Android device using the exact signed `0.5.0` build.
-5. Publish the revised privacy policy and reconcile the existing live Play listing: update its privacy-policy field, Data safety/app-access/content/ads answers, listing copy, release notes, and stale screenshots before submitting the verified AAB.
+1. Run the hosted path-policy, Rust, cold-cache Android, Apple, and required-result jobs on the exact candidate commit. If future merges should require CI, leave GitHub Actions enabled and add appropriate protection or a ruleset for `main`.
+2. Compare upload certificate SHA-256 `D2:2F:F3:25:17:53:11:EB:E6:D6:E9:3D:A3:FD:F5:1D:84:89:22:A1:B8:1A:CB:B3:2F:22:39:CC:F9:4A:51:14` with the upload certificate shown in Play Console.
+3. Run the critical first-run, sync-resume, default relay, verified manual-peer, legacy fallback, HNS browsing, download, website-data deletion, and gateway-log deletion flows on a physical supported Android device using the exact signed `0.5.0` build.
+4. Publish the revised privacy policy and reconcile the existing live Play listing: update its privacy-policy field, Data safety/app-access/content/ads answers, listing copy, release notes, and stale screenshots before submitting the verified AAB.
 
 ## Candidate Verification Status
 
-- `0.5.0` / code 40 local checks: pending.
+- `0.5.0` / code 40 local checks: passed.
 - `0.5.0` hosted CI checks: pending.
-- `0.5.0` signed APK/AAB verification and hashes: pending.
-- `0.5.0` exact signed-build physical-device acceptance: pending.
+- `0.5.0` signed APK/AAB verification and hashes: passed and recorded above.
+- `0.5.0` exact signed-build physical-device acceptance: pending because the Pixel 9 physically disconnected before installation.
 
 ## Historical `0.4.1` Evidence
 
