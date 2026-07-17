@@ -108,6 +108,26 @@ class AttachmentCollectionTests(unittest.TestCase):
             )
             self.assertTrue(all(path.read_bytes() == PNG for path in paths))
 
+    def test_collects_xcode_suffixed_attachment_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            exported = root / "exported"
+            output = root / "raw"
+            exported.mkdir()
+            manifest = self.create_export(exported)
+            suffix = "_0_984BD1B2-59A4-43E9-9564-B84A7717B69B.png"
+            for record, (attachment, _) in zip(
+                manifest[0]["attachments"], SCREENSHOTS, strict=True
+            ):
+                record["suggestedHumanReadableName"] = f"{attachment}{suffix}"
+
+            paths = collect_attachments(manifest, exported, output)
+
+            self.assertEqual(
+                [path.name for path in paths],
+                [f"{basename}.png" for _, basename in SCREENSHOTS],
+            )
+
     def test_rejects_missing_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import struct
 import sys
@@ -36,6 +37,11 @@ DEVICE_PRIORITY = (
     "iPhone 14 Plus",
     "iPhone 13 Pro Max",
     "iPhone 12 Pro Max",
+)
+
+XCRESULT_ATTACHMENT_SUFFIX = re.compile(
+    r"_\d+_[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
 )
 
 
@@ -102,7 +108,9 @@ def iter_attachment_records(value: Any) -> Iterable[dict[str, Any]]:
 
 
 def normalized_attachment_name(value: str) -> str:
-    return Path(value).stem if Path(value).suffix.lower() in {".png", ".jpg", ".jpeg"} else value
+    path = Path(value)
+    name = path.stem if path.suffix.lower() in {".png", ".jpg", ".jpeg"} else value
+    return XCRESULT_ATTACHMENT_SUFFIX.sub("", name)
 
 
 def collect_attachments(
