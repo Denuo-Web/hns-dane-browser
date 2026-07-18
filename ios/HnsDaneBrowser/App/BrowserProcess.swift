@@ -12,6 +12,7 @@ final class BrowserProcess {
         case idle
         case preparing([((Result<Environment, Error>) -> Void)])
         case ready(Environment)
+        case switching(Environment)
         case failed(Error)
         case closed
     }
@@ -20,10 +21,11 @@ final class BrowserProcess {
         label: "com.denuoweb.hnsdane.ios.runtime-preparation",
         qos: .userInitiated
     )
-    private let runtimeFactory: (String) throws -> BrowserRuntime
+    private let runtimeFactory: (String, BrowserHandshakeNetwork) throws -> BrowserRuntime
     private let bootstrapper: HeaderSnapshotBootstrapper
     private let policyStore: BrowserRuntimePolicyStore
     private let syncSchedulingPolicy: BrowserSyncSchedulingPolicy
+    private let persistNetwork: (BrowserHandshakeNetwork) -> Void
     private var state: State = .idle
     private(set) var currentPolicy: BrowserRuntimePolicy
     private var isForegroundSyncEnabled = false
@@ -33,20 +35,29 @@ final class BrowserProcess {
     private var syncInFlight = false
     private var syncCompletions: [((Result<BrowserSyncSummary, Error>) -> Void)] = []
     private var consecutiveSyncFailures = 0
+    private var networkSwitchInFlight = false
+    private var networkSwitchGeneration: UInt64 = 0
+    private(set) var currentNetwork: BrowserHandshakeNetwork
 
     init(
-        runtimeFactory: @escaping (String) throws -> BrowserRuntime = { path in
-            try RustBrowserRuntime(path)
+        runtimeFactory: @escaping (String, BrowserHandshakeNetwork) throws -> BrowserRuntime = {
+            path, network in
+            try RustBrowserRuntime(path, network: network)
         },
         bootstrapper: HeaderSnapshotBootstrapper = HeaderSnapshotBootstrapper(),
         policyStore: BrowserRuntimePolicyStore = BrowserRuntimePolicyStore(),
-        syncSchedulingPolicy: BrowserSyncSchedulingPolicy = BrowserSyncSchedulingPolicy()
+        syncSchedulingPolicy: BrowserSyncSchedulingPolicy = BrowserSyncSchedulingPolicy(),
+        initialNetwork: BrowserHandshakeNetwork = BrowserSettingsPreferences.handshakeNetwork,
+        persistNetwork: @escaping (BrowserHandshakeNetwork) -> Void =
+            BrowserSettingsPreferences.saveHandshakeNetwork
     ) {
         self.runtimeFactory = runtimeFactory
         self.bootstrapper = bootstrapper
         self.policyStore = policyStore
         self.syncSchedulingPolicy = syncSchedulingPolicy
+        self.persistNetwork = persistNetwork
         currentPolicy = policyStore.load()
+        currentNetwork = initialNetwork
     }
 
     func prepare(completion: @escaping (Result<Environment, Error>) -> Void) {
@@ -65,22 +76,30 @@ final class BrowserProcess {
             callbacks.append(completion)
             state = .preparing(callbacks)
             return
+        case .switching:
+            completion(.failure(BrowserCoreError.runtimeUnavailable(
+                "a Handshake network change is in progress"
+            )))
+            return
         case .idle:
             state = .preparing([completion])
         }
 
         do {
-            let dataDirectory = try Self.makeDataDirectory()
+            let network = currentNetwork
+            let dataDirectory = try Self.makeDataDirectory(network: network)
             let runtimeFactory = runtimeFactory
             let bootstrapper = bootstrapper
             let policy = currentPolicy
             preparationQueue.async { [weak self] in
                 let result: Result<BrowserRuntime, Error>
                 do {
-                    let runtime = try runtimeFactory(dataDirectory.path)
+                    let runtime = try runtimeFactory(dataDirectory.path, network)
                     do {
                         try runtime.updatePolicy(policy)
-                        try bootstrapper.installIfNeeded(into: runtime)
+                        if network == .mainnet {
+                            try bootstrapper.installIfNeeded(into: runtime)
+                        }
                         result = .success(runtime)
                     } catch {
                         runtime.close()
@@ -120,6 +139,74 @@ final class BrowserProcess {
         }
     }
 
+    func switchNetwork(
+        to network: BrowserHandshakeNetwork,
+        completion: @escaping (Result<Environment, Error>) -> Void
+    ) {
+        guard !networkSwitchInFlight else {
+            completion(.failure(BrowserCoreError.runtimeUnavailable(
+                "a network change is already running"
+            )))
+            return
+        }
+        guard network != currentNetwork else {
+            if case .ready(let environment) = state {
+                completion(.success(environment))
+            } else {
+                prepare(completion: completion)
+            }
+            return
+        }
+        guard case .ready(let environment) = state else {
+            completion(.failure(runtimeUnavailableError()))
+            return
+        }
+
+        let dataDirectory: URL
+        do {
+            dataDirectory = try Self.makeDataDirectory(network: network)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        suspendForegroundSync()
+        state = .switching(environment)
+        networkSwitchInFlight = true
+        networkSwitchGeneration &+= 1
+        let generation = networkSwitchGeneration
+        let runtimeFactory = runtimeFactory
+        let bootstrapper = bootstrapper
+        let policy = currentPolicy
+        preparationQueue.async { [weak self] in
+            let result: Result<BrowserRuntime, Error>
+            do {
+                let runtime = try runtimeFactory(dataDirectory.path, network)
+                do {
+                    try runtime.updatePolicy(policy)
+                    if network == .mainnet {
+                        try bootstrapper.installIfNeeded(into: runtime)
+                    }
+                    result = .success(runtime)
+                } catch {
+                    runtime.close()
+                    throw error
+                }
+            } catch {
+                result = .failure(error)
+            }
+            DispatchQueue.main.async {
+                self?.finishNetworkSwitch(
+                    result,
+                    from: environment,
+                    to: network,
+                    generation: generation,
+                    completion: completion
+                )
+            }
+        }
+    }
+
     func syncNow(completion: @escaping (Result<BrowserSyncSummary, Error>) -> Void) {
         guard case .ready(let environment) = state else {
             completion(.failure(runtimeUnavailableError()))
@@ -132,6 +219,22 @@ final class BrowserProcess {
         startSyncIfNeeded(environment: environment)
     }
 
+    func addStaticRelayPeer(
+        _ endpoint: String,
+        completion: @escaping (Result<BrowserSyncSummary, Error>) -> Void
+    ) {
+        guard case .ready(let environment) = state else {
+            completion(.failure(runtimeUnavailableError()))
+            return
+        }
+        preparationQueue.async {
+            let result = Result { try environment.runtime.addStaticRelayPeer(endpoint) }
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+
     func clearResolverCache(
         completion: @escaping (Result<BrowserSyncSummary, Error>) -> Void
     ) {
@@ -141,6 +244,21 @@ final class BrowserProcess {
         }
         preparationQueue.async {
             let result = Result { try environment.runtime.clearResolverCache() }
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+
+    func resetHeadersFromPeers(
+        completion: @escaping (Result<BrowserSyncSummary, Error>) -> Void
+    ) {
+        guard case .ready(let environment) = state else {
+            completion(.failure(runtimeUnavailableError()))
+            return
+        }
+        preparationQueue.async {
+            let result = Result { try environment.runtime.resetHeadersFromPeers() }
             DispatchQueue.main.async {
                 completion(result)
             }
@@ -179,13 +297,15 @@ final class BrowserProcess {
 
     func close() {
         suspendForegroundSync()
+        networkSwitchInFlight = false
+        networkSwitchGeneration &+= 1
         let pendingSyncCompletions = syncCompletions
         syncCompletions.removeAll()
         let closedError = BrowserCoreError.runtimeUnavailable("process is closed")
         pendingSyncCompletions.forEach { $0(.failure(closedError)) }
         let runtime: BrowserRuntime?
         switch state {
-        case .ready(let environment):
+        case .ready(let environment), .switching(let environment):
             runtime = environment.runtime
         default:
             runtime = nil
@@ -223,6 +343,50 @@ final class BrowserProcess {
         case .failure(let error):
             state = .failed(error)
             callbacks.forEach { $0(.failure(error)) }
+        }
+    }
+
+    private func finishNetworkSwitch(
+        _ result: Result<BrowserRuntime, Error>,
+        from previousEnvironment: Environment,
+        to network: BrowserHandshakeNetwork,
+        generation: UInt64,
+        completion: @escaping (Result<Environment, Error>) -> Void
+    ) {
+        guard networkSwitchInFlight,
+              generation == networkSwitchGeneration,
+              case .switching(let activeEnvironment) = state,
+              activeEnvironment.runtime === previousEnvironment.runtime else {
+            if case .success(let runtime) = result {
+                preparationQueue.async { runtime.close() }
+            }
+            completion(.failure(runtimeUnavailableError()))
+            return
+        }
+
+        networkSwitchInFlight = false
+        switch result {
+        case .success(let runtime):
+            let environment = Environment(
+                runtime: runtime,
+                profile: PersistentWebKitProfile()
+            )
+            state = .ready(environment)
+            currentNetwork = network
+            persistNetwork(network)
+            preparationQueue.async {
+                previousEnvironment.runtime.close()
+            }
+            if isForegroundSyncEnabled {
+                scheduleForegroundSync(after: 0)
+            }
+            completion(.success(environment))
+        case .failure(let error):
+            state = .ready(previousEnvironment)
+            if isForegroundSyncEnabled {
+                scheduleForegroundSync(after: 0)
+            }
+            completion(.failure(error))
         }
     }
 
@@ -292,13 +456,14 @@ final class BrowserProcess {
         case .idle: detail = "process is not prepared"
         case .preparing: detail = "process is still preparing"
         case .ready: detail = "runtime environment is unavailable"
+        case .switching: detail = "a Handshake network change is in progress"
         case .failed(let error): detail = error.localizedDescription
         case .closed: detail = "process is closed"
         }
         return .runtimeUnavailable(detail)
     }
 
-    private static func makeDataDirectory() throws -> URL {
+    private static func makeDataDirectory(network: BrowserHandshakeNetwork) throws -> URL {
         let fileManager = FileManager.default
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
@@ -306,8 +471,11 @@ final class BrowserProcess {
         ).first else {
             throw BrowserCoreError.runtimeUnavailable("Application Support is unavailable")
         }
-        let directory = applicationSupport
+        var directory = applicationSupport
             .appendingPathComponent("HnsDaneBrowser", isDirectory: true)
+        if network != .mainnet {
+            directory.appendPathComponent(network.rawValue, isDirectory: true)
+        }
         try fileManager.createDirectory(
             at: directory,
             withIntermediateDirectories: true,

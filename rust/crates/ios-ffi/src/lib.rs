@@ -1228,6 +1228,30 @@ pub unsafe extern "C" fn hns_browser_runtime_sync_status(
 
 #[unsafe(no_mangle)]
 /// # Safety
+/// The non-empty peer endpoint slice must remain readable for its declared
+/// length and `out_status_json` must point to one writable buffer.
+pub unsafe extern "C" fn hns_browser_runtime_add_static_relay_peer(
+    runtime: HnsBrowserRuntimeHandle,
+    endpoint: HnsBrowserSlice,
+    out_status_json: *mut HnsBrowserBuffer,
+) -> HnsBrowserResult {
+    ffi_call(|| {
+        // SAFETY: This unsafe export carries the caller's readable-slice contract.
+        let endpoint = unsafe { required_input_str(endpoint, MAX_NAME_INPUT_BYTES) }?;
+        // SAFETY: This unsafe export carries the caller's writable-output contract.
+        unsafe {
+            runtime_status_json(runtime, out_status_json, |runtime| {
+                runtime
+                    .add_static_relay_peer(&endpoint)
+                    .map(|status| status.to_json())
+                    .map_err(|_| ())
+            })
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
 /// `out_status_json` must point to one writable [`HnsBrowserBuffer`].
 pub unsafe extern "C" fn hns_browser_runtime_clear_resolver_cache(
     runtime: HnsBrowserRuntimeHandle,
@@ -1859,6 +1883,7 @@ mod tests {
             "hns_browser_runtime_set_policy",
             "hns_browser_runtime_sync_once",
             "hns_browser_runtime_sync_status",
+            "hns_browser_runtime_add_static_relay_peer",
             "hns_browser_runtime_clear_resolver_cache",
             "hns_browser_runtime_install_header_snapshot",
             "hns_browser_runtime_reset_headers_from_peers",

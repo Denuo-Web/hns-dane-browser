@@ -10,9 +10,9 @@ Handshake test:
 1. Enter https://denuoweb/ and tap Go.
 2. The bundled Handshake header snapshot allows immediate proof-backed resolution while foreground header sync continues.
 3. Confirm the security label identifies the resolver and TLS validation path.
-4. Open the slider menu to inspect Strict Handshake mode, resolver settings, Sync Headers Now, Clear Resolver Cache, Proof Details, Privacy Policy, and Support.
+4. Tap the Settings gear button to inspect HNS resolution, HNS sync, Clear resolver cache, Resolver trace, HNS proof details, Privacy policy, and Source code.
 
-Compatibility note: some review networks block Handshake peer traffic or direct authoritative DNS. In Compatibility mode, the app may use its HNS DNS-over-HTTPS fallback and labels that path. Strict Handshake mode disables that fallback. The experimental P2P DNS relay is disabled by default on iOS.
+Compatibility note: some review networks block Handshake peer traffic or direct authoritative DNS. In Compatibility mode, the app may use its HNS DNS-over-HTTPS fallback and labels that path. Strict Handshake mode disables that fallback. The experimental P2P DNS relay is enabled by default on iOS; DNSSEC and proof validation remain local.
 
 Cleartext HTTP pages are marked insecure. No reviewer-supplied personal data or credentials are needed. The two test URLs above are developer-controlled.
 

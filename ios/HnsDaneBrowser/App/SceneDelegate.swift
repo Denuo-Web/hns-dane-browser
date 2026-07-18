@@ -17,6 +17,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let browser = BrowserViewController(process: appDelegate.browserProcess)
         let window = UIWindow(windowScene: windowScene)
         window.rootViewController = browser
+        switch BrowserSettingsPreferences.themeMode {
+        case .system:
+            window.overrideUserInterfaceStyle = .unspecified
+        case .light:
+            window.overrideUserInterfaceStyle = .light
+        case .dark:
+            window.overrideUserInterfaceStyle = .dark
+        }
         window.makeKeyAndVisible()
         self.window = window
         browserViewController = browser

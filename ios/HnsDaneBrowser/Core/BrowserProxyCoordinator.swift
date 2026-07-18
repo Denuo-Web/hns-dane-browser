@@ -184,6 +184,7 @@ final class BrowserProxyCoordinator: NSObject {
     }
 
     var currentShareURL: URL? { webView?.url ?? lastNavigation?.destination.url }
+    var currentResolutionTraceJSON: String? { activeProxy?.latestResolutionTraceJSON }
 
     /// Returns only a navigation that can be replayed after a live policy change without
     /// duplicating a request body. The caller must revoke this coordinator before publishing the
@@ -215,6 +216,7 @@ final class BrowserProxyCoordinator: NSObject {
         destination: BrowserDestination,
         historyTarget: Int?
     ) {
+        activeProxy?.clearResolutionTrace()
         pendingNavigation = PendingNavigation(
             request: request,
             destination: destination,
@@ -465,6 +467,10 @@ final class BrowserProxyCoordinator: NSObject {
     private func updateSecurity(for url: URL) {
         guard let destination = try? runtime.classifyNavigation(url.absoluteString) else { return }
         let host = destination.canonicalHost
+        // Reading the exact native result also retains its structured resolution/TLS trace for
+        // both ordinary WebPKI and Handshake pages. The platform-facing security label below
+        // remains authoritative for ICANN HTTPS.
+        let nativeSummary = activeProxy?.takeMainFrameSecurityStatus(host: host)
         switch destination.hostKind {
         case .icann:
             guard url.scheme?.lowercased() == "https" else {
@@ -493,8 +499,7 @@ final class BrowserProxyCoordinator: NSObject {
                 )
             )
         case .handshake:
-            let summary = activeProxy?.takeMainFrameSecurityStatus(host: host)
-                ?? BrowserSecuritySummary(
+            let summary = nativeSummary ?? BrowserSecuritySummary(
                     level: .blocked,
                     detail: "No exact Rust proxy security result was available"
                 )
@@ -586,6 +591,8 @@ extension BrowserProxyCoordinator: WKNavigationDelegate {
         do {
             let destination = try runtime.classifyNavigation(url.absoluteString)
             if isAdmitted(destination, in: webView) {
+                activeProxy?.clearResolutionTrace()
+                delegate?.proxyCoordinator(self, didUpdateSecurity: .pending)
                 let historyTarget: Int?
                 if let lastNavigation,
                    lastNavigation.request.url == navigationAction.request.url,
@@ -672,6 +679,9 @@ extension BrowserProxyCoordinator: WKNavigationDelegate {
         didFailProvisionalNavigation navigation: WKNavigation?,
         withError error: Error
     ) {
+        if let url = lastNavigation?.destination.url ?? webView.url {
+            updateSecurity(for: url)
+        }
         delegate?.proxyCoordinator(
             self,
             canGoBack: historyIndex > 0,
@@ -686,6 +696,9 @@ extension BrowserProxyCoordinator: WKNavigationDelegate {
         didFail navigation: WKNavigation?,
         withError error: Error
     ) {
+        if let url = lastNavigation?.destination.url ?? webView.url {
+            updateSecurity(for: url)
+        }
         delegate?.proxyCoordinator(
             self,
             canGoBack: historyIndex > 0,

@@ -22,7 +22,10 @@ final class RustBrowserRuntime: BrowserRuntime {
     private let handleLock = NSLock()
     private var runtimeHandle: HnsBrowserRuntimeHandle
 
-    init(_ dataDirectory: String) throws {
+    init(
+        _ dataDirectory: String,
+        network: BrowserHandshakeNetwork = .mainnet
+    ) throws {
         let actualABI = hns_browser_abi_version()
         guard actualABI == HNS_BROWSER_ABI_VERSION else {
             throw RustBridgeError.incompatibleABI(actual: actualABI)
@@ -36,7 +39,14 @@ final class RustBrowserRuntime: BrowserRuntime {
         var handle: HnsBrowserRuntimeHandle = 0
         let result = RustBridge.withUTF8Slice(dataDirectory) { dataDirectorySlice in
             options.data_dir = dataDirectorySlice
-            options.network = HNS_BROWSER_NETWORK_MAINNET
+            switch network {
+            case .mainnet:
+                options.network = HNS_BROWSER_NETWORK_MAINNET
+            case .testnet:
+                options.network = HNS_BROWSER_NETWORK_TESTNET
+            case .regtest:
+                options.network = HNS_BROWSER_NETWORK_REGTEST
+            }
             options.resolution_mode = HNS_BROWSER_RESOLUTION_COMPATIBILITY
             return hns_browser_runtime_create(&options, &handle)
         }
@@ -45,6 +55,14 @@ final class RustBrowserRuntime: BrowserRuntime {
             throw RustBridgeError.invalidOutput("runtime handle is zero")
         }
         runtimeHandle = handle
+    }
+
+    static func diagnosticsJSON() throws -> String {
+        var output = HnsBrowserBuffer()
+        let result = hns_browser_diagnostics_json(&output)
+        defer { RustBridge.free(output) }
+        try RustBridge.check(result, operation: "native diagnostics")
+        return try RustBridge.string(copying: output)
     }
 
     func classifyNavigation(_ rawValue: String) throws -> BrowserDestination {
@@ -154,9 +172,25 @@ final class RustBrowserRuntime: BrowserRuntime {
         return (try? Self.syncSummary(from: object)) ?? .unavailable
     }
 
+    func addStaticRelayPeer(_ endpoint: String) throws -> BrowserSyncSummary {
+        let object = try RustBridge.withUTF8Slice(endpoint) { input in
+            try runtimeJSONObject(operation: "static relay peer") { handle, output in
+                hns_browser_runtime_add_static_relay_peer(handle, input, output)
+            }
+        }
+        return try Self.syncSummary(from: object)
+    }
+
     func clearResolverCache() throws -> BrowserSyncSummary {
         let object = try runtimeJSONObject(operation: "resolver cache clear") { handle, output in
             hns_browser_runtime_clear_resolver_cache(handle, output)
+        }
+        return try Self.syncSummary(from: object)
+    }
+
+    func resetHeadersFromPeers() throws -> BrowserSyncSummary {
+        let object = try runtimeJSONObject(operation: "header reset") { handle, output in
+            hns_browser_runtime_reset_headers_from_peers(handle, output)
         }
         return try Self.syncSummary(from: object)
     }
@@ -374,6 +408,7 @@ final class RustBrowserRuntime: BrowserRuntime {
 
 private final class RustBrowserProxySession: BrowserProxySession {
     let endpoint: BrowserProxyEndpoint
+    private(set) var latestResolutionTraceJSON: String?
 
     private let handleLock = NSLock()
     private var proxyHandle: HnsBrowserProxyHandle
@@ -414,6 +449,10 @@ private final class RustBrowserProxySession: BrowserProxySession {
             username: username,
             password: password
         )
+    }
+
+    func clearResolutionTrace() {
+        latestResolutionTraceJSON = nil
     }
 
     func requestStop() {
@@ -490,6 +529,10 @@ private final class RustBrowserProxySession: BrowserProxySession {
               let returnedHost = try? RustBridge.string(copying: status.host),
               returnedHost == host else {
             return nil
+        }
+        if let trace = try? RustBridge.string(copying: status.resolution_trace_json),
+           !trace.isEmpty {
+            latestResolutionTraceJSON = trace
         }
 
         if status.http_status >= 400 {

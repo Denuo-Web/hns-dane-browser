@@ -16,7 +16,7 @@ struct BrowserRuntimePolicy: Equatable, Sendable {
         resolutionMode: BrowserResolutionMode = .compatibility,
         hnsDohResolver: String? = nil,
         statelessDANECertificates: Bool = false,
-        experimentalP2PDNSRelay: Bool = false,
+        experimentalP2PDNSRelay: Bool = true,
         legacyHNSDoHCompatibility: Bool = true
     ) {
         self.resolutionMode = resolutionMode
@@ -52,7 +52,8 @@ final class BrowserRuntimePolicyStore {
             resolutionMode: mode,
             hnsDohResolver: defaults.string(forKey: Key.hnsDohResolver),
             statelessDANECertificates: defaults.bool(forKey: Key.statelessDANE),
-            experimentalP2PDNSRelay: defaults.bool(forKey: Key.experimentalP2PDNSRelay),
+            experimentalP2PDNSRelay:
+                defaults.object(forKey: Key.experimentalP2PDNSRelay) as? Bool ?? true,
             legacyHNSDoHCompatibility:
                 defaults.object(forKey: Key.legacyHNSDoHCompatibility) as? Bool ?? true
         )

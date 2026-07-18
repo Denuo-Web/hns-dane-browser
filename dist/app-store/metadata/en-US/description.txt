@@ -8,7 +8,7 @@ Features:
 - Validate DNSSEC, TLSA, and DANE policies locally
 - Inspect resolver paths, proof details, and security status
 - Use Strict Handshake mode to disable third-party HNS compatibility fallback
-- Optionally enable an experimental HNS peer-to-peer DNS relay
+- Use a proof-gated experimental HNS peer-to-peer DNS relay, enabled by default
 - Keep website data in a persistent WebKit profile
 - Download files and share pages with standard iOS controls
 
