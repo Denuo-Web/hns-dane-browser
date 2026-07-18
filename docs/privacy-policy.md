@@ -1,12 +1,12 @@
 # HNS DANE Browser Privacy Policy
 
-Last updated: 2026-07-17
+Last updated: 2026-07-18
 
 HNS DANE Browser is published by Denuo Web, LLC. For privacy questions or deletion requests, email <info@denuoweb.com> or use the developer contact listed in the app's store listing. Do not post personal information to the public project issue tracker.
 
 ## Summary
 
-HNS DANE Browser is a Handshake-first browser for local HNS proofs, authoritative DNS, an HNS P2P DNS relay, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics. The app does not include advertising SDKs, analytics SDKs, developer-operated accounts, or paid feature unlocks. Donations are optional and do not unlock app functionality.
+HNS DANE Browser is a Handshake-first browser for local HNS proofs, authoritative DNS, an HNS P2P DNS relay, RFC 8484 DoH transport, DNSSEC, and DANE diagnostics. The app does not include advertising SDKs, analytics SDKs, developer-operated accounts, or paid feature unlocks. The Android edition may show an optional external donation link that does not unlock functionality; the iOS app has no donation or payment flow.
 
 The app stores browser data locally on the device and sends network requests needed to load sites and keep HNS resolution data current.
 
@@ -28,7 +28,7 @@ To provide browser functionality, HNS DANE Browser may connect to:
 
 - Websites and web services that you choose to open.
 - Handshake peers and DNS seed hosts for header sync, peer discovery, and proof retrieval.
-- Relay-capable Handshake peers for recursive HNS DNS queries after local proof validation and authoritative DNS attempts fail. Android new installs enable this experimental path by default; iOS leaves it disabled by default. A manual relay peer must be entered as an IP-literal endpoint and is stored only after its live HSD handshake advertises the relay capability.
+- Relay-capable Handshake peers for recursive HNS DNS queries after local proof validation and authoritative DNS attempts fail. New Android and iOS installs enable this experimental path by default. A manual relay peer must be entered as an IP-literal endpoint and is stored only after its live HSD handshake advertises the relay capability.
 - Authoritative DNS nameservers for delegated HNS names.
 - Proof-bootstrapped or RFC 9461-discovered RFC 8484 authoritative DoH endpoints for delegated HNS names.
 - Security or reputation services exposed by the platform web engine. In particular, an installed Android WebView provider may check URLs with its Safe Browsing service and apply its own privacy policy. Apple WebKit and the operating system may apply their own browser-security protections. HNS DANE Browser does not operate those platform services.
@@ -45,7 +45,7 @@ HTTPS, DNSSEC, and DANE are used where applicable. If you intentionally open a c
 
 ## Cookies and Website Data
 
-Websites may set cookies or use platform web-engine storage. Android provides settings controls to block third-party cookies and delete cookies plus WebView origin storage. The initial iOS release uses a persistent WebKit profile; its website data remains local to the app and is removed when the app is uninstalled. Websites are responsible for their own privacy practices.
+Websites may set cookies or use platform web-engine storage. Android provides settings controls to block third-party cookies and delete cookies plus WebView origin storage. iOS uses a persistent WebKit profile and provides a settings action that deletes its cookies and website data. Remaining website data is removed when the app is uninstalled. Websites are responsible for their own privacy practices.
 
 ## Data Sharing
 
@@ -53,7 +53,7 @@ Denuo Web does not sell personal or sensitive user data. HNS DANE Browser shares
 
 ## Retention and Deletion
 
-Local browser data remains on the device until you clear it using an available platform/app control or uninstall the app. Android provides controls for clearing cookies and WebView origin storage, browsing history, download records, gateway diagnostics, and the HNS resolver cache; Android system settings can also clear all app storage. The initial iOS release keeps its navigation list in the current app session, provides a resolver-cache control, and removes its app-local storage and WebKit profile when the app is uninstalled. Files you export to another location are then controlled by that destination.
+Local browser data remains on the device until you clear it using an available platform/app control or uninstall the app. Android provides controls for clearing cookies and WebView origin storage, browsing history, download records, gateway diagnostics, and the HNS resolver cache; Android system settings can also clear all app storage. iOS provides controls for clearing cookies and WebKit website data, browsing history, download-list records, locally stored gateway diagnostics, and the HNS resolver cache. Clearing the iOS download list does not delete the downloaded files themselves; those app-local files remain until the app is uninstalled. Files you export to another location are then controlled by that destination.
 
 HNS DANE Browser does not create developer-operated user accounts, so there is no app account deletion flow.
 

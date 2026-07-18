@@ -7,9 +7,6 @@ final class BrowserViewController: UIViewController {
     private static let privacyPolicyURL = URL(
         string: "https://denuoweb.com/work/hns-dane-browser/privacy"
     )!
-    private static let supportURL = URL(
-        string: "https://denuoweb.com/work/hns-dane-browser"
-    )!
     private static let sourceCodeURL = URL(
         string: "https://github.com/Denuo-Web/hns-dane-browser"
     )!
@@ -473,6 +470,8 @@ final class BrowserViewController: UIViewController {
                 if let pending = self.pendingExternalAddress {
                     self.pendingExternalAddress = nil
                     coordinator.navigate(rawValue: pending)
+                } else {
+                    coordinator.navigate(rawValue: BrowserSettingsPreferences.homepage)
                 }
             case .failure(let error):
                 self.placeholderLabel.text = "Secure runtime preparation failed"
@@ -556,7 +555,13 @@ final class BrowserViewController: UIViewController {
             runtimeControlsAreAvailable: runtimeControlsAreAvailable,
             isOperationInFlight: isControlOperationInFlight,
             syncSummary: latestSyncSummary,
-            resolverCacheSummary: resolverCacheSummary
+            resolverCacheSummary: resolverCacheSummary,
+            currentPageURL: coordinator?.currentShareURL?.absoluteString ?? addressField.text,
+            homepage: BrowserSettingsPreferences.homepage,
+            historyCount: BrowserHistoryStore.entries.count,
+            downloadCount: BrowserDownloadStore.records.count,
+            themeMode: BrowserSettingsPreferences.themeMode,
+            handshakeNetwork: process.currentNetwork
         )
         settings.delegate = self
         settingsViewController = settings
@@ -571,7 +576,13 @@ final class BrowserViewController: UIViewController {
             runtimeControlsAreAvailable: runtimeControlsAreAvailable,
             isOperationInFlight: isControlOperationInFlight,
             syncSummary: latestSyncSummary,
-            resolverCacheSummary: resolverCacheSummary
+            resolverCacheSummary: resolverCacheSummary,
+            currentPageURL: coordinator?.currentShareURL?.absoluteString ?? addressField.text,
+            homepage: BrowserSettingsPreferences.homepage,
+            historyCount: BrowserHistoryStore.entries.count,
+            downloadCount: BrowserDownloadStore.records.count,
+            themeMode: BrowserSettingsPreferences.themeMode,
+            handshakeNetwork: process.currentNetwork
         )
     }
 
@@ -590,23 +601,254 @@ final class BrowserViewController: UIViewController {
         present(browser, animated: true)
     }
 
-    private func presentThirdPartyNotices() {
-        guard presentedViewController == nil else { return }
-        guard let url = Bundle.main.url(
-            forResource: "third_party_notices",
-            withExtension: "txt"
-        ), let notices = try? String(contentsOf: url, encoding: .utf8) else {
-            showOperationError(
-                title: "Third-party notices unavailable",
-                error: BrowserCoreError.runtimeUnavailable("The bundled notices could not be read.")
-            )
-            return
+    private func presentCookiesSettings() {
+        let viewer = TextDocumentViewController(
+            title: "Cookies",
+            text: """
+            WEBSITE DATA
+
+            WebKit stores first-party cookies and origin data in this browser's private app profile. iOS privacy protections limit cross-site tracking.
+
+            DELETE COOKIES AND WEBSITE DATA
+
+            Remove cookies and origin storage, including local storage and IndexedDB.
+            """,
+            actionTitle: "Delete Data"
+        ) { [weak self] _ in
+            self?.confirmWebsiteDataDeletion()
+        }
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func confirmWebsiteDataDeletion() {
+        guard let profile = environment?.profile else { return }
+        let viewer = (presentedViewController as? UINavigationController)?.topViewController
+        let alert = UIAlertController(
+            title: "Delete cookies and website data?",
+            message: "This removes all WebKit cookies and origin storage used by the browser.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
+            let types = WKWebsiteDataStore.allWebsiteDataTypes()
+            profile.dataStore.removeData(
+                ofTypes: types,
+                modifiedSince: Date(timeIntervalSince1970: 0)
+            ) { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let confirmation = UIAlertController(
+                        title: "Website data deleted",
+                        message: "Cookies and website data were removed.",
+                        preferredStyle: .alert
+                    )
+                    confirmation.addAction(UIAlertAction(title: "OK", style: .default))
+                    let currentViewer = (self.presentedViewController as? UINavigationController)?.topViewController
+                    self.presentAlertWhenReady(
+                        confirmation,
+                        preferredPresenter: currentViewer
+                    )
+                }
+            }
+        })
+        presentAlertWhenReady(alert, preferredPresenter: viewer)
+    }
+
+    private func presentHistory() {
+        let entries = BrowserHistoryStore.entries
+        let body: String
+        if entries.isEmpty {
+            body = "No browsing history yet.\n\nPages you visit will appear here."
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            body = entries.map { entry in
+                let title = entry.title.isEmpty ? entry.url : entry.title
+                return "\(title)\n\(entry.url)\n\(formatter.string(from: entry.visitedAt))"
+            }.joined(separator: "\n\n")
         }
         let viewer = TextDocumentViewController(
-            title: "Third-Party Notices",
-            text: notices
-        )
+            title: "History",
+            text: body,
+            actionTitle: entries.isEmpty ? nil : "Clear"
+        ) { [weak self] viewer in
+            guard let self else { return }
+            _ = BrowserHistoryStore.clear()
+            self.refreshSettingsIfPresented()
+            viewer.dismiss(animated: true)
+        }
         present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func presentDownloads() {
+        let records = BrowserDownloadStore.records
+        let body: String
+        if records.isEmpty {
+            body = "No app downloads yet.\n\nDownloads saved by this browser will appear here."
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            body = records.map { record in
+                let source = record.sourceURL.isEmpty ? "Unknown source" : record.sourceURL
+                let availability = FileManager.default.fileExists(atPath: record.fileURL.path)
+                    ? "Saved"
+                    : "File unavailable"
+                return "\(record.fileURL.lastPathComponent)\n\(availability) · \(formatter.string(from: record.savedAt))\n\(source)"
+            }.joined(separator: "\n\n")
+        }
+        let viewer = TextDocumentViewController(
+            title: "Downloads",
+            text: body,
+            actionTitle: records.isEmpty ? nil : "Clear List"
+        ) { [weak self] viewer in
+            guard let self else { return }
+            _ = BrowserDownloadStore.clear()
+            self.refreshSettingsIfPresented()
+            viewer.dismiss(animated: true)
+        }
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func presentResolverTrace() {
+        let address = coordinator?.currentShareURL?.absoluteString
+            ?? addressField.text
+            ?? "No current page"
+        let security = securityLabel.accessibilityLabel ?? "Security unavailable"
+        let trace = coordinator?.currentResolutionTraceJSON
+            ?? "No native resolution trace is available for the current page."
+        let text = """
+        ADDRESS
+        \(address)
+
+        RESOLUTION RESULT
+        \(security)
+
+        NATIVE TRACE
+        \(trace)
+
+        SYNC
+        \(latestSyncSummary.headline)
+        \(latestSyncSummary.detail)
+        """
+        let viewer = TextDocumentViewController(title: "Resolver Trace", text: text)
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func presentDiagnostics() {
+        let policy = process.currentPolicy
+        let nativeDiagnostics = (try? RustBrowserRuntime.diagnosticsJSON())
+            ?? "Native diagnostics are unavailable."
+        let text = """
+        APP AND RUNTIME
+
+        Build: \(BrowserSettingsViewController.buildLabelForDiagnostics)
+        Network: \(process.currentNetwork.title)
+        Resolution mode: \(policy.resolutionMode == .strict ? "strict" : "compatibility")
+        Stateless DANE certificates: \(policy.statelessDANECertificates)
+        Experimental P2P DNS relay: \(policy.experimentalP2PDNSRelay)
+        Legacy HNS DoH compatibility: \(policy.legacyHNSDoHCompatibility)
+        Compatibility DoH resolver: \(policy.hnsDohResolver ?? BrowserSettingsViewController.defaultDoHResolverURL)
+
+        SYNC STATUS
+
+        \(latestSyncSummary.headline)
+        \(latestSyncSummary.detail)
+        Peers: \(latestSyncSummary.peerCount) in \(latestSyncSummary.peerGroups) groups
+        Resolver cache: \(latestSyncSummary.resourceCacheEntries) entries, \(latestSyncSummary.resourceCacheBytes) bytes
+
+        RUST CORE
+
+        \(nativeDiagnostics)
+        """
+        let viewer = TextDocumentViewController(
+            title: "Diagnostics",
+            text: text,
+            actionTitle: "Share"
+        ) { viewer in
+            let activity = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+            if let popover = activity.popoverPresentationController {
+                popover.barButtonItem = viewer.navigationItem.rightBarButtonItem
+            }
+            viewer.present(activity, animated: true)
+        }
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func presentGatewayEvents() {
+        let events = BrowserGatewayEventStore.entries
+        let text = BrowserGatewayEventStore.formatted(events)
+        let viewer = TextDocumentViewController(
+            title: "Gateway",
+            text: text,
+            actionTitle: events.isEmpty ? nil : "Actions"
+        ) { viewer in
+            let actions = UIAlertController(
+                title: "Gateway events",
+                message: nil,
+                preferredStyle: .actionSheet
+            )
+            actions.addAction(UIAlertAction(title: "Copy", style: .default) { _ in
+                UIPasteboard.general.string = text
+            })
+            actions.addAction(UIAlertAction(title: "Clear", style: .destructive) { _ in
+                _ = BrowserGatewayEventStore.clear()
+                viewer.dismiss(animated: true)
+            })
+            actions.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            if let popover = actions.popoverPresentationController {
+                popover.barButtonItem = viewer.navigationItem.rightBarButtonItem
+            }
+            viewer.present(actions, animated: true)
+        }
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func presentLegal() {
+        let notices: String
+        if let url = Bundle.main.url(forResource: "third_party_notices", withExtension: "txt"),
+           let value = try? String(contentsOf: url, encoding: .utf8) {
+            notices = value
+        } else {
+            notices = "Third-party notices are unavailable."
+        }
+        let agreement = """
+        This is an experimental Handshake-first browser with local HNS proofs, authoritative DNS, a P2P DNS relay, RFC 8484 DoH transport, and DNSSEC/DANE diagnostics. HNS resolution, validation, relay, compatibility fallback, and sync may fail closed or be incomplete. The app is provided without warranty and is not a financial service.
+        """
+        let text = """
+        PRIVACY POLICY
+        \(BrowserSettingsViewController.privacyPolicyURL)
+
+        LICENSE
+        HNS DANE Browser is distributed under the repository's open-source license.
+        \(BrowserSettingsViewController.sourceCodeURL)
+
+        USER AGREEMENT
+        \(agreement)
+
+        THIRD-PARTY NOTICES
+        \(notices)
+        """
+        let viewer = TextDocumentViewController(title: "Legal", text: text)
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func openAppLanguageSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func applyTheme(_ mode: BrowserThemeMode) {
+        BrowserSettingsPreferences.saveThemeMode(mode)
+        let style: UIUserInterfaceStyle
+        switch mode {
+        case .system: style = .unspecified
+        case .light: style = .light
+        case .dark: style = .dark
+        }
+        view.window?.overrideUserInterfaceStyle = style
+        refreshSettingsIfPresented()
     }
 
     private var runtimeControlsAreAvailable: Bool {
@@ -615,6 +857,96 @@ final class BrowserViewController: UIViewController {
 #else
         environment != nil
 #endif
+    }
+
+    private func switchHandshakeNetwork(
+        to network: BrowserHandshakeNetwork,
+        presenter: UIViewController
+    ) {
+        guard !isControlOperationInFlight,
+              let previousEnvironment = environment,
+              network != process.currentNetwork else {
+            refreshSettingsIfPresented()
+            return
+        }
+        let replayAddress = coordinator?.replayableAddressForRuntimeChange()
+        setControlOperationInFlight(true)
+        addressField.isEnabled = false
+        coordinator?.destroy()
+        coordinator = nil
+        progressObservation = nil
+        placeholderLabel.isHidden = false
+        placeholderLabel.text = "Switching to \(network.title)…"
+        syncLabel.text = "Switching network"
+
+        process.switchNetwork(to: network) { [weak self, weak presenter] result in
+            guard let self, !self.isDestroyed else { return }
+            self.addressField.isEnabled = true
+            self.setControlOperationInFlight(false)
+            switch result {
+            case .success(let environment):
+                self.environment = environment
+                self.installCoordinator(
+                    environment: environment,
+                    replayAddress: replayAddress
+                )
+                self.resolverCacheSummary =
+                    "Ready to clear cached resolver values for \(network.title)."
+                self.updateSyncSummary(environment.runtime.syncSummary())
+            case .failure(let error):
+                self.environment = previousEnvironment
+                self.installCoordinator(
+                    environment: previousEnvironment,
+                    replayAddress: replayAddress
+                )
+                self.updateSyncSummary(previousEnvironment.runtime.syncSummary())
+                self.showOperationError(
+                    title: "Network change failed",
+                    error: error,
+                    presenter: presenter
+                )
+            }
+            if replayAddress == nil {
+                self.placeholderLabel.text = "Enter an address to begin"
+            }
+            if self.isForeground {
+                self.process.resumeForegroundSync { [weak self] summary in
+                    self?.updateSyncSummary(summary)
+                }
+            }
+            self.refreshSettingsIfPresented()
+        }
+    }
+
+    private func addStaticRelayPeer(
+        _ endpoint: String,
+        presenter: UIViewController
+    ) {
+        guard beginControlOperation() else {
+            refreshSettingsIfPresented()
+            return
+        }
+        process.addStaticRelayPeer(endpoint) { [weak self, weak presenter] result in
+            guard let self, !self.isDestroyed else { return }
+            self.setControlOperationInFlight(false)
+            switch result {
+            case .success(let summary):
+                self.settingsViewController?.updateRelayPeerSummary(
+                    "Verified relay-capable \(self.process.currentNetwork.title) peer saved. Add another if needed."
+                )
+                self.updateSyncSummary(summary)
+                self.showRuntimeSummary(summary, presenter: presenter)
+            case .failure(let error):
+                self.settingsViewController?.updateRelayPeerSummary(
+                    "Add a known relay-capable peer when discovery has not found one. Existing peers remain available."
+                )
+                self.showOperationError(
+                    title: "Relay peer was not added",
+                    error: error,
+                    presenter: presenter
+                )
+            }
+        }
     }
 
     private func applyRuntimePolicy(
@@ -697,7 +1029,8 @@ final class BrowserViewController: UIViewController {
             guard let self, !self.isDestroyed else { return }
             switch result {
             case .success(let summary):
-                self.resolverCacheSummary = "Mainnet cache cleared just now."
+                self.resolverCacheSummary =
+                    "\(self.process.currentNetwork.title) cache cleared just now."
                 self.setControlOperationInFlight(false)
                 self.showRuntimeSummary(summary, presenter: presenter)
             case .failure(let error):
@@ -713,19 +1046,123 @@ final class BrowserViewController: UIViewController {
         }
     }
 
-    private func showProofDetails() {
+    private func resetHeadersFromPeers(presenter: UIViewController? = nil) {
         guard beginControlOperation() else { return }
+        syncLabel.text = "Resetting Handshake headers…"
+        refreshSettingsIfPresented()
+        process.resetHeadersFromPeers { [weak self, weak presenter] result in
+            guard let self, !self.isDestroyed else { return }
+            self.setControlOperationInFlight(false)
+            switch result {
+            case .success(let summary):
+                self.updateSyncSummary(summary)
+                self.showRuntimeSummary(summary, presenter: presenter)
+                if self.isForeground {
+                    self.process.resumeForegroundSync { [weak self] updated in
+                        self?.updateSyncSummary(updated)
+                    }
+                }
+            case .failure(let error):
+                self.showOperationError(
+                    title: "Header resync did not start",
+                    error: error,
+                    presenter: presenter
+                )
+            }
+        }
+    }
+
+    private func presentHNSLookup(
+        title: String,
+        message: String,
+        onInspect: @escaping (String) -> Void
+    ) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addTextField { [weak self] field in
+            field.text = self?.coordinator?.currentShareURL?.host
+            field.placeholder = "example/ or www.example/"
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Inspect", style: .default) { [weak alert] _ in
+            let value = alert?.textFields?.first?.text?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ) ?? ""
+            guard !value.isEmpty else { return }
+            onInspect(value)
+        })
+        present(alert, animated: true)
+    }
+
+    private func showProofDetails() {
         let value = coordinator?.currentShareURL?.absoluteString
             ?? addressField.text?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? ""
         guard !value.isEmpty else {
-            setControlOperationInFlight(false)
-            showOperationError(
-                title: "Proof details unavailable",
-                error: BrowserCoreError.invalidAddress("Enter a Handshake address first.")
-            )
+            presentHNSLookup(
+                title: "HNS Proof Details",
+                message: "Enter an HNS name to inspect its local proof data."
+            ) { [weak self] value in
+                self?.loadProofDetails(for: value)
+            }
             return
         }
+        loadProofDetails(for: value)
+    }
+
+    private func presentHNSDomainSetup() {
+        presentHNSLookup(
+            title: "HNS Domain Setup",
+            message: "Enter an HNS domain to diagnose its records, proof, and delegation."
+        ) { [weak self] value in
+            self?.loadDomainSetupReport(for: value)
+        }
+    }
+
+    private func loadDomainSetupReport(for value: String) {
+        guard beginControlOperation() else { return }
+        process.proofDetails(for: value) { [weak self] result in
+            guard let self, !self.isDestroyed else { return }
+            self.setControlOperationInFlight(false)
+            switch result {
+            case .success(let details):
+                let report = BrowserDiagnosticReports.domainSetup(details)
+                let viewer = TextDocumentViewController(
+                    title: "HNS Domain Setup",
+                    text: report,
+                    actionTitle: "Copy"
+                ) { _ in
+                    UIPasteboard.general.string = report
+                }
+                self.present(UINavigationController(rootViewController: viewer), animated: true)
+            case .failure(let error):
+                self.showOperationError(title: "Domain setup report unavailable", error: error)
+            }
+        }
+    }
+
+    private func presentTLSADANEInspector() {
+        let url = coordinator?.currentShareURL?.absoluteString
+            ?? addressField.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+        let report = BrowserDiagnosticReports.tlsaDANE(
+            url: url,
+            traceJSON: coordinator?.currentResolutionTraceJSON
+        )
+        let viewer = TextDocumentViewController(
+            title: "TLSA / DANE Inspector",
+            text: report,
+            actionTitle: "Copy"
+        ) { _ in
+            UIPasteboard.general.string = report
+        }
+        present(UINavigationController(rootViewController: viewer), animated: true)
+    }
+
+    private func loadProofDetails(for value: String) {
+        guard beginControlOperation() else { return }
 
         process.proofDetails(for: value) { [weak self] result in
             guard let self, !self.isDestroyed else { return }
@@ -791,6 +1228,20 @@ final class BrowserViewController: UIViewController {
         syncLabel.text = summary.headline
         syncLabel.accessibilityLabel = "\(summary.headline). \(summary.detail)"
         refreshSettingsIfPresented()
+    }
+
+    private func recordGatewayEvent(
+        stage: String,
+        host: String,
+        status: Int,
+        reason: String
+    ) {
+        BrowserGatewayEventStore.record(
+            stage: stage,
+            host: host,
+            status: status,
+            reason: reason
+        )
     }
 
     private func startSyncStatusPolling() {
@@ -898,31 +1349,79 @@ extension BrowserViewController: BrowserSettingsViewControllerDelegate {
         didRequest action: BrowserSettingsViewController.Action
     ) {
         switch action {
+        case .setHomepage(let homepage):
+            BrowserSettingsPreferences.saveHomepage(homepage)
+            refreshSettingsIfPresented()
+        case .resetHomepage:
+            BrowserSettingsPreferences.resetHomepage()
+            refreshSettingsIfPresented()
+        case .showCookies:
+            dismissSettingsThen { [weak self] in
+                self?.presentCookiesSettings()
+            }
+        case .showHistory:
+            dismissSettingsThen { [weak self] in
+                self?.presentHistory()
+            }
+        case .showDownloads:
+            dismissSettingsThen { [weak self] in
+                self?.presentDownloads()
+            }
+        case .setTheme(let mode):
+            applyTheme(mode)
+        case .openLanguageSettings:
+            dismissSettingsThen { [weak self] in
+                self?.openAppLanguageSettings()
+            }
+        case .setHandshakeNetwork(let network):
+            switchHandshakeNetwork(to: network, presenter: controller)
+        case .addStaticRelayPeer(let endpoint):
+            addStaticRelayPeer(endpoint, presenter: controller)
         case .applyRuntimePolicy(let policy):
             applyRuntimePolicy(policy, presenter: controller)
         case .clearResolverCache:
             clearResolverCache(presenter: controller)
         case .runHNSSync:
             syncNow(presenter: controller.navigationController?.topViewController ?? controller)
+        case .resetHeadersFromPeers:
+            resetHeadersFromPeers(
+                presenter: controller.navigationController?.topViewController ?? controller
+            )
+        case .showHNSDomainSetup:
+            dismissSettingsThen { [weak self] in
+                self?.presentHNSDomainSetup()
+            }
+        case .showResolverTrace:
+            dismissSettingsThen { [weak self] in
+                self?.presentResolverTrace()
+            }
         case .showHNSProofDetails:
             dismissSettingsThen { [weak self] in
                 self?.showProofDetails()
+            }
+        case .showTLSADANEInspector:
+            dismissSettingsThen { [weak self] in
+                self?.presentTLSADANEInspector()
+            }
+        case .showDiagnostics:
+            dismissSettingsThen { [weak self] in
+                self?.presentDiagnostics()
+            }
+        case .showGateway:
+            dismissSettingsThen { [weak self] in
+                self?.presentGatewayEvents()
+            }
+        case .showLegal:
+            dismissSettingsThen { [weak self] in
+                self?.presentLegal()
             }
         case .showPrivacyPolicy:
             dismissSettingsThen { [weak self] in
                 self?.presentStorefrontPage(Self.privacyPolicyURL)
             }
-        case .showSupport:
-            dismissSettingsThen { [weak self] in
-                self?.presentStorefrontPage(Self.supportURL)
-            }
         case .showSourceCode:
             dismissSettingsThen { [weak self] in
                 self?.presentStorefrontPage(Self.sourceCodeURL)
-            }
-        case .showThirdPartyNotices:
-            dismissSettingsThen { [weak self] in
-                self?.presentThirdPartyNotices()
             }
         }
     }
@@ -955,6 +1454,14 @@ extension BrowserViewController: BrowserProxyCoordinatorDelegate {
     func proxyCoordinator(_ coordinator: BrowserProxyCoordinator, didUpdateAddress address: String) {
         addressField.text = address
         shareButton.isEnabled = true
+        BrowserHistoryStore.record(url: address)
+        recordGatewayEvent(
+            stage: "navigation",
+            host: URL(string: address)?.host ?? "",
+            status: 102,
+            reason: "Main-frame address updated"
+        )
+        refreshSettingsIfPresented()
     }
 
     func proxyCoordinator(
@@ -974,6 +1481,18 @@ extension BrowserViewController: BrowserProxyCoordinatorDelegate {
 
     func proxyCoordinator(_ coordinator: BrowserProxyCoordinator, didUpdateSecurity summary: BrowserSecuritySummary) {
         updateSecuritySummary(summary)
+        let status: Int
+        switch summary.level {
+        case .pending: status = 102
+        case .blocked: status = 502
+        case .webPKI, .insecure, .handshakeDANE, .handshakeFallback: status = 200
+        }
+        recordGatewayEvent(
+            stage: "security",
+            host: coordinator.currentShareURL?.host ?? "",
+            status: status,
+            reason: summary.detail
+        )
     }
 
     func proxyCoordinator(_ coordinator: BrowserProxyCoordinator, didUpdateSync summary: BrowserSyncSummary) {
@@ -981,10 +1500,27 @@ extension BrowserViewController: BrowserProxyCoordinatorDelegate {
     }
 
     func proxyCoordinator(_ coordinator: BrowserProxyCoordinator, didFail error: Error) {
+        recordGatewayEvent(
+            stage: "failure",
+            host: coordinator.currentShareURL?.host ?? "",
+            status: -1,
+            reason: error.localizedDescription
+        )
         showError(error)
     }
 
     func proxyCoordinator(_ coordinator: BrowserProxyCoordinator, didFinishDownloadAt url: URL) {
+        BrowserDownloadStore.record(
+            fileURL: url,
+            sourceURL: coordinator.currentShareURL?.absoluteString ?? ""
+        )
+        recordGatewayEvent(
+            stage: "download",
+            host: coordinator.currentShareURL?.host ?? "",
+            status: 200,
+            reason: "Saved \(url.lastPathComponent)"
+        )
+        refreshSettingsIfPresented()
         let alert = UIAlertController(
             title: "Download complete",
             message: url.lastPathComponent,
@@ -1071,11 +1607,23 @@ private final class ProofDetailsViewController: UIViewController {
 private final class TextDocumentViewController: UIViewController {
     private let documentTitle: String
     private let documentText: String
+    private let actionTitle: String?
+    private let actionStyle: UIBarButtonItem.Style
+    private let actionHandler: ((TextDocumentViewController) -> Void)?
     private let textView = UITextView()
 
-    init(title: String, text: String) {
+    init(
+        title: String,
+        text: String,
+        actionTitle: String? = nil,
+        actionStyle: UIBarButtonItem.Style = .plain,
+        actionHandler: ((TextDocumentViewController) -> Void)? = nil
+    ) {
         documentTitle = title
         documentText = text
+        self.actionTitle = actionTitle
+        self.actionStyle = actionStyle
+        self.actionHandler = actionHandler
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -1093,6 +1641,14 @@ private final class TextDocumentViewController: UIViewController {
             target: self,
             action: #selector(closeViewer)
         )
+        if let actionTitle, actionHandler != nil {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(
+                title: actionTitle,
+                style: actionStyle,
+                target: self,
+                action: #selector(runAction)
+            )
+        }
 
         textView.translatesAutoresizingMaskIntoConstraints = false
         textView.isEditable = false
@@ -1112,5 +1668,9 @@ private final class TextDocumentViewController: UIViewController {
 
     @objc private func closeViewer() {
         dismiss(animated: true)
+    }
+
+    @objc private func runAction() {
+        actionHandler?(self)
     }
 }

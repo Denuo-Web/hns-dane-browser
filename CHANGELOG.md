@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Made the iOS settings menu mirror Android's canonical seven-section hierarchy, row order, summaries, defaults, conditional current-page action, and native equivalents for homepage, privacy data, history, downloads, themes, language, Handshake networks, relay peers, diagnostics, legal information, resolver traces, and header resync.
+
 ### Fixed
 
 - Replaced the iOS placeholder icon with the production HNS DANE Browser artwork used by Android and Google Play, and added release checks for the canonical icon and archived app identity.

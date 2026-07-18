@@ -1,6 +1,6 @@
 # App Store submission checklist
 
-Canonical first-release values: iOS version `0.5.0`, build `43`, bundle ID
+Canonical first-release values: iOS version `0.5.0`, build `44`, bundle ID
 `com.denuoweb.hnsdane.ios`, iPhone only, Utilities, Free, manual release.
 
 ## Public listing
@@ -9,10 +9,10 @@ Canonical first-release values: iOS version `0.5.0`, build `43`, bundle ID
   `info@denuoweb.com` for support.
 - [ ] The live privacy URL contains the current cross-platform policy and does not
   direct users to post personal information in a public issue.
-- [ ] The app's in-app Privacy Policy and Support actions open those live pages.
+- [ ] The app's in-app Privacy Policy and Source Code actions open those live pages.
 - [ ] Paste the first-release fields listed in `metadata/README.md`; leave **What's
   New in This Version** empty.
-- [ ] Set the version to `0.5.0`, select build `43`, and leave Routing App Coverage
+- [ ] Set the version to `0.5.0`, select build `44`, and leave Routing App Coverage
   empty.
 
 ## Screenshots
@@ -51,7 +51,7 @@ Canonical first-release values: iOS version `0.5.0`, build `43`, bundle ID
 
 - [ ] Enter a real review contact name, phone number, and email address.
 - [ ] Paste `metadata/en-US/review-notes.txt`; do not enable the sign-in fields.
-- [ ] Confirm build `43` has finished processing and its export-compliance status is
+- [ ] Confirm build `44` has finished processing and its export-compliance status is
   resolved.
 - [ ] Confirm the metadata, privacy answers, age rating, content rights, pricing,
   availability, screenshots, and build are all attached to the same submission.

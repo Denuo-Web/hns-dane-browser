@@ -171,6 +171,10 @@ HnsBrowserResult hns_browser_runtime_sync_once(
 HnsBrowserResult hns_browser_runtime_sync_status(
     HnsBrowserRuntimeHandle runtime,
     HnsBrowserBuffer *out_status_json);
+HnsBrowserResult hns_browser_runtime_add_static_relay_peer(
+    HnsBrowserRuntimeHandle runtime,
+    HnsBrowserSlice endpoint,
+    HnsBrowserBuffer *out_status_json);
 HnsBrowserResult hns_browser_runtime_clear_resolver_cache(
     HnsBrowserRuntimeHandle runtime,
     HnsBrowserBuffer *out_status_json);

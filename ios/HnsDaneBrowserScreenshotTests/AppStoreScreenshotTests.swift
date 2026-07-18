@@ -167,12 +167,17 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
         controls.tap()
 
         let table = app.tables["settings.table"]
+        XCTAssertTrue(table.waitForExistence(timeout: 10), "Settings table did not appear")
         let statelessRow = app.descendants(matching: .any)[
             "settings.hns-resolution.stateless-dane-certificates"
         ]
         let statelessToggle = app.switches[
             "settings.hns-resolution.stateless-dane-certificates.toggle"
         ]
+        for _ in 0..<6 where !statelessRow.exists || !statelessRow.isHittable {
+            assertNoNavigationAlert()
+            table.swipeUp()
+        }
         XCTAssertTrue(
             waitUntil(
                 description: "Android-aligned HNS settings",
