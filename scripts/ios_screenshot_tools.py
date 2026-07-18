@@ -300,10 +300,30 @@ def validate_live_provenance(document: Any) -> dict[str, Any]:
         security_label = evidence.get("securityLabel")
         if not isinstance(final_address, str) or not final_address.strip():
             raise ScreenshotToolError(f"{section}.finalAddress must be non-empty")
+        expected_final_address = LIVE_TARGETS[section]
+        if final_address != expected_final_address:
+            raise ScreenshotToolError(
+                f"{section}.finalAddress must be {expected_final_address!r}"
+            )
         if not isinstance(security_label, str) or not security_label.strip():
             raise ScreenshotToolError(f"{section}.securityLabel must be non-empty")
         if security_label in {"Security pending", "Waiting for a verified response"}:
             raise ScreenshotToolError(f"{section} captured a pending security state")
+
+    hns_security = document["hnsNavigation"]["securityLabel"]
+    hns_security_prefix = "DANE verified · "
+    if not hns_security.startswith(hns_security_prefix) or not hns_security[
+        len(hns_security_prefix) :
+    ].strip():
+        raise ScreenshotToolError(
+            "hnsNavigation.securityLabel must prove a successful DANE response"
+        )
+
+    expected_webpki_security = "System WebPKI via the Rust whole-browser proxy"
+    if document["webPKINavigation"]["securityLabel"] != expected_webpki_security:
+        raise ScreenshotToolError(
+            "webPKINavigation.securityLabel must prove the system WebPKI response"
+        )
 
     hns_runtime_status = document["hnsNavigation"].get(
         "runtimeStatusBeforeNavigation"
@@ -316,9 +336,9 @@ def validate_live_provenance(document: Any) -> dict[str, Any]:
         )
 
     proof_label = document["proofDetails"].get("contentAccessibilityLabel")
-    if not isinstance(proof_label, str) or not proof_label.strip():
+    if proof_label != "Handshake proof details for denuoweb":
         raise ScreenshotToolError(
-            "proofDetails.contentAccessibilityLabel must be non-empty"
+            "proofDetails.contentAccessibilityLabel must identify denuoweb"
         )
     expected_settings_row = "settings.hns-resolution.stateless-dane-certificates"
     if document["settings"].get("statelessDANERowIdentifier") != expected_settings_row:
