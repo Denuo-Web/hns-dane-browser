@@ -9,6 +9,31 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
     private static let hnsURL = "https://denuoweb/"
     private static let webPKIURL = "https://denuoweb.com/work/hns-dane-browser"
 
+    private enum SubmissionSecurityExpectation {
+        case hnsDANE
+        case webPKI
+
+        var description: String {
+            switch self {
+            case .hnsDANE: "a DANE-verified HNS response"
+            case .webPKI: "the system WebPKI response"
+            }
+        }
+
+        func matches(_ label: String) -> Bool {
+            switch self {
+            case .hnsDANE:
+                let prefix = "DANE verified · "
+                return label.hasPrefix(prefix)
+                    && !String(label.dropFirst(prefix.count)).trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+            case .webPKI:
+                return label == "System WebPKI via the Rust whole-browser proxy"
+            }
+        }
+    }
+
     private var app: XCUIApplication!
 
     override func setUp() {
@@ -34,6 +59,7 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
         var hnsEvidence = try navigateAndWait(
             to: Self.hnsURL,
             expectedHost: "denuoweb",
+            expectedSecurity: .hnsDANE,
             timeout: 180
         )
         hnsEvidence["runtimeStatusBeforeNavigation"] = currentRuntimeStatus
@@ -50,6 +76,7 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
         let webPKIEvidence = try navigateAndWait(
             to: Self.webPKIURL,
             expectedHost: "denuoweb.com",
+            expectedSecurity: .webPKI,
             timeout: 90
         )
         capture(named: "LIVE_APPSTORE_SCREENSHOT_04_WEBPKI")
@@ -103,20 +130,44 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
     private func navigateAndWait(
         to requestedURL: String,
         expectedHost: String,
+        expectedSecurity: SubmissionSecurityExpectation,
         timeout: TimeInterval
     ) throws -> [String: Any] {
         let address = app.textFields["app-store-screenshot.address"]
         address.tap()
+
+        let nestedClearButton = address.buttons["Clear text"]
+        let clearButton = nestedClearButton.waitForExistence(timeout: 3)
+            ? nestedClearButton
+            : app.buttons["Clear text"]
+        XCTAssertTrue(
+            clearButton.waitForExistence(timeout: 2),
+            "Address clear button did not appear"
+        )
+        clearButton.tap()
+
         address.typeText(requestedURL)
-        address.typeText("\n")
+        XCTAssertEqual(
+            address.value as? String,
+            requestedURL,
+            "Address field did not contain the exact requested URL before submission"
+        )
+        address.typeText(XCUIKeyboardKey.return.rawValue)
 
         XCTAssertTrue(
             waitUntil(
                 description: "address update for \(expectedHost)",
                 timeout: timeout,
                 condition: {
-                    guard let value = address.value as? String else { return false }
-                    return value.localizedCaseInsensitiveContains(expectedHost)
+                    guard let value = address.value as? String,
+                          let components = URLComponents(string: value),
+                          components.scheme?.caseInsensitiveCompare("https") == .orderedSame,
+                          components.host?.caseInsensitiveCompare(expectedHost) == .orderedSame,
+                          components.user == nil,
+                          components.password == nil else {
+                        return false
+                    }
+                    return true
                 }
             )
         )
@@ -136,15 +187,16 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
 
         let security = app.staticTexts["app-store-screenshot.security"]
         XCTAssertTrue(security.waitForExistence(timeout: 10), "Security status did not appear")
+        var lastSecurityLabel = ""
         XCTAssertTrue(
             waitUntil(
-                description: "actual security outcome for \(expectedHost)",
+                description: expectedSecurity.description,
                 timeout: timeout,
+                timeoutEvidence: { " Last security label: \(lastSecurityLabel)" },
                 condition: {
                     let label = security.label.trimmingCharacters(in: .whitespacesAndNewlines)
-                    return !label.isEmpty
-                        && label != "Security pending"
-                        && label != "Waiting for a verified response"
+                    lastSecurityLabel = label
+                    return expectedSecurity.matches(label)
                 }
             )
         )
@@ -209,7 +261,10 @@ final class LiveAppStoreScreenshotTests: XCTestCase {
             waitUntil(
                 description: "live proof details",
                 timeout: timeout,
-                condition: { proofContent.exists && !proofContent.label.isEmpty }
+                condition: {
+                    proofContent.exists
+                        && proofContent.label == "Handshake proof details for denuoweb"
+                }
             )
         )
         assertNoNavigationAlert()

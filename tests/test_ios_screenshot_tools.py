@@ -294,6 +294,101 @@ class ScreenshotManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ScreenshotToolError, "current Handshake headers"):
             validate_live_provenance(provenance)
 
+    def test_rejects_mismatched_final_navigation_addresses(self) -> None:
+        malformed_addresses = {
+            "hnsNavigation": (
+                "https://denuowebhttps//denuoweb/.com/work/hns-dane-browser"
+            ),
+            "webPKINavigation": (
+                "https://denuowebhttps//denuoweb.com/work/hns-dane-browser"
+                ".com/work/hns-dane-browser"
+            ),
+        }
+        for section, malformed_address in malformed_addresses.items():
+            with self.subTest(section=section):
+                provenance = live_provenance()
+                provenance[section]["finalAddress"] = malformed_address
+                with self.assertRaisesRegex(ScreenshotToolError, "finalAddress must be"):
+                    validate_live_provenance(provenance)
+
+    def test_rejects_failed_submission_security_outcomes(self) -> None:
+        for section in ("hnsNavigation", "webPKINavigation"):
+            with self.subTest(section=section):
+                provenance = live_provenance()
+                provenance[section]["securityLabel"] = (
+                    "The Rust proxy rejected the HNS response"
+                )
+                with self.assertRaisesRegex(ScreenshotToolError, "must prove"):
+                    validate_live_provenance(provenance)
+
+    def test_rejects_proof_details_for_wrong_host(self) -> None:
+        provenance = live_provenance()
+        provenance["proofDetails"]["contentAccessibilityLabel"] = (
+            "Handshake proof details for denuowebhttps"
+        )
+        with self.assertRaisesRegex(ScreenshotToolError, "must identify denuoweb"):
+            validate_live_provenance(provenance)
+
+    def test_accepts_live_hns_and_webpki_success_evidence(self) -> None:
+        for path in (
+            "authoritative DoH",
+            "authoritative DNS",
+            "configured DoH",
+            "stateless DANE",
+            "P2P DNS relay",
+        ):
+            with self.subTest(path=path):
+                provenance = live_provenance()
+                provenance["hnsNavigation"]["securityLabel"] = f"DANE verified · {path}"
+                self.assertEqual(validate_live_provenance(provenance), provenance)
+
+    def test_verify_live_rejects_malformed_run_runtime_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for _, basename in SCREENSHOTS:
+                (directory / f"{basename}.jpg").write_bytes(minimal_jpeg(1284, 2778))
+
+            provenance = live_provenance()
+            provenance["hnsNavigation"].update(
+                {
+                    "finalAddress": (
+                        "https://denuowebhttps//denuoweb/.com/work/"
+                        "hns-dane-browser"
+                    ),
+                    "securityLabel": "The Rust proxy rejected the HNS response",
+                }
+            )
+            provenance["proofDetails"]["contentAccessibilityLabel"] = (
+                "Handshake proof details for denuowebhttps"
+            )
+            provenance["webPKINavigation"].update(
+                {
+                    "finalAddress": (
+                        "https://denuowebhttps//denuoweb.com/work/hns-dane-browser"
+                        ".com/work/hns-dane-browser"
+                    ),
+                    "securityLabel": "The Rust proxy rejected the HNS response",
+                }
+            )
+
+            manifest = {
+                "capture": {
+                    "commit": "abcdef",
+                    "configuration": "Release",
+                    "device": "iPhone 14 Plus",
+                    "fixtureEnvironmentInjected": False,
+                    "iosSdk": "26.5",
+                    "mode": LIVE_CAPTURE_MODE,
+                    "xcode": "Xcode 26.5",
+                },
+                "runtimeEvidence": provenance,
+                "schemaVersion": 1,
+                "screenshots": [],
+            }
+
+            with self.assertRaisesRegex(ScreenshotToolError, "finalAddress must be"):
+                verify_live_set(directory, manifest)
+
     def test_staging_gate_rejects_missing_or_fixture_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

@@ -35,10 +35,10 @@ Connect's 6.5-inch iPhone screenshot slot. The workflow creates a fresh iPhone
 
 The submission capture runs the normal app and Rust runtime in the Release
 simulator configuration. It never sets `HNS_APP_STORE_SCREENSHOT_SCENE`, never
-injects page HTML, and never forces a security result. The HNS image therefore
-shows whichever real state the runtime reports for that response—DANE,
-fallback, insecure, or blocked—and `manifest.json` records the exact visible
-label.
+injects page HTML, and never forces a security result. The submission workflow
+accepts the intended HNS screenshot only when the live response is DANE
+verified, and accepts the public product page only when the app reports its
+system WebPKI path. `manifest.json` records the exact visible labels.
 
 The capture fails instead of producing an artifact when:
 
@@ -47,7 +47,10 @@ The capture fails instead of producing an artifact when:
   headers);
 - runtime preparation for the WebPKI launch does not finish within 120 seconds;
 - the HNS page does not finish within 180 seconds;
+- either final address differs from its exact requested submission URL;
+- the HNS page is not DANE verified or the public page is not system WebPKI;
 - Proof Details does not open within 60 seconds;
+- Proof Details does not identify the same `denuoweb` HNS navigation;
 - the public WebPKI page does not finish within 90 seconds;
 - the app presents a navigation or runtime alert;
 - the Release app binary contains the Debug fixture environment key; or
@@ -70,8 +73,9 @@ matrix in `docs/ios-device-validation.md`.
 2. Inspect `manifest.json`. Confirm `capture.mode` is
    `live-production-runtime`, `capture.configuration` is `Release`,
    `capture.fixtureEnvironmentInjected` is `false`, and the commit is the
-   intended release commit. Do not require a particular HNS security label;
-   compare it to what is visibly shown.
+   intended release commit. Confirm the recorded HNS label starts with
+   `DANE verified` and the public-page label reports system WebPKI, matching
+   what is visibly shown.
 3. Put the downloaded artifact contents below
    `build/app-store-live-screenshots/`, then run:
 
