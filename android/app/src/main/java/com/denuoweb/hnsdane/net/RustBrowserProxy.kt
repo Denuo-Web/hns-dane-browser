@@ -276,6 +276,8 @@ internal fun parseRustProxyStatusBundle(
         8 -> HnsPageSecurityPath.HnsThirdPartyDoh
         9 -> HnsPageSecurityPath.DaneP2pDnsRelay
         10 -> HnsPageSecurityPath.HnsP2pDnsRelay
+        11 -> HnsPageSecurityPath.DaneP2pOdoh
+        12 -> HnsPageSecurityPath.HnsP2pOdoh
         else -> return null
     }
     val host = cursor.readAscii(MAX_PROXY_STATUS_HOST_BYTES) ?: return null

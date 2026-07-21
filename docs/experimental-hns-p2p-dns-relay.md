@@ -277,7 +277,9 @@ full runner uses four blockchain-owning `hsd` FullNodes with independent
 prefixes, mines the complete `relaytest` regtest name lifecycle, commits its
 NS/GLUE4/DS resource through the safe-root window, and requires a current
 `TYPE_EXISTS` Urkel proof with a non-empty registered resource from every node.
-Its native runtime follows bad-to-good relay failover, validates the positive
+Its native runtime first verifies bad-to-good direct-relay failover as the
+prerequisite profile, then performs its browser request through a distinct
+ODoH proxy and Brontide-authenticated target. It validates the positive
 DS/DNSKEY/RRSIG chain, HTTPS and TLSA/DANE locally, and requires zero legacy-DoH
 contacts. That full positive-answer path does not claim an NSEC/NSEC3 denial
 case or Android application-binary execution.
@@ -311,8 +313,9 @@ Standardization requires permanent service and packet assignments, exact
 framing, negotiation, sizes and flags, allowed types/classes, HNS-root
 admission, local validation and AD treatment, cache rules, rate/concurrency
 limits, peer scoring, retry behavior, encryption expectations, logging/privacy
-requirements, compatibility behavior, authoritative-DoH precedence, and a
-possible oblivious two-hop extension. The temporary values above remain
+requirements, compatibility behavior, and authoritative-DoH precedence. The
+separate experimental ODoH requester and two-hop profile are documented in
+`experimental-hns-p2p-odoh.md`. The temporary values above remain
 nonstandard until an accepted HIP assigns them.
 
 Future `hnsd` work would independently add the codec, capability, optional

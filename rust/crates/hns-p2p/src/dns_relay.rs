@@ -1060,6 +1060,7 @@ where
                 | Packet::GetProof(_)
                 | Packet::Proof(_)
                 | Packet::GetDnsRelay(_)
+                | Packet::Odoh(_)
                 | Packet::Unknown { .. }
                 | Packet::Verack => {}
                 Packet::Version(_) => {

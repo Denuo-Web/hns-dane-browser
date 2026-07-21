@@ -26,11 +26,14 @@ license = "PolyForm-Noncommercial-1.0.0"
 rust-version = "1.92"
 
 [workspace.dependencies]
+aes-gcm = "0.10"
 base64 = "0.22"
 blake2 = "0.10"
 bytes = "1"
 hex = "0.4"
 getrandom = "0.3"
+hkdf = "0.12"
+hpke = { version = "0.14", default-features = false, features = ["alloc", "aes", "getrandom", "x25519"] }
 hns-cache = { path = "crates/hns-cache" }
 hns-browser-runtime = { path = "crates/hns-browser-runtime" }
 hns-chain = { path = "crates/hns-chain" }
@@ -51,6 +54,7 @@ http = "1"
 httparse = "1.10"
 idna = "1.1"
 jni = "0.21"
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }

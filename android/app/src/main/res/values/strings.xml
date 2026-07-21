@@ -41,12 +41,14 @@
     <string name="security_hns_via_authoritative_doh" translatable="false">HNS via ADoH</string>
     <string name="security_hns_via_authoritative_dns53" translatable="false">HNS via DNS53</string>
     <string name="security_hns_via_p2p_dns_relay" translatable="false">HNS via P2P DNS relay</string>
+    <string name="security_hns_via_p2p_odoh" translatable="false">HNS via P2P ODoH</string>
     <string name="security_hns_via_third_party_doh" translatable="false">HNS via 3rd DoH</string>
     <string name="security_dane_verified">DANE verified</string>
     <string name="security_dane_compat">DANE via DoH</string>
     <string name="security_dane_via_authoritative_doh" translatable="false">DANE via ADoH</string>
     <string name="security_dane_via_authoritative_dns53" translatable="false">DANE via DNS53</string>
     <string name="security_dane_via_p2p_dns_relay" translatable="false">DANE via P2P DNS relay</string>
+    <string name="security_dane_via_p2p_odoh" translatable="false">DANE via P2P ODoH</string>
     <string name="security_dane_via_third_party_doh" translatable="false">DANE via 3rd DoH</string>
     <string name="security_stateless_dane" translatable="false">Stateless DANE</string>
     <string name="security_dane_via_icann_doh" translatable="false">DANE via ICANN DoH</string>

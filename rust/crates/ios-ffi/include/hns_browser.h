@@ -56,6 +56,8 @@ typedef uint32_t HnsBrowserSecurityPath;
 #define HNS_BROWSER_SECURITY_PATH_HNS_THIRD_PARTY_DOH 8u
 #define HNS_BROWSER_SECURITY_PATH_DANE_P2P_DNS_RELAY 9u
 #define HNS_BROWSER_SECURITY_PATH_HNS_P2P_DNS_RELAY 10u
+#define HNS_BROWSER_SECURITY_PATH_DANE_P2P_ODOH 11u
+#define HNS_BROWSER_SECURITY_PATH_HNS_P2P_ODOH 12u
 
 typedef uint64_t HnsBrowserRuntimeHandle;
 typedef uint64_t HnsBrowserProxyHandle;

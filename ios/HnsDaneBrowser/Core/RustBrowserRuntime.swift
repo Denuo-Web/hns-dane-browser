@@ -606,6 +606,10 @@ private final class RustBrowserProxySession: BrowserProxySession {
             return "P2P DNS relay"
         case HNS_BROWSER_SECURITY_PATH_HNS_P2P_DNS_RELAY:
             return "HNS P2P DNS relay"
+        case HNS_BROWSER_SECURITY_PATH_DANE_P2P_ODOH:
+            return "P2P ODoH"
+        case HNS_BROWSER_SECURITY_PATH_HNS_P2P_ODOH:
+            return "HNS P2P ODoH"
         default:
             return "verified Rust path"
         }

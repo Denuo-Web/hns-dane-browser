@@ -28,9 +28,10 @@ use hns_loopback_proxy::{
     SessionIdGenerationError,
 };
 use hns_p2p::{
-    DnsRelayClient, DnsRelayClientError, DnsSeedPeerSource, EXPERIMENTAL_DNS_RELAY_SERVICE,
-    HeaderSyncSession, PeerConnection, PeerSource, SERVICE_NETWORK, SqlitePeerStore,
-    StaticPeerSource, VersionPacket, is_allowed_peer_endpoint,
+    DirectTargetLocator, DnsRelayClient, DnsRelayClientError, DnsSeedPeerSource,
+    EXPERIMENTAL_DNS_RELAY_SERVICE, HeaderSyncSession, OdohClient, PeerConnection, PeerManager,
+    PeerSource, SERVICE_NETWORK, SqlitePeerStore, StaticPeerSource, TcpDnsRelayPeerConnector,
+    VersionPacket, is_allowed_peer_endpoint,
 };
 use hns_resolver::{
     AuthoritativeDnssecResolver, AuthoritativeDohEndpoint, AuthoritativeDohTlsAuthentication,
@@ -410,6 +411,8 @@ pub struct RuntimePolicy {
     pub hns_doh_resolver: Option<String>,
     /// Enables the private, proof-backed HNS peer DNS-relay transport.
     pub experimental_p2p_dns_relay: bool,
+    /// Enables the ODoH requester with an explicit proxy and signed direct target locator.
+    pub experimental_p2p_odoh: Option<OdohRuntimeConfig>,
     /// Keeps the existing third-party HNS recursive DoH compatibility paths available.
     pub legacy_hns_doh_compatibility: bool,
     pub stateless_dane_certificates: bool,
@@ -427,10 +430,21 @@ impl RuntimePolicy {
             resolution_mode: ResolutionMode::Compatibility,
             hns_doh_resolver: None,
             experimental_p2p_dns_relay: false,
+            experimental_p2p_odoh: None,
             legacy_hns_doh_compatibility: true,
             stateless_dane_certificates: false,
         }
     }
+}
+
+/// Explicit direct-locator profile used by the experimental ODoH requester.
+/// The proxy learns only ciphertext and the target locator; the target peer
+/// key authenticates the target configuration record over the separate hop.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OdohRuntimeConfig {
+    pub proxy: SocketAddr,
+    pub target: SocketAddr,
+    pub target_peer_key: [u8; 33],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -504,12 +518,14 @@ pub enum BrowserProxySecurityPath {
     DaneAuthoritativeDoh,
     DaneAuthoritativeDns53,
     DaneP2pDnsRelay,
+    DaneP2pOdoh,
     DaneThirdPartyDoh,
     StatelessDane,
     DaneIcannDoh,
     HnsAuthoritativeDoh,
     HnsAuthoritativeDns53,
     HnsP2pDnsRelay,
+    HnsP2pOdoh,
     HnsThirdPartyDoh,
 }
 
@@ -638,6 +654,8 @@ fn parse_browser_proxy_security_path(value: Option<&str>) -> Option<BrowserProxy
         Some(BrowserProxySecurityPath::DaneAuthoritativeDns53)
     } else if value.eq_ignore_ascii_case("dane-p2p-dns-relay") {
         Some(BrowserProxySecurityPath::DaneP2pDnsRelay)
+    } else if value.eq_ignore_ascii_case("dane-p2p-odoh") {
+        Some(BrowserProxySecurityPath::DaneP2pOdoh)
     } else if value.eq_ignore_ascii_case("dane-third-party-doh") {
         Some(BrowserProxySecurityPath::DaneThirdPartyDoh)
     } else if value.eq_ignore_ascii_case("stateless-dane") {
@@ -650,6 +668,8 @@ fn parse_browser_proxy_security_path(value: Option<&str>) -> Option<BrowserProxy
         Some(BrowserProxySecurityPath::HnsAuthoritativeDns53)
     } else if value.eq_ignore_ascii_case("hns-p2p-dns-relay") {
         Some(BrowserProxySecurityPath::HnsP2pDnsRelay)
+    } else if value.eq_ignore_ascii_case("hns-p2p-odoh") {
+        Some(BrowserProxySecurityPath::HnsP2pOdoh)
     } else if value.eq_ignore_ascii_case("hns-third-party-doh") {
         Some(BrowserProxySecurityPath::HnsThirdPartyDoh)
     } else {
@@ -1564,6 +1584,7 @@ impl BrowserRuntime {
             .maintenance
             .read()
             .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let odoh = self.policy()?.experimental_p2p_odoh;
         let header_text = self.gateway_header_text(&request.headers)?;
         let encoded_http = gateway_http_response_with_transport(
             GatewayHttpRequestInput {
@@ -1578,6 +1599,7 @@ impl BrowserRuntime {
             },
             self.inner.transport.clone(),
             Some(Arc::clone(&self.inner.coordination.peer_state)),
+            odoh,
         );
         Ok(GatewayHttpResponse { encoded_http })
     }
@@ -1594,6 +1616,7 @@ impl BrowserRuntime {
             .maintenance
             .read()
             .map_err(|_| RuntimeError::Synchronization("maintenance lock"))?;
+        let odoh = self.policy()?.experimental_p2p_odoh;
         let header_text = self.gateway_header_text(&request.headers)?;
         gateway_http_response_body_to_file_with_transport(
             GatewayHttpRequestInput {
@@ -1609,6 +1632,7 @@ impl BrowserRuntime {
             body_path.as_ref(),
             self.inner.transport.clone(),
             Some(Arc::clone(&self.inner.coordination.peer_state)),
+            odoh,
         )
         .map_err(RuntimeError::Operation)
     }
@@ -1876,6 +1900,7 @@ impl BrowserRuntime {
         request: &GatewayHttpRequest,
     ) -> Result<PreparedRuntimeGateway, RuntimeError> {
         self.validate_gateway_request(request)?;
+        let odoh = self.policy()?.experimental_p2p_odoh;
         let header_text = self.gateway_header_text(&request.headers)?;
         let parsed_headers = parse_gateway_headers(&header_text)
             .map_err(|error| RuntimeError::InvalidConfiguration(error.to_owned()))?;
@@ -1908,6 +1933,7 @@ impl BrowserRuntime {
                 mode,
                 doh_endpoint: parsed_headers.doh_endpoint,
                 experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
+                experimental_p2p_odoh: odoh,
                 legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
                 peer_state: Some(Arc::clone(&self.inner.coordination.peer_state)),
                 relay: Some(self.inner.coordination.relay.clone()),
@@ -3408,6 +3434,100 @@ impl DnsTransport for HnsP2pDnsTransport {
     }
 }
 
+/// Recursive DNS transport whose query/response bodies are end-to-end
+/// encrypted between this requester and a separately authenticated target.
+struct HnsP2pOdohTransport {
+    client: Mutex<Option<OdohClient<TcpDnsRelayPeerConnector>>>,
+    initialization_error: Option<String>,
+    proxy: SocketAddr,
+    trace: DnsTraceRecorder,
+    endpoint_policy: DnsEndpointPolicy,
+}
+
+impl HnsP2pOdohTransport {
+    fn new(
+        network_kind: NetworkKind,
+        config: OdohRuntimeConfig,
+        trace: DnsTraceRecorder,
+        endpoint_policy: DnsEndpointPolicy,
+    ) -> Self {
+        let network = network_kind.network();
+        let proxy_allowed = is_allowed_peer_endpoint(&network, config.proxy);
+        let target = DirectTargetLocator::new(config.target_peer_key, config.target, &network);
+        let mut proxies = PeerManager::default();
+        proxies.seed([config.proxy]);
+        let (client, initialization_error) = match (proxy_allowed, target) {
+            (true, Ok(target)) => (Some(OdohClient::new(network, proxies, target)), None),
+            (false, _) => (
+                None,
+                Some("proxy endpoint violates network policy".to_owned()),
+            ),
+            (true, Err(error)) => (None, Some(error.to_string())),
+        };
+        Self {
+            client: Mutex::new(client),
+            initialization_error,
+            proxy: config.proxy,
+            trace,
+            endpoint_policy,
+        }
+    }
+
+    fn traced_exchange(&self, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        let started = Instant::now();
+        let result = if let Some(error) = self.initialization_error.as_deref() {
+            Err(ResolverError::DnsTransport(format!(
+                "experimental HNS P2P ODoH target configuration failed: {error}"
+            )))
+        } else {
+            let mut client = self
+                .client
+                .lock()
+                .map_err(|_| ResolverError::CachePoisoned)?;
+            client
+                .as_mut()
+                .ok_or_else(|| {
+                    ResolverError::DnsTransport(
+                        "experimental HNS P2P ODoH client is unavailable".to_owned(),
+                    )
+                })?
+                .resolve(query)
+                .map(|exchange| exchange.response)
+                .map_err(|error| {
+                    ResolverError::DnsTransport(format!(
+                        "experimental HNS P2P ODoH request failed: {error}"
+                    ))
+                })
+        };
+        self.trace.push(dns_trace_event(
+            "p2p_odoh",
+            self.proxy.to_string(),
+            query,
+            elapsed_millis(started),
+            &result,
+        ));
+        result
+    }
+}
+
+impl DnsTransport for HnsP2pOdohTransport {
+    fn endpoint_policy(&self) -> DnsEndpointPolicy {
+        self.endpoint_policy
+    }
+
+    fn exchange_udp(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        self.traced_exchange(query)
+    }
+
+    fn exchange_tcp(&self, _server: SocketAddr, query: &[u8]) -> Result<Vec<u8>, ResolverError> {
+        self.traced_exchange(query)
+    }
+
+    fn is_recursive_relay(&self) -> bool {
+        true
+    }
+}
+
 fn initialize_dns_relay_client(
     peer_store_path: &Path,
     network_kind: NetworkKind,
@@ -4592,13 +4712,14 @@ fn sync_once_with_options(
 }
 
 pub fn gateway_http_response(input: GatewayHttpRequestInput<'_>) -> Vec<u8> {
-    gateway_http_response_with_transport(input, shared_http_transport(), None)
+    gateway_http_response_with_transport(input, shared_http_transport(), None, None)
 }
 
 fn gateway_http_response_with_transport(
     input: GatewayHttpRequestInput<'_>,
     transport: TcpHttpTransport,
     peer_state: Option<Arc<Mutex<()>>>,
+    odoh: Option<OdohRuntimeConfig>,
 ) -> Vec<u8> {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
@@ -4638,6 +4759,7 @@ fn gateway_http_response_with_transport(
             mode,
             doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
+            experimental_p2p_odoh: odoh,
             legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
@@ -4726,6 +4848,7 @@ pub fn gateway_http_response_body_to_file(
         body_path,
         shared_http_transport(),
         None,
+        None,
     )
 }
 
@@ -4734,6 +4857,7 @@ fn gateway_http_response_body_to_file_with_transport(
     body_path: &Path,
     transport: TcpHttpTransport,
     peer_state: Option<Arc<Mutex<()>>>,
+    odoh: Option<OdohRuntimeConfig>,
 ) -> Result<Vec<u8>, String> {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
@@ -4783,6 +4907,7 @@ fn gateway_http_response_body_to_file_with_transport(
             mode,
             doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
+            experimental_p2p_odoh: odoh,
             legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
@@ -4882,6 +5007,7 @@ pub fn gateway_http_upgrade_tunnel(
         client_output,
         shared_http_transport(),
         None,
+        None,
     )
 }
 
@@ -4891,6 +5017,7 @@ fn gateway_http_upgrade_tunnel_with_transport(
     mut client_output: impl Write + Send + 'static,
     transport: TcpHttpTransport,
     peer_state: Option<Arc<Mutex<()>>>,
+    odoh: Option<OdohRuntimeConfig>,
 ) -> bool {
     let parsed_headers = match parse_gateway_headers(input.header_text) {
         Ok(headers) => headers,
@@ -4941,6 +5068,7 @@ fn gateway_http_upgrade_tunnel_with_transport(
             mode,
             doh_endpoint: parsed_headers.doh_endpoint,
             experimental_p2p_dns_relay: parsed_headers.experimental_p2p_dns_relay,
+            experimental_p2p_odoh: odoh,
             legacy_hns_doh_compatibility: parsed_headers.legacy_hns_doh_compatibility,
             peer_state,
             relay: None,
@@ -5176,6 +5304,7 @@ fn android_gateway_resolver(
         mode,
         doh_endpoint,
         experimental_p2p_dns_relay,
+        experimental_p2p_odoh,
         legacy_hns_doh_compatibility,
         peer_state,
         relay,
@@ -5208,6 +5337,14 @@ fn android_gateway_resolver(
         );
         delegated =
             BoxedDelegatedResolver::new(P2pFallbackDelegatedResolver::new(delegated, relay));
+    }
+
+    if let Some(config) = experimental_p2p_odoh {
+        let odoh_transport =
+            HnsP2pOdohTransport::new(network, config, dns_trace.clone(), endpoint_policy);
+        let odoh = AuthoritativeDnssecResolver::new(odoh_transport, SystemDnssecVerifier)
+            .without_authoritative_doh();
+        delegated = BoxedDelegatedResolver::new(P2pFallbackDelegatedResolver::new(delegated, odoh));
     }
 
     let use_legacy_doh =
@@ -5252,6 +5389,7 @@ struct GatewayResolverContext {
     mode: GatewayResolutionMode,
     doh_endpoint: HnsDohEndpoint,
     experimental_p2p_dns_relay: bool,
+    experimental_p2p_odoh: Option<OdohRuntimeConfig>,
     legacy_hns_doh_compatibility: bool,
     peer_state: Option<Arc<Mutex<()>>>,
     relay: Option<SharedDnsRelayState>,
@@ -5639,6 +5777,7 @@ fn resolution_source_name(
             Some("authoritative_doh") => return "authoritative_doh",
             Some("udp53" | "tcp53") => return "authoritative_dns",
             Some("p2p_dns_relay") => return "p2p_dns_relay",
+            Some("p2p_odoh") => return "p2p_odoh",
             Some("hns_doh") => return "hns_doh",
             _ => return "hns_resource",
         }
@@ -6227,6 +6366,7 @@ fn security_path_name(
                 Some("authoritative_doh") => Some("dane-authoritative-doh"),
                 Some("udp53" | "tcp53") => Some("dane-authoritative-dns53"),
                 Some("p2p_dns_relay") => Some("dane-p2p-dns-relay"),
+                Some("p2p_odoh") => Some("dane-p2p-odoh"),
                 Some("hns_doh") => Some("dane-third-party-doh"),
                 Some("icann_doh") => Some("dane-icann-doh"),
                 _ => None,
@@ -6243,6 +6383,7 @@ fn security_path_name(
         Some("authoritative_doh") => Some("hns-authoritative-doh"),
         Some("udp53" | "tcp53") => Some("hns-authoritative-dns53"),
         Some("p2p_dns_relay") => Some("hns-p2p-dns-relay"),
+        Some("p2p_odoh") => Some("hns-p2p-odoh"),
         Some("hns_doh") => Some("hns-third-party-doh"),
         _ => None,
     }
@@ -8438,6 +8579,7 @@ mod tests {
                 "dane-p2p-dns-relay",
                 BrowserProxySecurityPath::DaneP2pDnsRelay,
             ),
+            ("dane-p2p-odoh", BrowserProxySecurityPath::DaneP2pOdoh),
             (
                 "dane-third-party-doh",
                 BrowserProxySecurityPath::DaneThirdPartyDoh,
@@ -8456,6 +8598,7 @@ mod tests {
                 "hns-p2p-dns-relay",
                 BrowserProxySecurityPath::HnsP2pDnsRelay,
             ),
+            ("hns-p2p-odoh", BrowserProxySecurityPath::HnsP2pOdoh),
             (
                 "hns-third-party-doh",
                 BrowserProxySecurityPath::HnsThirdPartyDoh,
@@ -8660,6 +8803,7 @@ mod tests {
                 resolution_mode: ResolutionMode::Strict,
                 hns_doh_resolver: Some("https://resolver.example/dns-query".to_owned()),
                 experimental_p2p_dns_relay: true,
+                experimental_p2p_odoh: None,
                 legacy_hns_doh_compatibility: false,
                 stateless_dane_certificates: true,
             });
@@ -8724,6 +8868,7 @@ mod tests {
                 resolution_mode: ResolutionMode::Strict,
                 hns_doh_resolver: Some("https://Resolver.Example:443/dns-query".to_owned()),
                 experimental_p2p_dns_relay: true,
+                experimental_p2p_odoh: None,
                 legacy_hns_doh_compatibility: false,
                 stateless_dane_certificates: true,
             })
@@ -8811,6 +8956,7 @@ mod tests {
                     resolution_mode: ResolutionMode::Strict,
                     hns_doh_resolver: Some("not-a-doh-url".to_owned()),
                     experimental_p2p_dns_relay: true,
+                    experimental_p2p_odoh: None,
                     legacy_hns_doh_compatibility: false,
                     stateless_dane_certificates: true,
                 },
@@ -8896,6 +9042,7 @@ mod tests {
                     resolution_mode: ResolutionMode::Strict,
                     hns_doh_resolver: None,
                     experimental_p2p_dns_relay: false,
+                    experimental_p2p_odoh: None,
                     legacy_hns_doh_compatibility: false,
                     stateless_dane_certificates: false,
                 },

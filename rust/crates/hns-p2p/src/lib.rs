@@ -11,8 +11,10 @@ use std::time::Duration;
 use thiserror::Error;
 
 mod dns_relay;
+mod odoh;
 
 pub use dns_relay::*;
+pub use odoh::*;
 
 pub const PROTOCOL_VERSION: u32 = 3;
 pub const SERVICE_NETWORK: u64 = 1;
@@ -66,6 +68,7 @@ pub enum PacketType {
     Unknown = 30,
     ExperimentalGetDnsRelay = EXPERIMENTAL_GET_DNS_RELAY,
     ExperimentalDnsRelay = EXPERIMENTAL_DNS_RELAY,
+    ExperimentalOdoh = EXPERIMENTAL_ODOH,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -132,6 +135,7 @@ pub enum Packet {
     Proof(ProofPacket),
     GetDnsRelay(GetDnsRelayPacket),
     DnsRelay(DnsRelayPacket),
+    Odoh(OdnsPacket),
     Unknown { packet_type: u8, payload: Vec<u8> },
 }
 
@@ -252,6 +256,10 @@ pub enum P2pError {
     InvalidDnsRelayStatus,
     #[error("invalid DNS-relay packet: {0}")]
     InvalidDnsRelayPacket(&'static str),
+    #[error("ODoH message exceeds protocol limit")]
+    OdohMessageTooLarge,
+    #[error("invalid ODoH packet: {0}")]
+    InvalidOdohPacket(&'static str),
     #[error("network I/O error: {0:?}")]
     Io(std::io::ErrorKind),
     #[error("peer closed the connection")]
@@ -1183,7 +1191,8 @@ impl<T: Read + Write> PeerConnection<T> {
                 | Packet::GetProof(_)
                 | Packet::Proof(_)
                 | Packet::GetDnsRelay(_)
-                | Packet::DnsRelay(_) => return Err(P2pError::UnexpectedAction),
+                | Packet::DnsRelay(_)
+                | Packet::Odoh(_) => return Err(P2pError::UnexpectedAction),
             }
         }
     }
@@ -1261,6 +1270,9 @@ pub fn decode_frame(network: &Network, data: &[u8]) -> Result<Option<(Packet, us
         EXPERIMENTAL_DNS_RELAY if payload_len > MAX_DNS_RELAY_RESPONSE_PAYLOAD_SIZE => {
             return Err(P2pError::DnsRelayResponseTooLarge);
         }
+        EXPERIMENTAL_ODOH if payload_len > MAX_ODOH_PACKET_SIZE => {
+            return Err(P2pError::OdohMessageTooLarge);
+        }
         _ => {}
     }
 
@@ -1292,6 +1304,7 @@ impl Packet {
             Self::Proof(_) => PacketType::Proof,
             Self::GetDnsRelay(_) => PacketType::ExperimentalGetDnsRelay,
             Self::DnsRelay(_) => PacketType::ExperimentalDnsRelay,
+            Self::Odoh(_) => PacketType::ExperimentalOdoh,
             Self::Unknown { .. } => PacketType::Unknown,
         }
     }
@@ -1327,6 +1340,7 @@ impl Packet {
             }
             Self::GetDnsRelay(packet) => out.extend(packet.encode()?),
             Self::DnsRelay(packet) => out.extend(packet.encode()?),
+            Self::Odoh(packet) => out.extend(packet.encode()?),
             Self::Unknown { payload, .. } => out.extend(payload),
         }
         Ok(out)
@@ -1360,6 +1374,9 @@ impl Packet {
             }
             EXPERIMENTAL_DNS_RELAY => {
                 return DnsRelayPacket::decode(payload).map(Self::DnsRelay);
+            }
+            EXPERIMENTAL_ODOH => {
+                return OdnsPacket::decode(payload).map(Self::Odoh);
             }
             other => Self::Unknown {
                 packet_type: other,

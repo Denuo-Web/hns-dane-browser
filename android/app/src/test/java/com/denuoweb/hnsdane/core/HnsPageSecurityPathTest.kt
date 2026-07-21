@@ -18,6 +18,8 @@ class HnsPageSecurityPathTest {
             "hns-third-party-doh" to HnsPageSecurityPath.HnsThirdPartyDoh,
             "dane-p2p-dns-relay" to HnsPageSecurityPath.DaneP2pDnsRelay,
             "hns-p2p-dns-relay" to HnsPageSecurityPath.HnsP2pDnsRelay,
+            "dane-p2p-odoh" to HnsPageSecurityPath.DaneP2pOdoh,
+            "hns-p2p-odoh" to HnsPageSecurityPath.HnsP2pOdoh,
         )
 
         expectations.forEach { (headerValue, expected) ->

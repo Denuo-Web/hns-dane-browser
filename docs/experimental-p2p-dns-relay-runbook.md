@@ -118,15 +118,18 @@ The four real roles are:
 | `hsd-relay-bad` | yes | no | Advertises the relay but applies the default private-authority refusal |
 | `hsd-legacy` | no | no | Independent synchronized node without the experimental capability |
 
-The native `hns-runtime-full-tier` binary first requires a real failed exchange
-through `hsd-relay-bad` and a successful retry through `hsd-owner-good`. It then
-synchronizes and validates the current Handshake header chain, fetches and
-verifies the current-tip Urkel inclusion proof, derives the delegation from the
-registered resource, validates the child DS/DNSKEY/RRSIG chain locally, matches
-TLSA/DANE locally, and receives HTTPS 200 from a loopback origin. Strict mode
-and the experimental relay are enabled; legacy compatibility is disabled even
-though a reachable sentinel URL is configured. The sentinel must observe zero
-connections.
+The native `hns-runtime-full-tier` binary first requires the prerequisite
+one-hop relay to fail over from `hsd-relay-bad` to `hsd-owner-good`. For its
+browser request, `hsd-relay-bad` is instead the requester-facing ODoH proxy and
+the separate authenticated Brontide listener on `hsd-owner-good` is the target.
+The runtime verifies the signed target configuration, synchronizes and
+validates the current Handshake header chain, fetches and verifies the
+current-tip Urkel inclusion proof, derives the delegation from the registered
+resource, validates the child DS/DNSKEY/RRSIG chain locally, matches TLSA/DANE
+locally, and receives HTTPS 200 from a loopback origin. Strict ODoH mode is
+enabled; direct relay and legacy compatibility are disabled for the browser
+request even though a reachable sentinel URL is configured. The sentinel must
+observe zero connections.
 
 The Linux runner reuses the cached `python:3.12-alpine` image and mounts the
 host's Node executable, ELF interpreter, multiarch glibc directory, local `hsd`
@@ -204,8 +207,10 @@ For the real-node tier, `full-regtest-state.json` records the converged four-nod
 height/tip/tree root, each node's positive proof and decoded-resource evidence,
 the registered resource, and signed-zone parameters;
 `full-tier-proof.json` is the runtime's current-tip proof evidence; and
-`full-tier-result.json` records Urkel, DNSSEC, DANE, HTTPS, real-relay failover,
-and legacy-zero-contact outcomes. `full-browser-network.json` must show blocked
+`full-tier-result.json` records Urkel, ODoH, DNSSEC, DANE, HTTPS,
+prerequisite real-relay failover, and legacy-zero-contact outcomes.
+`full-tier-response.txt` preserves the successful internal runtime headers and
+trace. `full-browser-network.json` must show blocked
 UDP and TCP port 53 for both authoritative and external probes.
 
 If a run fails, retain the artifact directory and rerun with `--keep`. Check

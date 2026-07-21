@@ -78,6 +78,8 @@ object BrowserSecurityPolicy {
             HnsPageSecurityPath.HnsThirdPartyDoh -> SecurityState.HnsViaThirdPartyDoh
             HnsPageSecurityPath.DaneP2pDnsRelay -> SecurityState.DaneViaP2pDnsRelay
             HnsPageSecurityPath.HnsP2pDnsRelay -> SecurityState.HnsViaP2pDnsRelay
+            HnsPageSecurityPath.DaneP2pOdoh -> SecurityState.DaneViaP2pOdoh
+            HnsPageSecurityPath.HnsP2pOdoh -> SecurityState.HnsViaP2pOdoh
         }
 
     private fun String?.hasSyncStatus(status: String): Boolean =

@@ -8,7 +8,8 @@ Usage: scripts/test-experimental-p2p-dns-relay-full.sh [--preflight] [--keep]
 Runs the real four-hsd regtest acceptance tier. It creates four independent
 blockchain prefixes and identities, mines the complete relaytest name auction,
 registers an NS/glue/DS delegation, serves a signed child zone, and runs the
-native browser runtime through local Urkel, DNSSEC, TLSA/DANE, and HTTPS checks.
+native browser runtime through a distinct ODoH proxy and target plus local
+Urkel, DNSSEC, TLSA/DANE, and HTTPS checks.
 
 The tier mounts the current host Node executable, its glibc directory, and the
 local hsd checkout into the cached Python harness image. It does not download
@@ -316,6 +317,10 @@ for source, evidence in (("provisioner", provisioned_zone), ("authority", zone))
 
 if result.get("status") != "pass" or result.get("nodeCount") != 4:
     raise SystemExit("native full-tier result did not pass with four nodes")
+if (result.get("resolutionSource") != "p2p_odoh"
+        or not result.get("odoh", {}).get("verified")
+        or result["odoh"].get("proxy") == result["odoh"].get("target")):
+    raise SystemExit("native browser ODoH proxy/target evidence is missing")
 if result.get("urkelProof") != "verified" or result.get("dnssec") != "secure":
     raise SystemExit("Urkel or DNSSEC acceptance evidence is missing")
 if result.get("dane") != "verified" or result.get("httpsStatus") != 200:
@@ -367,5 +372,5 @@ for destination in ("authoritative_dns", "external_dns"):
     if not all(network.get(destination, {}).values()):
         raise SystemExit(f"browser port-53 isolation failed for {destination}")
 
-print("real four-hsd regtest Urkel/DNSSEC/DANE relay topology passed")
+print("real four-hsd regtest Urkel/ODoH/DNSSEC/DANE topology passed")
 PY

@@ -409,6 +409,8 @@ fn proxy_security_path_code(path: Option<BrowserProxySecurityPath>) -> Option<u8
         Some(BrowserProxySecurityPath::HnsThirdPartyDoh) => Some(8),
         Some(BrowserProxySecurityPath::DaneP2pDnsRelay) => Some(9),
         Some(BrowserProxySecurityPath::HnsP2pDnsRelay) => Some(10),
+        Some(BrowserProxySecurityPath::DaneP2pOdoh) => Some(11),
+        Some(BrowserProxySecurityPath::HnsP2pOdoh) => Some(12),
         Some(_) => None,
     }
 }
@@ -601,6 +603,7 @@ fn runtime_gateway_policy_from_values(
         },
         hns_doh_resolver: (!doh_resolver_url.is_empty()).then_some(doh_resolver_url),
         experimental_p2p_dns_relay: experimental_p2p_dns_relay != 0,
+        experimental_p2p_odoh: None,
         legacy_hns_doh_compatibility: legacy_hns_doh_compatibility != 0,
         stateless_dane_certificates: stateless_dane_certificates != 0,
     }
@@ -1415,6 +1418,8 @@ mod tests {
             (BrowserProxySecurityPath::HnsThirdPartyDoh, 8),
             (BrowserProxySecurityPath::DaneP2pDnsRelay, 9),
             (BrowserProxySecurityPath::HnsP2pDnsRelay, 10),
+            (BrowserProxySecurityPath::DaneP2pOdoh, 11),
+            (BrowserProxySecurityPath::HnsP2pOdoh, 12),
         ] {
             let mapped = proxy_status_bundle(&PendingAndroidProxyStatus {
                 sequence: 12,

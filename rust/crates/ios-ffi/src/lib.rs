@@ -65,6 +65,8 @@ const HNS_BROWSER_SECURITY_PATH_HNS_AUTHORITATIVE_DNS53: u32 = 7;
 const HNS_BROWSER_SECURITY_PATH_HNS_THIRD_PARTY_DOH: u32 = 8;
 const HNS_BROWSER_SECURITY_PATH_DANE_P2P_DNS_RELAY: u32 = 9;
 const HNS_BROWSER_SECURITY_PATH_HNS_P2P_DNS_RELAY: u32 = 10;
+const HNS_BROWSER_SECURITY_PATH_DANE_P2P_ODOH: u32 = 11;
+const HNS_BROWSER_SECURITY_PATH_HNS_P2P_ODOH: u32 = 12;
 
 const DEFAULT_SYNC_TIMEOUT_MILLIS: u64 = 3_000;
 const MAX_SYNC_TIMEOUT_MILLIS: u64 = 10 * 60 * 1_000;
@@ -763,6 +765,7 @@ unsafe fn policy_from_fields(
         // SAFETY: Propagates the caller's readable-slice contract.
         hns_doh_resolver: unsafe { optional_policy_endpoint(endpoint) }?,
         experimental_p2p_dns_relay: ffi_bool(experimental_p2p_dns_relay)?,
+        experimental_p2p_odoh: None,
         legacy_hns_doh_compatibility: ffi_bool(legacy_hns_doh_compatibility)?,
         stateless_dane_certificates: ffi_bool(stateless_dane_certificates)?,
     })
@@ -858,6 +861,8 @@ fn security_path_code(path: Option<BrowserProxySecurityPath>) -> u32 {
         Some(BrowserProxySecurityPath::HnsP2pDnsRelay) => {
             HNS_BROWSER_SECURITY_PATH_HNS_P2P_DNS_RELAY
         }
+        Some(BrowserProxySecurityPath::DaneP2pOdoh) => HNS_BROWSER_SECURITY_PATH_DANE_P2P_ODOH,
+        Some(BrowserProxySecurityPath::HnsP2pOdoh) => HNS_BROWSER_SECURITY_PATH_HNS_P2P_ODOH,
         Some(_) => HNS_BROWSER_SECURITY_PATH_UNKNOWN,
     }
 }
@@ -2367,6 +2372,14 @@ mod tests {
         assert_eq!(
             security_path_code(Some(BrowserProxySecurityPath::HnsP2pDnsRelay)),
             HNS_BROWSER_SECURITY_PATH_HNS_P2P_DNS_RELAY
+        );
+        assert_eq!(
+            security_path_code(Some(BrowserProxySecurityPath::DaneP2pOdoh)),
+            HNS_BROWSER_SECURITY_PATH_DANE_P2P_ODOH
+        );
+        assert_eq!(
+            security_path_code(Some(BrowserProxySecurityPath::HnsP2pOdoh)),
+            HNS_BROWSER_SECURITY_PATH_HNS_P2P_ODOH
         );
     }
 

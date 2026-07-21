@@ -1,6 +1,6 @@
 use hns_browser_runtime::{
-    BrowserRuntime, GatewayHttpRequest, ResolutionMode, RuntimeConfiguration, RuntimePolicy,
-    SyncOptions,
+    BrowserRuntime, GatewayHttpRequest, OdohRuntimeConfig, ResolutionMode, RuntimeConfiguration,
+    RuntimePolicy, SyncOptions,
 };
 use hns_core::dns::{
     DnsEncodeConfig, DnsFlags, DnsHeader, DnsMessage, DnsName, DnsQuestion, RecordType,
@@ -57,6 +57,12 @@ fn run() -> Result<(), String> {
             "good and bad relay addresses must be distinct members of HNS_STATIC_PEERS".to_owned(),
         );
     }
+    let odoh_proxy = env_socket("HNS_ODOH_PROXY")?;
+    let odoh_target = env_socket("HNS_ODOH_TARGET")?;
+    let odoh_target_peer_key = compressed_peer_key(&required_env("HNS_ODOH_TARGET_KEY")?)?;
+    if odoh_proxy == odoh_target || !peers.contains(&odoh_proxy) {
+        return Err("ODoH proxy must be a static peer and distinct from its target".to_owned());
+    }
 
     let target_height_path = PathBuf::from(required_env("HNS_TARGET_HEIGHT_FILE")?);
     let target_height = read_target_height(&target_height_path)?;
@@ -81,7 +87,12 @@ fn run() -> Result<(), String> {
         // Keep a reachable sentinel configured while the independent compatibility control is
         // disabled. The harness requires that sentinel to observe zero connections.
         hns_doh_resolver: Some(legacy_doh_sentinel),
-        experimental_p2p_dns_relay: true,
+        experimental_p2p_dns_relay: false,
+        experimental_p2p_odoh: Some(OdohRuntimeConfig {
+            proxy: odoh_proxy,
+            target: odoh_target,
+            target_peer_key: odoh_target_peer_key,
+        }),
         legacy_hns_doh_compatibility: false,
         stateless_dane_certificates: false,
     };
@@ -150,10 +161,11 @@ fn run() -> Result<(), String> {
         .into_bytes();
     let response_text = String::from_utf8(response)
         .map_err(|_| "gateway response was not UTF-8 test content".to_owned())?;
+    atomic_write(&artifact_dir.join("full-tier-response.txt"), &response_text)?;
 
     assert_contains(&response_text, "HTTP/1.1 200 ", "HTTPS status")?;
     assert_header(&response_text, "X-HNS-TLS-Policy", "dane")?;
-    assert_header(&response_text, "X-HNS-Security-Path", "dane-p2p-dns-relay")?;
+    assert_header(&response_text, "X-HNS-Security-Path", "dane-p2p-odoh")?;
     assert_header(&response_text, "X-HNS-Resolver-Mode", "strict")?;
     assert_header(&response_text, "X-HNS-DoH-Fallback", "no")?;
     if header_value(&response_text, "X-HNS-Resolver-Policy").is_some() {
@@ -167,11 +179,8 @@ fn run() -> Result<(), String> {
         (r#""hnsProof":"verified""#, "Urkel proof"),
         (r#""localChainStale":false"#, "current local chain"),
         (r#""delegation":true"#, "delegation"),
-        (
-            r#""resolutionSource":"p2p_dns_relay""#,
-            "P2P DNS-relay source",
-        ),
-        (r#""p2pDnsRelay":{"attempted":true"#, "relay attempt"),
+        (r#""resolutionSource":"p2p_odoh""#, "P2P ODoH source"),
+        (r#""protocol":"p2p_odoh""#, "ODoH transport event"),
         (r#""dnssec":"secure""#, "DNSSEC"),
         (r#""tlsaEvaluated":true"#, "TLSA evaluation"),
         (r#""tlsaFound":true"#, "TLSA record"),
@@ -217,8 +226,9 @@ fn run() -> Result<(), String> {
             "  \"dnssec\": \"secure\",\n",
             "  \"dane\": \"verified\",\n",
             "  \"httpsStatus\": 200,\n",
-            "  \"resolutionSource\": \"p2p_dns_relay\",\n",
+            "  \"resolutionSource\": \"p2p_odoh\",\n",
             "  \"legacyDohContact\": false,\n",
+            "  \"odoh\": {{\"verified\": true, \"proxy\": {}, \"target\": {}}},\n",
             "  \"relayFailover\": {{\"verified\": true, \"retryCount\": {}, \"peer\": {}}}\n",
             "}}\n"
         ),
@@ -226,12 +236,14 @@ fn run() -> Result<(), String> {
         best_height,
         json_string(registered_name),
         json_string(&name),
+        json_string(&odoh_proxy.to_string()),
+        json_string(&odoh_target.to_string()),
         relay_exchange.retries,
         json_string(&relay_exchange.peer.to_string()),
     );
     atomic_write(&artifact_dir.join("full-tier-result.json"), &artifact)?;
     atomic_write(&artifact_dir.join("full-tier-proof.json"), &(proof + "\n"))?;
-    println!("real four-node regtest Urkel/DNSSEC/DANE acceptance passed");
+    println!("real four-node regtest Urkel/ODoH/DNSSEC/DANE acceptance passed");
     Ok(())
 }
 
@@ -385,6 +397,23 @@ fn env_socket(name: &str) -> Result<SocketAddr, String> {
     required_env(name)?
         .parse()
         .map_err(|error| format!("invalid {name}: {error}"))
+}
+
+fn compressed_peer_key(value: &str) -> Result<[u8; 33], String> {
+    let value = value.trim();
+    if value.len() != 66 {
+        return Err("HNS_ODOH_TARGET_KEY must be a 33-byte compressed key".to_owned());
+    }
+    let mut key = [0u8; 33];
+    for (index, byte) in key.iter_mut().enumerate() {
+        let offset = index * 2;
+        *byte = u8::from_str_radix(&value[offset..offset + 2], 16)
+            .map_err(|_| "HNS_ODOH_TARGET_KEY is not hexadecimal".to_owned())?;
+    }
+    if !matches!(key[0], 2 | 3) {
+        return Err("HNS_ODOH_TARGET_KEY is not compressed SEC1".to_owned());
+    }
+    Ok(key)
 }
 
 fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {

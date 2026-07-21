@@ -20,6 +20,8 @@ def main() -> None:
     control_host = required("HSD_CONTROL_HOST")
     identity_key = required("HSD_IDENTITY_KEY")
     relay = os.environ.get("HSD_EXPERIMENTAL_RELAY") == "1"
+    odoh_proxy = os.environ.get("HSD_EXPERIMENTAL_ODOH_PROXY") == "1"
+    odoh_target = os.environ.get("HSD_EXPERIMENTAL_ODOH_TARGET") == "1"
     allow_private = os.environ.get("HSD_ALLOW_PRIVATE_AUTHORITIES") == "1"
     wallet = os.environ.get("HSD_OWNER_WALLET") == "1"
     relay_timeout = os.environ.get("HSD_RELAY_TIMEOUT_MS", "3000")
@@ -70,6 +72,19 @@ def main() -> None:
             arguments.append("--experimental-dns-relay-allow-private-authorities=true")
     else:
         arguments.append("--no-dns=true")
+
+    if odoh_proxy:
+        arguments.extend([
+            "--experimental-odoh-proxy=true",
+            "--experimental-odoh-allow-private-targets=true",
+        ])
+    if odoh_target:
+        arguments.extend([
+            "--experimental-odoh-target=true",
+            "--experimental-odoh-allow-private-targets=true",
+            f"--experimental-odoh-target-host={required('HSD_ODOH_TARGET_HOST')}",
+            f"--experimental-odoh-target-port={required('HSD_ODOH_TARGET_PORT')}",
+        ])
 
     os.execv(host_node, arguments)
 
