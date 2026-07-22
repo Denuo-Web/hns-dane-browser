@@ -51,6 +51,7 @@ http = "1"
 httparse = "1.10"
 idna = "1.1"
 jni = "0.21"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }

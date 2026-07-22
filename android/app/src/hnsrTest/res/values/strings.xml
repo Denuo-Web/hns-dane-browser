@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">HNSR Native Test</string>
+    <string name="hnsr_diagnostics_title" translatable="false">Native HNSR Diagnostics</string>
+    <string name="hnsr_phase_one_section" translatable="false">Phase 2 native route validation</string>
+    <string name="hnsr_network_section" translatable="false">Android network lifecycle</string>
+    <string name="hnsr_network_status" translatable="false">Default network and reprobe</string>
+    <string name="hnsr_native_status" translatable="false">Native protocol status</string>
+    <string name="hnsr_evidence_section" translatable="false">Verified protocol evidence</string>
+    <string name="hnsr_raw_section" translatable="false">Raw native report</string>
+    <string name="hnsr_running" translatable="false">RUNNING — native Rust is contacting %1$s</string>
+</resources>

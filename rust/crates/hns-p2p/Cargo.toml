@@ -7,10 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 getrandom.workspace = true
+hex.workspace = true
 hns-core.workspace = true
 hns-urkel.workspace = true
+k256.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-hex.workspace = true

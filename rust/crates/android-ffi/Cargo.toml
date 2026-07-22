@@ -11,4 +11,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 hns-browser-runtime.workspace = true
+hns-p2p.workspace = true
 jni.workspace = true

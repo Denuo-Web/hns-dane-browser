@@ -6,6 +6,7 @@
 )]
 
 use hns_browser_runtime::*;
+use hns_p2p::probe_hnsr_json;
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring};
@@ -14,6 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 const MAX_LOCAL_CERTIFICATE_DER_BYTES: usize = 64 * 1024;
 const MAX_BROWSER_NAMESPACE_INPUT_BYTES: usize = 1_024;
@@ -484,6 +486,36 @@ pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeVersion(
     env.new_string(core_version())
         .map(|value| value.into_raw())
         .unwrap_or(std::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_denuoweb_hnsdane_net_NativeBridge_nativeHnsrProbe(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    network: JString<'_>,
+    bootstrap: JString<'_>,
+    timeout_millis: jint,
+) -> jstring {
+    catch_unwind(AssertUnwindSafe(|| {
+        let network = env
+            .get_string(&network)
+            .ok()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let bootstrap = env
+            .get_string(&bootstrap)
+            .ok()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let timeout_millis = u64::try_from(timeout_millis)
+            .unwrap_or_default()
+            .clamp(1_000, 30_000);
+        let report = probe_hnsr_json(&network, &bootstrap, Duration::from_millis(timeout_millis));
+        env.new_string(report)
+            .map(|value| value.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    }))
+    .unwrap_or(std::ptr::null_mut())
 }
 
 fn android_browser_namespace_code(input: &str) -> jint {

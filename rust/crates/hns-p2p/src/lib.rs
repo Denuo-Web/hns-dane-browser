@@ -11,8 +11,10 @@ use std::time::Duration;
 use thiserror::Error;
 
 mod dns_relay;
+mod hnsr;
 
 pub use dns_relay::*;
+pub use hnsr::*;
 
 pub const PROTOCOL_VERSION: u32 = 3;
 pub const SERVICE_NETWORK: u64 = 1;

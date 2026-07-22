@@ -595,6 +595,16 @@ android {
             buildConfigField("boolean", "HNS_DEFAULT_EXPERIMENTAL_P2P_DNS_RELAY", "true")
             buildConfigField("boolean", "HNS_DEFAULT_LEGACY_HNS_DOH_COMPATIBILITY", "false")
         }
+        create("hnsrTest") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".hnsrtest"
+            versionNameSuffix = "-hnsr-test"
+            matchingFallbacks += listOf("debug")
+            buildConfigField("String", "HNS_DEFAULT_HANDSHAKE_NETWORK", "\"regtest\"")
+            buildConfigField("boolean", "HNS_DEFAULT_STRICT_MODE", "true")
+            buildConfigField("boolean", "HNS_DEFAULT_EXPERIMENTAL_P2P_DNS_RELAY", "false")
+            buildConfigField("boolean", "HNS_DEFAULT_LEGACY_HNS_DOH_COMPATIBILITY", "false")
+        }
         release {
             isDebuggable = false
             isMinifyEnabled = true

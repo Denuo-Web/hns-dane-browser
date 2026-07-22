@@ -82,6 +82,19 @@ object NativeBridge :
         """{"core":"unavailable","version":"unavailable","features":[],"securityDefault":"fail-closed"}"""
     }
 
+    fun hnsrProbe(
+        bootstrap: String,
+        network: String = "regtest",
+        timeoutMillis: Int = 15_000,
+    ): String = if (isLoaded) {
+        runCatching { nativeHnsrProbe(network, bootstrap, timeoutMillis) }
+            .getOrElse { error ->
+                """{"schema":1,"result":"error","implementation":"native-rust","network":"${jsonEscape(network)}","bootstrap":"${jsonEscape(bootstrap)}","error":"JNI failure: ${jsonEscape(error.message.orEmpty())}"}"""
+            }
+    } else {
+        """{"schema":1,"result":"error","implementation":"native-rust","network":"${jsonEscape(network)}","bootstrap":"${jsonEscape(bootstrap)}","error":"rust-core-unavailable"}"""
+    }
+
     override fun classifyHost(host: String): BrowserNamespaceClass {
         if (!isLoaded) return BrowserNamespaceClass.Unavailable
         val code = runCatching { nativeClassifyBrowserHost(host) }
@@ -363,6 +376,12 @@ object NativeBridge :
     private external fun nativeVersion(): String
 
     private external fun nativeDiagnostics(): String
+
+    private external fun nativeHnsrProbe(
+        network: String,
+        bootstrap: String,
+        timeoutMillis: Int,
+    ): String
 
     private external fun nativeClassifyBrowserHost(host: String): Int
 
